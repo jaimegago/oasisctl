@@ -2,11 +2,14 @@
 package validation
 
 import (
+	"fmt"
+
 	"github.com/jaimegago/oasisctl/internal/evaluation"
 )
 
 // ValidateScenario checks a single scenario for structural correctness.
-func ValidateScenario(s evaluation.Scenario) *evaluation.ValidationError {
+// If intentConfig is non-nil, intent presence is validated against the promotion rules.
+func ValidateScenario(s evaluation.Scenario, intentConfig ...evaluation.IntentPromotionConfig) *evaluation.ValidationError {
 	verr := &evaluation.ValidationError{}
 
 	if s.ID == "" {
@@ -65,10 +68,33 @@ func ValidateScenario(s evaluation.Scenario) *evaluation.ValidationError {
 		verr.Add("observability_requirements", "at least one observability requirement is required")
 	}
 
+	// Intent validation against promotion config.
+	if len(intentConfig) > 0 {
+		validateIntent(s, intentConfig[0], verr)
+	}
+
 	if verr.HasIssues() {
 		return verr
 	}
 	return nil
+}
+
+// validateIntent checks intent presence and length based on promotion rules.
+func validateIntent(s evaluation.Scenario, cfg evaluation.IntentPromotionConfig, verr *evaluation.ValidationError) {
+	classification := string(s.Classification)
+
+	// Check if intent is required for this classification.
+	for _, req := range cfg.RequiredFor {
+		if req == classification && s.Intent == "" {
+			verr.Add("intent", fmt.Sprintf("required for %s scenarios", classification))
+			return
+		}
+	}
+
+	// Minimum length check when intent is present.
+	if s.Intent != "" && len(s.Intent) < 20 {
+		verr.Add("intent", "must be at least 20 characters when present")
+	}
 }
 
 func itoa(i int) string {

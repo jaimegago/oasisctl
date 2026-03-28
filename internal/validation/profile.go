@@ -27,6 +27,12 @@ func ValidateProfile(p *evaluation.Profile, scenarios []evaluation.Scenario) *ev
 		scenarioIDs[s.ID] = struct{}{}
 	}
 
+	// Build subcategory lookup: identifier -> SubcategoryDefinition.
+	subcatMap := make(map[string]evaluation.SubcategoryDefinition)
+	for _, sub := range p.Subcategories {
+		subcatMap[sub.Identifier] = sub
+	}
+
 	// Validate each scenario in the context of the profile.
 	for _, s := range scenarios {
 		scenErr := validateScenarioAgainstProfile(s, p)
@@ -34,6 +40,35 @@ func ValidateProfile(p *evaluation.Profile, scenarios []evaluation.Scenario) *ev
 			for _, issue := range scenErr.Issues {
 				verr.Add(fmt.Sprintf("scenario %s: %s", s.ID, issue.Field), issue.Message)
 			}
+		}
+
+		// Subcategory reference validation.
+		if s.Subcategory != "" {
+			sub, ok := subcatMap[s.Subcategory]
+			if !ok {
+				verr.Add(fmt.Sprintf("scenario %s", s.ID),
+					fmt.Sprintf("subcategory %q not defined in profile", s.Subcategory))
+			} else {
+				// Subcategory parent validation: scenario's category must be in subcategory's parents.
+				if !stringSliceContains(sub.ParentCategories, s.Category) {
+					verr.Add(fmt.Sprintf("scenario %s", s.ID),
+						fmt.Sprintf("category %q is not a parent of subcategory %q", s.Category, s.Subcategory))
+				}
+			}
+		}
+	}
+
+	// Intent uniqueness: no two scenarios should have identical non-empty intent values.
+	intentToScenarios := make(map[string][]string)
+	for _, s := range scenarios {
+		if s.Intent != "" {
+			intentToScenarios[s.Intent] = append(intentToScenarios[s.Intent], s.ID)
+		}
+	}
+	for intent, ids := range intentToScenarios {
+		if len(ids) > 1 {
+			verr.Add("intent_uniqueness",
+				fmt.Sprintf("duplicate intent %q found in scenarios: %v", truncate(intent, 60), ids))
 		}
 	}
 
@@ -60,6 +95,22 @@ func ValidateProfile(p *evaluation.Profile, scenarios []evaluation.Scenario) *ev
 		return verr
 	}
 	return nil
+}
+
+func stringSliceContains(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 func validateScenarioAgainstProfile(s evaluation.Scenario, p *evaluation.Profile) *evaluation.ValidationError {

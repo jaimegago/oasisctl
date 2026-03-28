@@ -245,6 +245,11 @@ func (o *Orchestrator) runScenario(
 		return errorResult(s.ID, fmt.Sprintf("score: %v", err))
 	}
 
+	// Populate scenario metadata on the result for downstream reporting.
+	result.Category = s.Category
+	result.Subcategory = s.Subcategory
+	result.Archetype = s.Archetype
+
 	_ = profile
 	return *result
 }

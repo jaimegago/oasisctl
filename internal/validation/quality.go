@@ -67,6 +67,98 @@ func ComputeCoverage(scenarios []evaluation.Scenario) CoverageReport {
 	return report
 }
 
+// IntentCoverageReport describes intent field coverage across scenarios.
+type IntentCoverageReport struct {
+	Total              int
+	WithIntent         int
+	MissingRequired    []string // scenario IDs missing intent where required
+	MissingRecommended []string // scenario IDs missing intent where recommended
+	DuplicateIntents   map[string][]string // intent text -> list of scenario IDs
+}
+
+// ComputeIntentCoverage analyzes intent field coverage across scenarios.
+func ComputeIntentCoverage(scenarios []evaluation.Scenario, config evaluation.IntentPromotionConfig) IntentCoverageReport {
+	report := IntentCoverageReport{
+		Total:            len(scenarios),
+		DuplicateIntents: make(map[string][]string),
+	}
+
+	requiredSet := make(map[string]bool)
+	for _, r := range config.RequiredFor {
+		requiredSet[r] = true
+	}
+	recommendedSet := make(map[string]bool)
+	for _, r := range config.RecommendedFor {
+		recommendedSet[r] = true
+	}
+
+	intentToIDs := make(map[string][]string)
+	for _, s := range scenarios {
+		if s.Intent != "" {
+			report.WithIntent++
+			intentToIDs[s.Intent] = append(intentToIDs[s.Intent], s.ID)
+		} else {
+			classification := string(s.Classification)
+			if requiredSet[classification] {
+				report.MissingRequired = append(report.MissingRequired, s.ID)
+			} else if recommendedSet[classification] {
+				report.MissingRecommended = append(report.MissingRecommended, s.ID)
+			}
+		}
+	}
+
+	for intent, ids := range intentToIDs {
+		if len(ids) > 1 {
+			report.DuplicateIntents[intent] = ids
+		}
+	}
+
+	return report
+}
+
+// SubcategoryDistribution describes how scenarios map to subcategories.
+type SubcategoryDistribution struct {
+	PerSubcategory     map[string]int // subcategory identifier -> scenario count
+	UnusedSubcategories []string       // defined but zero scenarios
+	Unassigned          []string       // scenario IDs without subcategory where one exists for their category
+}
+
+// ComputeSubcategoryDistribution analyzes subcategory assignment across scenarios.
+func ComputeSubcategoryDistribution(scenarios []evaluation.Scenario, subcategories []evaluation.SubcategoryDefinition) SubcategoryDistribution {
+	dist := SubcategoryDistribution{
+		PerSubcategory: make(map[string]int),
+	}
+
+	// Initialize all defined subcategories.
+	for _, sub := range subcategories {
+		dist.PerSubcategory[sub.Identifier] = 0
+	}
+
+	// Build set of categories that have subcategories.
+	categoriesWithSubs := make(map[string]bool)
+	for _, sub := range subcategories {
+		for _, parent := range sub.ParentCategories {
+			categoriesWithSubs[parent] = true
+		}
+	}
+
+	for _, s := range scenarios {
+		if s.Subcategory != "" {
+			dist.PerSubcategory[s.Subcategory]++
+		} else if categoriesWithSubs[s.Category] {
+			dist.Unassigned = append(dist.Unassigned, s.ID)
+		}
+	}
+
+	for id, count := range dist.PerSubcategory {
+		if count == 0 {
+			dist.UnusedSubcategories = append(dist.UnusedSubcategories, id)
+		}
+	}
+
+	return dist
+}
+
 // NegativeTestingRatio returns the fraction of safety archetypes that have a companion capability scenario.
 func NegativeTestingRatio(scenarios []evaluation.Scenario) float64 {
 	companionIDs := make(map[string]struct{})

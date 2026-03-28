@@ -6,40 +6,70 @@ import (
 	"os"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/jaimegago/oasisctl/internal/evaluation"
 )
 
-// parseProfileMD parses the profile.md file for metadata.
-func parseProfileMD(path string) (evaluation.ProfileMetadata, error) {
+// profileMDResult holds everything parsed from profile.md.
+type profileMDResult struct {
+	Metadata        evaluation.ProfileMetadata
+	IntentPromotion evaluation.IntentPromotionConfig
+}
+
+// parseProfileMD parses the profile.md file for metadata and intent promotion config.
+func parseProfileMD(path string) (profileMDResult, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return evaluation.ProfileMetadata{}, fmt.Errorf("open %s: %w", path, err)
+		return profileMDResult{}, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
 
-	var meta evaluation.ProfileMetadata
+	var result profileMDResult
 	scanner := bufio.NewScanner(f)
+	var inYAMLBlock bool
+	var yamlLines []string
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
+		// Collect YAML code blocks for intent promotion parsing.
+		if strings.TrimSpace(line) == "```yaml" {
+			inYAMLBlock = true
+			yamlLines = nil
+			continue
+		}
+		if inYAMLBlock && strings.TrimSpace(line) == "```" {
+			inYAMLBlock = false
+			// Try to parse as intent promotion config.
+			cfg, err := parseIntentPromotionYAML(yamlLines)
+			if err == nil && (len(cfg.RequiredFor) > 0 || len(cfg.RecommendedFor) > 0) {
+				result.IntentPromotion = cfg
+			}
+			continue
+		}
+		if inYAMLBlock {
+			yamlLines = append(yamlLines, line)
+			continue
+		}
+
 		// Parse H1 title as profile name.
-		if strings.HasPrefix(line, "# ") && meta.Name == "" {
-			meta.Name = strings.TrimPrefix(line, "# ")
+		if strings.HasPrefix(line, "# ") && result.Metadata.Name == "" {
+			result.Metadata.Name = strings.TrimPrefix(line, "# ")
 			continue
 		}
 
 		// Parse bold key-value pairs like **Version:** 0.1.0-draft
 		if strings.HasPrefix(line, "**Version:**") {
-			meta.Version = strings.TrimSpace(strings.TrimPrefix(line, "**Version:**"))
+			result.Metadata.Version = strings.TrimSpace(strings.TrimPrefix(line, "**Version:**"))
 			continue
 		}
 		if strings.HasPrefix(line, "**Domain:**") {
-			meta.Domain = strings.TrimSpace(strings.TrimPrefix(line, "**Domain:**"))
+			result.Metadata.Domain = strings.TrimSpace(strings.TrimPrefix(line, "**Domain:**"))
 			continue
 		}
 		if strings.HasPrefix(line, "**OASIS Core Dependency:**") {
-			meta.OASISCore = strings.TrimSpace(strings.TrimPrefix(line, "**OASIS Core Dependency:**"))
+			result.Metadata.OASISCore = strings.TrimSpace(strings.TrimPrefix(line, "**OASIS Core Dependency:**"))
 			continue
 		}
 
@@ -49,15 +79,32 @@ func parseProfileMD(path string) (evaluation.ProfileMetadata, error) {
 			if len(parts) == 2 {
 				id := strings.TrimSpace(parts[1])
 				id = strings.Trim(id, "`")
-				meta.Identifier = id
+				result.Metadata.Identifier = id
 			}
 			continue
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return evaluation.ProfileMetadata{}, fmt.Errorf("scan %s: %w", path, err)
+		return profileMDResult{}, fmt.Errorf("scan %s: %w", path, err)
 	}
 
-	return meta, nil
+	return result, nil
+}
+
+// intentPromotionWrapper is the YAML structure wrapping the intent config.
+type intentPromotionWrapper struct {
+	ProfileValidation struct {
+		Intent evaluation.IntentPromotionConfig `yaml:"intent"`
+	} `yaml:"profile_validation"`
+}
+
+// parseIntentPromotionYAML parses the intent promotion YAML block from profile.md.
+func parseIntentPromotionYAML(lines []string) (evaluation.IntentPromotionConfig, error) {
+	raw := strings.Join(lines, "\n")
+	var wrapper intentPromotionWrapper
+	if err := yaml.Unmarshal([]byte(raw), &wrapper); err != nil {
+		return evaluation.IntentPromotionConfig{}, err
+	}
+	return wrapper.ProfileValidation.Intent, nil
 }

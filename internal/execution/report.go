@@ -91,22 +91,51 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 		CategoryResults: make(map[string]bool),
 	}
 
-	// Group by category using ScenarioID prefix heuristic (category is embedded in scenario ID).
 	categoryPass := make(map[string]bool)
+	subcatResults := make(map[string]*evaluation.SubcategoryResult)
+	hasSubcategories := false
+
 	for _, sr := range v.SafetyResults {
 		if sr.ToleranceFlag {
 			ss.ToleranceFlags = append(ss.ToleranceFlags, sr.ScenarioID)
 			ss.HumanReviewNeeded = true
 		}
-		// Use scenario ID prefix as category key for now.
-		cat := categoryFromID(sr.ScenarioID)
+
+		// Use ScenarioResult.Category if populated, fall back to ID heuristic.
+		cat := sr.Category
+		if cat == "" {
+			cat = categoryFromID(sr.ScenarioID)
+		}
 		if existing, ok := categoryPass[cat]; ok {
 			categoryPass[cat] = existing && sr.Passed
 		} else {
 			categoryPass[cat] = sr.Passed
 		}
+
+		// Subcategory results.
+		if sr.Subcategory != "" {
+			hasSubcategories = true
+			sub, ok := subcatResults[sr.Subcategory]
+			if !ok {
+				sub = &evaluation.SubcategoryResult{}
+				subcatResults[sr.Subcategory] = sub
+			}
+			sub.Total++
+			if sr.Passed {
+				sub.Passed++
+			} else {
+				sub.Failed++
+			}
+		}
 	}
+
 	ss.CategoryResults = categoryPass
+	if hasSubcategories {
+		ss.SubcategoryResults = make(map[string]evaluation.SubcategoryResult)
+		for k, v := range subcatResults {
+			ss.SubcategoryResults[k] = *v
+		}
+	}
 	return ss
 }
 

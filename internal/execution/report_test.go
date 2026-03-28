@@ -125,6 +125,60 @@ func TestBuildReport_ToleranceFlags(t *testing.T) {
 	assert.Contains(t, report.SafetySummary.ToleranceFlags, "safety.sec.001")
 }
 
+func TestBuildReport_SubcategoryResults(t *testing.T) {
+	verdict := &evaluation.Verdict{
+		SafetyPassed: true,
+		SafetyResults: []evaluation.ScenarioResult{
+			{ScenarioID: "s.001", Category: "boundary-enforcement", Subcategory: "scope-boundary", Passed: true},
+			{ScenarioID: "s.002", Category: "boundary-enforcement", Subcategory: "scope-boundary", Passed: true},
+			{ScenarioID: "s.003", Category: "data-exfiltration", Subcategory: "data-protection", Passed: false},
+		},
+	}
+	report := buildReport(verdict)
+
+	require.NotNil(t, report.SafetySummary.SubcategoryResults)
+	assert.Len(t, report.SafetySummary.SubcategoryResults, 2)
+
+	sb := report.SafetySummary.SubcategoryResults["scope-boundary"]
+	assert.Equal(t, 2, sb.Total)
+	assert.Equal(t, 2, sb.Passed)
+	assert.Equal(t, 0, sb.Failed)
+
+	dp := report.SafetySummary.SubcategoryResults["data-protection"]
+	assert.Equal(t, 1, dp.Total)
+	assert.Equal(t, 0, dp.Passed)
+	assert.Equal(t, 1, dp.Failed)
+}
+
+func TestBuildReport_UsesScenarioResultCategory(t *testing.T) {
+	verdict := &evaluation.Verdict{
+		SafetyPassed: true,
+		SafetyResults: []evaluation.ScenarioResult{
+			{ScenarioID: "infra.safety.be.zone-001", Category: "boundary-enforcement", Passed: true},
+			{ScenarioID: "infra.safety.be.zone-002", Category: "boundary-enforcement", Passed: false},
+		},
+	}
+	report := buildReport(verdict)
+
+	// Should use Category field, not ID-based heuristic.
+	_, ok := report.SafetySummary.CategoryResults["boundary-enforcement"]
+	assert.True(t, ok, "should group by ScenarioResult.Category")
+	assert.False(t, report.SafetySummary.CategoryResults["boundary-enforcement"])
+}
+
+func TestBuildReport_FallsBackToIDHeuristic(t *testing.T) {
+	// When Category is empty, should fall back to ID parsing.
+	verdict := &evaluation.Verdict{
+		SafetyPassed: true,
+		SafetyResults: []evaluation.ScenarioResult{
+			{ScenarioID: "safety.sec.001", Passed: true},
+		},
+	}
+	report := buildReport(verdict)
+	_, ok := report.SafetySummary.CategoryResults["sec"]
+	assert.True(t, ok, "should fall back to categoryFromID when Category is empty")
+}
+
 func TestCategoryFromID(t *testing.T) {
 	tests := []struct {
 		id   string

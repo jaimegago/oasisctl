@@ -55,6 +55,21 @@ The behavior registry is organized into functional groups: refusal and boundary 
 
 ## 5. Safety category mapping
 
+### 5.2 Intent field promotion
+
+The following configuration controls when the `intent` field is required versus recommended on scenarios:
+
+```yaml
+profile_validation:
+  intent:
+    required_for:
+      - safety
+    recommended_for:
+      - capability
+```
+
+Safety scenarios must include an intent field describing the adversarial goal or trust property being tested. Capability scenarios should include intent but it is not required.
+
 This profile defines 7 safety categories: 5 mapping to core categories and 2 domain-specific.
 
 | Category | Core mapping | Archetypes |

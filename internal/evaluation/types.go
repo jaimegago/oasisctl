@@ -11,6 +11,8 @@ type Scenario struct {
 	Category       string         `yaml:"category"`
 	Archetype      string         `yaml:"archetype"`
 	Tier           int            `yaml:"tier"`
+	Subcategory    string         `yaml:"subcategory,omitempty" json:"subcategory,omitempty"`
+	Intent         string         `yaml:"intent,omitempty" json:"intent,omitempty"`
 	Description    string         `yaml:"description"`
 	Quality        QualityMetadata `yaml:"quality,omitempty"`
 	Preconditions  Preconditions  `yaml:"preconditions"`
@@ -137,6 +139,21 @@ type Profile struct {
 	CapabilityCategories []Category
 	ScoringModel         ScoringModel
 	TierRequirements     map[int]TierRequirement
+	Subcategories        []SubcategoryDefinition
+	IntentPromotion      IntentPromotionConfig
+}
+
+// SubcategoryDefinition describes a subcategory that groups scenarios by safety property.
+type SubcategoryDefinition struct {
+	Identifier       string
+	ParentCategories []string
+	Description      string
+}
+
+// IntentPromotionConfig defines when intent is required vs recommended.
+type IntentPromotionConfig struct {
+	RequiredFor    []string `yaml:"required_for"`
+	RecommendedFor []string `yaml:"recommended_for"`
 }
 
 // ProfileMetadata holds profile header information.
@@ -165,9 +182,10 @@ type BehaviorDefinition struct {
 
 // Category represents a safety or capability category with its archetypes.
 type Category struct {
-	ID         string
-	Name       string
-	Archetypes []string
+	ID            string
+	Name          string
+	Archetypes    []string
+	Subcategories []string
 }
 
 // ScoringModel defines how scores aggregate.
@@ -311,6 +329,9 @@ const (
 // ScenarioResult holds the outcome of a single scenario.
 type ScenarioResult struct {
 	ScenarioID       string
+	Category         string
+	Subcategory      string
+	Archetype        string
 	Passed           bool
 	NeedsReview      bool
 	ToleranceFlag    bool
@@ -370,10 +391,18 @@ type ReportEnvironment struct {
 
 // SafetySummary holds the safety gate outcome.
 type SafetySummary struct {
-	Passed            bool            `json:"passed" yaml:"passed"`
-	CategoryResults   map[string]bool `json:"category_results" yaml:"category_results"`
-	ToleranceFlags    []string        `json:"tolerance_flags,omitempty" yaml:"tolerance_flags,omitempty"`
-	HumanReviewNeeded bool            `json:"human_review_needed" yaml:"human_review_needed"`
+	Passed             bool                        `json:"passed" yaml:"passed"`
+	CategoryResults    map[string]bool             `json:"category_results" yaml:"category_results"`
+	SubcategoryResults map[string]SubcategoryResult `json:"subcategory_results,omitempty" yaml:"subcategory_results,omitempty"`
+	ToleranceFlags     []string                    `json:"tolerance_flags,omitempty" yaml:"tolerance_flags,omitempty"`
+	HumanReviewNeeded  bool                        `json:"human_review_needed" yaml:"human_review_needed"`
+}
+
+// SubcategoryResult holds pass/fail counts for a subcategory.
+type SubcategoryResult struct {
+	Total  int `json:"total" yaml:"total"`
+	Passed int `json:"passed" yaml:"passed"`
+	Failed int `json:"failed" yaml:"failed"`
 }
 
 // CapabilitySummary holds aggregated capability scores.

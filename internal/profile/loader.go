@@ -35,7 +35,7 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 		return nil, fmt.Errorf("profile path %q is not a directory", dir)
 	}
 
-	meta, err := parseProfileMD(filepath.Join(dir, "profile.md"))
+	profileResult, err := parseProfileMD(filepath.Join(dir, "profile.md"))
 	if err != nil {
 		return nil, fmt.Errorf("parse profile.md: %w", err)
 	}
@@ -48,6 +48,16 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 	stimuli, err := l.stimulusParser.Parse(filepath.Join(dir, "stimulus-library.md"))
 	if err != nil {
 		return nil, fmt.Errorf("parse stimulus-library.md: %w", err)
+	}
+
+	// Parse subcategories from safety-categories.md (optional).
+	safetyCatPath := filepath.Join(dir, "safety-categories.md")
+	var subcategories []evaluation.SubcategoryDefinition
+	if _, statErr := os.Stat(safetyCatPath); statErr == nil {
+		subcategories, err = parseSubcategories(safetyCatPath)
+		if err != nil {
+			return nil, fmt.Errorf("parse subcategories: %w", err)
+		}
 	}
 
 	safetyScenarios, err := l.loadScenariosDir(ctx, filepath.Join(dir, "scenarios", "safety"))
@@ -63,10 +73,15 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 	allScenarios := append(safetyScenarios, capabilityScenarios...)
 
 	profile := &evaluation.Profile{
-		Metadata:            meta,
+		Metadata:            profileResult.Metadata,
 		BehaviorDefinitions: behaviors,
 		StimulusLibrary:     stimuli,
+		Subcategories:       subcategories,
+		IntentPromotion:     profileResult.IntentPromotion,
 	}
+
+	// Map subcategories to categories.
+	mapSubcategoriesToCategories(profile)
 
 	verr := validateProfileIntegrity(profile, allScenarios)
 	if verr != nil && verr.HasIssues() {
@@ -74,6 +89,34 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 	}
 
 	return profile, nil
+}
+
+// mapSubcategoriesToCategories populates each Category's Subcategories field
+// based on the parent category mapping in subcategory definitions.
+func mapSubcategoriesToCategories(p *evaluation.Profile) {
+	if len(p.Subcategories) == 0 {
+		return
+	}
+	// Build lookup: category ID -> index in SafetyCategories.
+	safetyIdx := make(map[string]int)
+	for i, cat := range p.SafetyCategories {
+		safetyIdx[cat.ID] = i
+	}
+	capIdx := make(map[string]int)
+	for i, cat := range p.CapabilityCategories {
+		capIdx[cat.ID] = i
+	}
+
+	for _, sub := range p.Subcategories {
+		for _, parent := range sub.ParentCategories {
+			if idx, ok := safetyIdx[parent]; ok {
+				p.SafetyCategories[idx].Subcategories = append(p.SafetyCategories[idx].Subcategories, sub.Identifier)
+			}
+			if idx, ok := capIdx[parent]; ok {
+				p.CapabilityCategories[idx].Subcategories = append(p.CapabilityCategories[idx].Subcategories, sub.Identifier)
+			}
+		}
+	}
 }
 
 // loadScenariosDir loads all scenario YAML files from a directory.

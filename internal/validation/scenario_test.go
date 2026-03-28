@@ -96,6 +96,87 @@ func TestValidateScenario_InvalidStimulusType(t *testing.T) {
 	assert.True(t, verr.HasIssues())
 }
 
+func TestValidateScenario_IntentRequiredForSafety(t *testing.T) {
+	cfg := evaluation.IntentPromotionConfig{
+		RequiredFor:    []string{"safety"},
+		RecommendedFor: []string{"capability"},
+	}
+
+	s := evaluation.Scenario{
+		ID: "test.safety.001", Name: "Test", Version: "0.1.0",
+		Classification: evaluation.ClassificationSafety,
+		Category: "test-cat", Archetype: "S-TEST-001", Tier: 1,
+		Stimuli:    []evaluation.Stimulus{{Type: evaluation.StimulusTypeOperatorPrompt, Value: "x"}},
+		Assertions: evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "refuse_with_explanation"}}},
+		Verification: evaluation.Verification{NegativeVerification: []string{"none"}},
+		Scoring:      evaluation.Scoring{Type: evaluation.ScoringTypeBinary},
+		Observability: []string{"trace"},
+		// Intent is empty — should fail validation.
+	}
+
+	verr := validation.ValidateScenario(s, cfg)
+	require.NotNil(t, verr)
+	found := false
+	for _, issue := range verr.Issues {
+		if issue.Field == "intent" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "should report missing intent for safety scenario")
+}
+
+func TestValidateScenario_CapabilityWithoutIntentIsNotError(t *testing.T) {
+	cfg := evaluation.IntentPromotionConfig{
+		RequiredFor:    []string{"safety"},
+		RecommendedFor: []string{"capability"},
+	}
+
+	s := evaluation.Scenario{
+		ID: "test.cap.001", Name: "Test", Version: "0.1.0",
+		Classification: evaluation.ClassificationCapability,
+		Category: "test-cat", Archetype: "C-TEST-001", Tier: 1,
+		Stimuli:    []evaluation.Stimulus{{Type: evaluation.StimulusTypeOperatorPrompt, Value: "x"}},
+		Assertions: evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "b"}}},
+		Verification: evaluation.Verification{NegativeVerification: []string{"none"}},
+		Scoring:      evaluation.Scoring{Type: evaluation.ScoringTypeWeighted},
+		Observability: []string{"trace"},
+		// Intent is empty — should NOT be an error for capability.
+	}
+
+	verr := validation.ValidateScenario(s, cfg)
+	assert.Nil(t, verr, "capability scenario without intent should pass with recommendation only")
+}
+
+func TestValidateScenario_IntentTooShort(t *testing.T) {
+	cfg := evaluation.IntentPromotionConfig{
+		RequiredFor: []string{"safety"},
+	}
+
+	s := evaluation.Scenario{
+		ID: "test.safety.001", Name: "Test", Version: "0.1.0",
+		Classification: evaluation.ClassificationSafety,
+		Category: "test-cat", Archetype: "S-TEST-001", Tier: 1,
+		Intent:     "Too short",
+		Stimuli:    []evaluation.Stimulus{{Type: evaluation.StimulusTypeOperatorPrompt, Value: "x"}},
+		Assertions: evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "b"}}},
+		Verification: evaluation.Verification{NegativeVerification: []string{"none"}},
+		Scoring:      evaluation.Scoring{Type: evaluation.ScoringTypeBinary},
+		Observability: []string{"trace"},
+	}
+
+	verr := validation.ValidateScenario(s, cfg)
+	require.NotNil(t, verr)
+	found := false
+	for _, issue := range verr.Issues {
+		if issue.Field == "intent" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "should report intent too short")
+}
+
 func TestValidateScenario_WrongScoringTypeForClassification(t *testing.T) {
 	tests := []struct {
 		name           string
