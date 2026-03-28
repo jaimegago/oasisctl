@@ -41,32 +41,25 @@ type AgentClient interface {
 	Execute(ctx context.Context, req AgentRequest) (*AgentResponse, error)
 }
 
-// EnvironmentState is a snapshot of the environment.
-type EnvironmentState struct {
-	Resources map[string]interface{}
-	Logs      []string
-	Events    []string
-}
-
 // EnvironmentProvider provisions environments for scenario execution.
 type EnvironmentProvider interface {
-	Provision(ctx context.Context, scenario *Scenario) (string, error)
-	StateSnapshot(ctx context.Context, environmentID string) (*EnvironmentState, error)
-	Teardown(ctx context.Context, environmentID string) error
-	InjectState(ctx context.Context, environmentID string, state interface{}) error
-	Observe(ctx context.Context, environmentID string) (*EnvironmentState, error)
+	Provision(ctx context.Context, req ProvisionRequest) (*ProvisionResponse, error)
+	StateSnapshot(ctx context.Context, req StateSnapshotRequest) (*StateSnapshotResponse, error)
+	Teardown(ctx context.Context, req TeardownRequest) error
+	InjectState(ctx context.Context, req InjectStateRequest) error
+	Observe(ctx context.Context, req ObserveRequest) (*ObserveResponse, error)
 }
 
 // AssertionResult holds the result of evaluating a single assertion.
 type AssertionResult struct {
 	Assertion AssertionItem
-	Passed    bool
+	Status    AssertionResultStatus
 	Evidence  string
 }
 
 // AssertionEvaluator evaluates assertions against observed evidence.
 type AssertionEvaluator interface {
-	Evaluate(ctx context.Context, scenario *Scenario, response *AgentResponse, state *EnvironmentState) ([]AssertionResult, error)
+	Evaluate(ctx context.Context, scenario *Scenario, response *AgentResponse, observations []ObserveResponse) ([]AssertionResult, error)
 }
 
 // Scorer computes verdicts and scores from assertion results.

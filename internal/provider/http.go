@@ -12,7 +12,6 @@ import (
 )
 
 // HTTPClient implements evaluation.EnvironmentProvider over HTTP/JSON.
-// Phase 2 will complete the full implementation.
 type HTTPClient struct {
 	baseURL    string
 	httpClient *http.Client
@@ -29,147 +28,71 @@ func NewHTTPClient(baseURL string) *HTTPClient {
 }
 
 // Provision creates an environment for the given scenario.
-func (c *HTTPClient) Provision(ctx context.Context, scenario *evaluation.Scenario) (string, error) {
-	payload, err := json.Marshal(map[string]interface{}{
-		"scenario_id":   scenario.ID,
-		"preconditions": scenario.Preconditions,
-	})
-	if err != nil {
-		return "", &evaluation.ProviderError{Operation: "provision", Cause: err}
+func (c *HTTPClient) Provision(ctx context.Context, req evaluation.ProvisionRequest) (*evaluation.ProvisionResponse, error) {
+	var resp evaluation.ProvisionResponse
+	if err := c.post(ctx, "/v1/provision", req, &resp); err != nil {
+		return nil, &evaluation.ProviderError{Operation: "provision", Cause: err}
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/environments", bytes.NewReader(payload))
-	if err != nil {
-		return "", &evaluation.ProviderError{Operation: "provision", Cause: err}
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", &evaluation.ProviderError{Operation: "provision", Cause: err}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		return "", &evaluation.ProviderError{
-			Operation: "provision",
-			Cause:     fmt.Errorf("provider returned status %d", resp.StatusCode),
-		}
-	}
-
-	var body struct {
-		EnvironmentID string `json:"environment_id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", &evaluation.ProviderError{Operation: "provision", Cause: fmt.Errorf("decode response: %w", err)}
-	}
-	return body.EnvironmentID, nil
+	return &resp, nil
 }
 
 // StateSnapshot captures the current environment state.
-func (c *HTTPClient) StateSnapshot(ctx context.Context, environmentID string) (*evaluation.EnvironmentState, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		fmt.Sprintf("%s/environments/%s/state", c.baseURL, environmentID), nil)
-	if err != nil {
+func (c *HTTPClient) StateSnapshot(ctx context.Context, req evaluation.StateSnapshotRequest) (*evaluation.StateSnapshotResponse, error) {
+	var resp evaluation.StateSnapshotResponse
+	if err := c.post(ctx, "/v1/state-snapshot", req, &resp); err != nil {
 		return nil, &evaluation.ProviderError{Operation: "state-snapshot", Cause: err}
 	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, &evaluation.ProviderError{Operation: "state-snapshot", Cause: err}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, &evaluation.ProviderError{
-			Operation: "state-snapshot",
-			Cause:     fmt.Errorf("provider returned status %d", resp.StatusCode),
-		}
-	}
-
-	var state evaluation.EnvironmentState
-	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
-		return nil, &evaluation.ProviderError{Operation: "state-snapshot", Cause: fmt.Errorf("decode: %w", err)}
-	}
-	return &state, nil
+	return &resp, nil
 }
 
 // Teardown destroys the environment.
-func (c *HTTPClient) Teardown(ctx context.Context, environmentID string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete,
-		fmt.Sprintf("%s/environments/%s", c.baseURL, environmentID), nil)
-	if err != nil {
+func (c *HTTPClient) Teardown(ctx context.Context, req evaluation.TeardownRequest) error {
+	if err := c.post(ctx, "/v1/teardown", req, nil); err != nil {
 		return &evaluation.ProviderError{Operation: "teardown", Cause: err}
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return &evaluation.ProviderError{Operation: "teardown", Cause: err}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return &evaluation.ProviderError{
-			Operation: "teardown",
-			Cause:     fmt.Errorf("provider returned status %d", resp.StatusCode),
-		}
 	}
 	return nil
 }
 
 // InjectState sets up specific state in the environment.
-func (c *HTTPClient) InjectState(ctx context.Context, environmentID string, state interface{}) error {
-	payload, err := json.Marshal(state)
-	if err != nil {
+func (c *HTTPClient) InjectState(ctx context.Context, req evaluation.InjectStateRequest) error {
+	if err := c.post(ctx, "/v1/inject-state", req, nil); err != nil {
 		return &evaluation.ProviderError{Operation: "inject-state", Cause: err}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s/environments/%s/state", c.baseURL, environmentID), bytes.NewReader(payload))
-	if err != nil {
-		return &evaluation.ProviderError{Operation: "inject-state", Cause: err}
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return &evaluation.ProviderError{Operation: "inject-state", Cause: err}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return &evaluation.ProviderError{
-			Operation: "inject-state",
-			Cause:     fmt.Errorf("provider returned status %d", resp.StatusCode),
-		}
 	}
 	return nil
 }
 
 // Observe provides independent access to audit logs and state.
-func (c *HTTPClient) Observe(ctx context.Context, environmentID string) (*evaluation.EnvironmentState, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		fmt.Sprintf("%s/environments/%s/observe", c.baseURL, environmentID), nil)
-	if err != nil {
+func (c *HTTPClient) Observe(ctx context.Context, req evaluation.ObserveRequest) (*evaluation.ObserveResponse, error) {
+	var resp evaluation.ObserveResponse
+	if err := c.post(ctx, "/v1/observe", req, &resp); err != nil {
 		return nil, &evaluation.ProviderError{Operation: "observe", Cause: err}
 	}
+	return &resp, nil
+}
 
-	resp, err := c.httpClient.Do(req)
+// post is a helper that marshals req as JSON, POSTs to baseURL+path, and decodes into out (nil = discard body).
+func (c *HTTPClient) post(ctx context.Context, path string, req interface{}, out interface{}) error {
+	payload, err := json.Marshal(req)
 	if err != nil {
-		return nil, &evaluation.ProviderError{Operation: "observe", Cause: err}
+		return fmt.Errorf("marshal: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("do request: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, &evaluation.ProviderError{
-			Operation: "observe",
-			Cause:     fmt.Errorf("provider returned status %d", resp.StatusCode),
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("provider returned status %d", resp.StatusCode)
+	}
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return fmt.Errorf("decode response: %w", err)
 		}
 	}
-
-	var state evaluation.EnvironmentState
-	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
-		return nil, &evaluation.ProviderError{Operation: "observe", Cause: fmt.Errorf("decode: %w", err)}
-	}
-	return &state, nil
+	return nil
 }

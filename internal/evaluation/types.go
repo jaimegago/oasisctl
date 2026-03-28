@@ -1,5 +1,7 @@
 package evaluation
 
+import "time"
+
 // Scenario represents a single OASIS evaluation scenario as defined in spec 02-scenarios.md.
 type Scenario struct {
 	ID             string         `yaml:"id"`
@@ -187,33 +189,198 @@ type TierRequirement struct {
 	MinCoverage        map[string]int
 }
 
-// Verdict is the full evaluation result as per spec 05-reporting.md.
-type Verdict struct {
-	AgentID           string
-	ProfileID         string
-	Tier              int
-	SafetyPassed      bool
-	SafetyResults     []ScenarioResult
-	CapabilityScore   float64
-	CapabilityResults []ScenarioResult
-	Report            *Report
+// ProvisionRequest is the body sent to /v1/provision.
+type ProvisionRequest struct {
+	ScenarioID  string                  `json:"scenario_id"`
+	Environment EnvironmentPrecondition `json:"environment"`
+	Agent       AgentPrecondition       `json:"agent"`
+	Tier        int                     `json:"tier"`
 }
+
+// ProvisionResponse is the response from /v1/provision.
+type ProvisionResponse struct {
+	EnvironmentID    string            `json:"environment_id"`
+	AgentEndpoint    string            `json:"agent_endpoint"`
+	AgentCredentials map[string]string `json:"agent_credentials"`
+	Status           string            `json:"status"`
+	Error            string            `json:"error,omitempty"`
+}
+
+// ResourceFilter selects specific resources for a state snapshot.
+type ResourceFilter struct {
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// ResourceSnapshot is the observed state of one resource.
+type ResourceSnapshot struct {
+	Kind      string                 `json:"kind"`
+	Name      string                 `json:"name"`
+	Namespace string                 `json:"namespace,omitempty"`
+	Spec      map[string]interface{} `json:"spec,omitempty"`
+	Status    map[string]interface{} `json:"status,omitempty"`
+}
+
+// StateSnapshotRequest is the body sent to /v1/state-snapshot.
+type StateSnapshotRequest struct {
+	EnvironmentID string           `json:"environment_id"`
+	Resources     []ResourceFilter `json:"resources,omitempty"`
+}
+
+// StateSnapshotResponse is the response from /v1/state-snapshot.
+type StateSnapshotResponse struct {
+	EnvironmentID string             `json:"environment_id"`
+	Timestamp     time.Time          `json:"timestamp"`
+	Resources     []ResourceSnapshot `json:"resources"`
+}
+
+// TeardownRequest is the body sent to /v1/teardown.
+type TeardownRequest struct {
+	EnvironmentID string `json:"environment_id"`
+}
+
+// InjectStateRequest is the body sent to /v1/inject-state.
+type InjectStateRequest struct {
+	EnvironmentID string                   `json:"environment_id"`
+	State         []map[string]interface{} `json:"state"`
+}
+
+// ObserveRequest is the body sent to /v1/observe.
+type ObserveRequest struct {
+	EnvironmentID   string                 `json:"environment_id"`
+	ObservationType string                 `json:"observation_type"`
+	Parameters      map[string]interface{} `json:"parameters,omitempty"`
+}
+
+// ObserveResponse is the response from /v1/observe.
+type ObserveResponse struct {
+	EnvironmentID   string      `json:"environment_id"`
+	Timestamp       time.Time   `json:"timestamp"`
+	ObservationType string      `json:"observation_type"`
+	Data            interface{} `json:"data"`
+}
+
+// AuditEntry is a single entry in an audit log.
+type AuditEntry struct {
+	Timestamp   time.Time `json:"timestamp"`
+	Verb        string    `json:"verb"`
+	Resource    string    `json:"resource"`
+	Namespace   string    `json:"namespace,omitempty"`
+	User        string    `json:"user"`
+	RequestBody string    `json:"request_body,omitempty"`
+}
+
+// AuditLogData is the data returned for observation_type="audit_log".
+type AuditLogData struct {
+	Entries []AuditEntry `json:"entries"`
+}
+
+// ResourceStateData is the data returned for observation_type="resource_state".
+// It reuses ResourceSnapshot.
+type ResourceStateData = ResourceSnapshot
+
+// FieldChange describes a single changed field in a state diff.
+type FieldChange struct {
+	Path   string      `json:"path"`
+	Before interface{} `json:"before"`
+	After  interface{} `json:"after"`
+}
+
+// StateDiffData is the data returned for observation_type="state_diff".
+type StateDiffData struct {
+	Before  map[string]interface{} `json:"before"`
+	After   map[string]interface{} `json:"after"`
+	Changes []FieldChange          `json:"changes"`
+}
+
+// ResponseContentData is the data returned for observation_type="response_content".
+type ResponseContentData struct {
+	ForbiddenValuesFound []string `json:"forbidden_values_found"`
+}
+
+// AssertionResultStatus indicates the outcome of a single assertion check.
+type AssertionResultStatus string
+
+const (
+	AssertionPass        AssertionResultStatus = "PASS"
+	AssertionFail        AssertionResultStatus = "FAIL"
+	AssertionNeedsReview AssertionResultStatus = "NEEDS_REVIEW"
+)
 
 // ScenarioResult holds the outcome of a single scenario.
 type ScenarioResult struct {
-	ScenarioID string
-	Passed     bool
-	Score      float64
-	Evidence   []string
-	Errors     []string
+	ScenarioID       string
+	Passed           bool
+	NeedsReview      bool
+	ToleranceFlag    bool
+	Score            float64
+	AssertionResults []AssertionResult
+	Evidence         []string
+	Errors           []string
+}
+
+// Verdict is the full evaluation result as per spec 05-reporting.md.
+type Verdict struct {
+	AgentID           string
+	AgentVersion      string
+	ProfileID         string
+	ProfileVersion    string
+	ProviderInfo      string
+	Tier              int
+	Date              time.Time
+	SafetyPassed      bool
+	SafetyGateSkipped bool
+	SafetyResults     []ScenarioResult
+	CapabilityScore   float64
+	CapabilityResults []ScenarioResult
+	DimensionScores   map[string]float64
+	CategoryScores    map[string]float64
+	ArchetypeScores   map[string]float64
+	Report            *Report
 }
 
 // Report is the full evaluation report.
 type Report struct {
-	Metadata          map[string]string
-	Environment       string
-	SafetySummary     string
-	CapabilitySummary string
+	Metadata          ReportMetadata
+	Environment       ReportEnvironment
+	SafetySummary     SafetySummary
+	CapabilitySummary *CapabilitySummary
 	CoverageMatrix    map[string][]string
 	ScenarioDetails   []ScenarioResult
+}
+
+// ReportMetadata holds report header information.
+type ReportMetadata struct {
+	AgentName      string    `json:"agent_name" yaml:"agent_name"`
+	AgentVersion   string    `json:"agent_version" yaml:"agent_version"`
+	Evaluator      string    `json:"evaluator" yaml:"evaluator"`
+	Date           time.Time `json:"date" yaml:"date"`
+	OASISCoreSpec  string    `json:"oasis_core_spec" yaml:"oasis_core_spec"`
+	ProfileName    string    `json:"profile_name" yaml:"profile_name"`
+	ProfileVersion string    `json:"profile_version" yaml:"profile_version"`
+	ProviderInfo   string    `json:"provider_info" yaml:"provider_info"`
+}
+
+// ReportEnvironment captures environment details for the report.
+type ReportEnvironment struct {
+	TierClaimed int    `json:"tier_claimed" yaml:"tier_claimed"`
+	Evidence    string `json:"evidence" yaml:"evidence"`
+}
+
+// SafetySummary holds the safety gate outcome.
+type SafetySummary struct {
+	Passed            bool            `json:"passed" yaml:"passed"`
+	CategoryResults   map[string]bool `json:"category_results" yaml:"category_results"`
+	ToleranceFlags    []string        `json:"tolerance_flags,omitempty" yaml:"tolerance_flags,omitempty"`
+	HumanReviewNeeded bool            `json:"human_review_needed" yaml:"human_review_needed"`
+}
+
+// CapabilitySummary holds aggregated capability scores.
+type CapabilitySummary struct {
+	CategoryScores  map[string]float64 `json:"category_scores" yaml:"category_scores"`
+	ArchetypeScores map[string]float64 `json:"archetype_scores" yaml:"archetype_scores"`
+	DimensionScores map[string]float64 `json:"dimension_scores" yaml:"dimension_scores"`
+	TierLabel       string             `json:"tier_label" yaml:"tier_label"`
+	Disclaimer      string             `json:"disclaimer" yaml:"disclaimer"`
 }
