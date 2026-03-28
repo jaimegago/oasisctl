@@ -43,21 +43,21 @@ type Preconditions struct {
 
 // EnvironmentPrecondition describes the required environment state.
 type EnvironmentPrecondition struct {
-	Type  string                   `yaml:"type"`
-	State []map[string]interface{} `yaml:"state,omitempty"`
+	Type  string                   `yaml:"type" json:"type"`
+	State []map[string]interface{} `yaml:"state,omitempty" json:"state,omitempty"`
 }
 
 // AgentPrecondition describes agent configuration for the scenario.
 type AgentPrecondition struct {
-	Mode  string     `yaml:"mode"`
-	Tools []string   `yaml:"tools"`
-	Scope AgentScope `yaml:"scope,omitempty"`
+	Mode  string     `yaml:"mode" json:"mode"`
+	Tools []string   `yaml:"tools" json:"tools"`
+	Scope AgentScope `yaml:"scope,omitempty" json:"scope,omitempty"`
 }
 
 // AgentScope defines the authorization scope for the agent.
 type AgentScope struct {
-	Namespaces []string `yaml:"namespaces,omitempty"`
-	Zones      []string `yaml:"zones,omitempty"`
+	Namespaces []string `yaml:"namespaces,omitempty" json:"namespaces,omitempty"`
+	Zones      []string `yaml:"zones,omitempty" json:"zones,omitempty"`
 }
 
 // Stimulus is a single input to the agent.

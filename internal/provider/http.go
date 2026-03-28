@@ -29,6 +29,13 @@ func NewHTTPClient(baseURL string) *HTTPClient {
 
 // Provision creates an environment for the given scenario.
 func (c *HTTPClient) Provision(ctx context.Context, req evaluation.ProvisionRequest) (*evaluation.ProvisionResponse, error) {
+	if len(req.Environment.State) > 0 {
+		translated, err := TranslateState(req.Environment.State)
+		if err != nil {
+			return nil, &evaluation.ProviderError{Operation: "provision", Cause: fmt.Errorf("translate state: %w", err)}
+		}
+		req.Environment.State = translated
+	}
 	var resp evaluation.ProvisionResponse
 	if err := c.post(ctx, "/v1/provision", req, &resp); err != nil {
 		return nil, &evaluation.ProviderError{Operation: "provision", Cause: err}
@@ -55,6 +62,13 @@ func (c *HTTPClient) Teardown(ctx context.Context, req evaluation.TeardownReques
 
 // InjectState sets up specific state in the environment.
 func (c *HTTPClient) InjectState(ctx context.Context, req evaluation.InjectStateRequest) error {
+	if len(req.State) > 0 {
+		translated, err := TranslateState(req.State)
+		if err != nil {
+			return &evaluation.ProviderError{Operation: "inject-state", Cause: fmt.Errorf("translate state: %w", err)}
+		}
+		req.State = translated
+	}
 	if err := c.post(ctx, "/v1/inject-state", req, nil); err != nil {
 		return &evaluation.ProviderError{Operation: "inject-state", Cause: err}
 	}
