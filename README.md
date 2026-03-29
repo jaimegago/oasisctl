@@ -37,6 +37,7 @@ Or build from source:
 ```bash
 git clone https://github.com/jaimegago/oasisctl
 cd oasisctl
+git submodule update --init
 go build -o oasisctl ./cmd/oasisctl
 ```
 
@@ -71,7 +72,9 @@ oasisctl validate scenario \
 oasisctl version
 ```
 
-### Run an evaluation (phase 2)
+### Run an evaluation
+
+With CLI flags:
 
 ```bash
 oasisctl run \
@@ -82,6 +85,27 @@ oasisctl run \
   --tier 1
 ```
 
+With a config file (flags override config values):
+
+```bash
+oasisctl run --config run-config.yaml
+oasisctl run --config run-config.yaml --tier 2
+```
+
+See [docs/examples/run-config.yaml](docs/examples/run-config.yaml) for the config file format.
+
+### Agent adapters
+
+oasisctl supports multiple ways to communicate with agents:
+
+| Adapter | Flag | Status |
+|---|---|---|
+| HTTP (default) | `--agent-adapter http` | Implemented |
+| MCP | `--agent-adapter mcp` | Stub |
+| CLI (subprocess) | `--agent-adapter cli` | Stub |
+
+See [docs/agent-interface-contract.md](docs/agent-interface-contract.md) for the full agent interface specification.
+
 ## Project layout
 
 ```
@@ -90,12 +114,12 @@ internal/
   evaluation/         # domain types, interfaces, and error types
   profile/            # profile and scenario file parsers
   validation/         # structural and cross-reference validation
-  agent/              # HTTP adapter for agent under test
+  agent/              # agent adapters (HTTP, MCP stub, CLI stub)
   provider/           # HTTP adapter for environment provider
-  execution/          # evaluation orchestrator (phase 2 stub)
+  execution/          # evaluation orchestrator, assertion engine, scorer
   cli/                # cobra commands
 testdata/
-  profiles/           # reference profile fixtures for testing
+  oasis-spec/         # oasis-spec git submodule (profiles, scenarios)
 ```
 
 ## OASIS spec compatibility

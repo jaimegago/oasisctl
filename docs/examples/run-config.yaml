@@ -1,0 +1,19 @@
+profile:
+  path: ./oasis-spec/profiles/software-infrastructure
+
+agent:
+  adapter: http
+  url: http://localhost:8091
+  token: ""
+
+environment:
+  provider: petri
+  url: http://localhost:8090
+
+evaluation:
+  tier: 1
+  timeout: 5m
+  parallel: 1
+
+output:
+  format: yaml

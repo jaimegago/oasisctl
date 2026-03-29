@@ -19,7 +19,7 @@ import (
 	"github.com/jaimegago/oasisctl/internal/provider"
 )
 
-const profileDir = "../../testdata/profiles/software-infrastructure"
+const profileDir = "../../testdata/oasis-spec/profiles/software-infrastructure"
 
 // loadScenarioByID loads and returns a single scenario by ID from the profile.
 func loadScenarioByID(t *testing.T, profilePath, scenarioID string) evaluation.Scenario {

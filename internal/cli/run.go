@@ -19,33 +19,78 @@ import (
 
 func newRunCommand() *cobra.Command {
 	var (
-		profilePath string
-		suitePath   string
-		agentURL    string
-		agentToken  string
-		providerURL string
-		tier        int
-		outputPath  string
-		format      string
-		parallel    int
-		timeout     string
-		dryRun      bool
-		verbose     bool
+		configPath   string
+		profilePath  string
+		suitePath    string
+		agentURL     string
+		agentToken   string
+		agentAdapter string
+		agentCommand string
+		providerURL  string
+		tier         int
+		outputPath   string
+		format       string
+		parallel     int
+		timeout      string
+		dryRun       bool
+		verbose      bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Execute an OASIS evaluation",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// 1. Validate required flags.
+			// 1. Load config file if provided.
+			if configPath != "" {
+				rc, err := evaluation.LoadRunConfig(configPath)
+				if err != nil {
+					return fmt.Errorf("load config: %w", err)
+				}
+				// Apply config as defaults; CLI flags override.
+				if profilePath == "" {
+					profilePath = rc.Profile.Path
+				}
+				if agentURL == "" {
+					agentURL = rc.Agent.URL
+				}
+				if agentToken == "" {
+					agentToken = rc.Agent.Token
+				}
+				if agentAdapter == "" {
+					agentAdapter = rc.Agent.Adapter
+				}
+				if agentCommand == "" {
+					agentCommand = rc.Agent.Command
+				}
+				if providerURL == "" {
+					providerURL = rc.Environment.URL
+				}
+				if !cmd.Flags().Changed("tier") {
+					tier = rc.Evaluation.Tier
+				}
+				if !cmd.Flags().Changed("format") && rc.Output.Format != "" {
+					format = rc.Output.Format
+				}
+				if !cmd.Flags().Changed("output") && rc.Output.Path != "" {
+					outputPath = rc.Output.Path
+				}
+				if !cmd.Flags().Changed("parallel") && rc.Evaluation.Parallel > 0 {
+					parallel = rc.Evaluation.Parallel
+				}
+				if !cmd.Flags().Changed("timeout") && rc.Evaluation.Timeout != "" {
+					timeout = rc.Evaluation.Timeout
+				}
+			}
+
+			// 2. Validate required values.
 			if profilePath == "" {
 				return fmt.Errorf("--profile is required")
 			}
-			if suitePath == "" {
+			if suitePath == "" && configPath == "" {
 				return fmt.Errorf("--suite is required")
 			}
-			if agentURL == "" {
-				return fmt.Errorf("--agent-url is required")
+			if agentURL == "" && agentCommand == "" {
+				return fmt.Errorf("--agent-url (or agent.command in config) is required")
 			}
 			if providerURL == "" {
 				return fmt.Errorf("--provider-url is required")
@@ -54,7 +99,7 @@ func newRunCommand() *cobra.Command {
 				return fmt.Errorf("--tier must be 1, 2, or 3")
 			}
 
-			// 2. Parse timeout.
+			// 3. Parse timeout.
 			timeoutDur, err := time.ParseDuration(timeout)
 			if err != nil {
 				return fmt.Errorf("invalid --timeout: %w", err)
@@ -62,27 +107,38 @@ func newRunCommand() *cobra.Command {
 
 			ctx := context.Background()
 
-			// 3a. Load profile first (AssertionEngine needs it).
+			// 4a. Load profile first (AssertionEngine needs it).
 			loader := profile.NewLoader()
 			loadedProfile, err := loader.Load(ctx, profilePath)
 			if err != nil {
 				return fmt.Errorf("load profile: %w", err)
 			}
 
-			// 3b. Load scenarios from profile directory.
+			// 4b. Load scenarios from profile directory.
 			scenarios, err := loadAllScenarios(ctx, profilePath)
 			if err != nil {
 				return fmt.Errorf("load scenarios: %w", err)
 			}
 
-			// 3c. Create dependencies.
-			agentClient := agent.NewHTTPClient(agentURL, agentToken)
+			// 4c. Create agent client via adapter factory.
+			agentCfg := agent.AgentConfig{
+				Adapter: agentAdapter,
+				URL:     agentURL,
+				Token:   agentToken,
+				Command: agentCommand,
+				Timeout: timeoutDur,
+			}
+			agentClient, err := agent.NewClient(agentCfg)
+			if err != nil {
+				return fmt.Errorf("create agent client: %w", err)
+			}
+
 			providerClient := provider.NewHTTPClient(providerURL)
 			asserter := execution.NewAssertionEngine(loadedProfile)
 			scorer := execution.NewScorer()
 			reporter := execution.NewReportWriter()
 
-			// 4. Create orchestrator.
+			// 5. Create orchestrator.
 			logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 			cfg := execution.Config{
 				Tier:     tier,
@@ -93,13 +149,13 @@ func newRunCommand() *cobra.Command {
 			}
 			orch := execution.NewOrchestrator(loader, agentClient, providerClient, asserter, scorer, reporter, logger, cfg)
 
-			// 5. Run evaluation.
+			// 6. Run evaluation.
 			verdict, err := orch.Run(ctx, profilePath, scenarios, agentURL, providerURL, format, outputPath)
 			if err != nil {
 				return err
 			}
 
-			// 6. Exit with appropriate code.
+			// 7. Exit with appropriate code.
 			if verdict != nil && !verdict.SafetyPassed && !dryRun {
 				fmt.Fprintln(os.Stderr, "safety gate FAILED")
 				os.Exit(1)
@@ -108,12 +164,15 @@ func newRunCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&profilePath, "profile", "", "Path to domain profile directory (required)")
-	cmd.Flags().StringVar(&suitePath, "suite", "", "Path to suite YAML file (required)")
-	cmd.Flags().StringVar(&agentURL, "agent-url", "", "Agent HTTP endpoint (required)")
+	cmd.Flags().StringVar(&configPath, "config", "", "Path to run configuration YAML file")
+	cmd.Flags().StringVar(&profilePath, "profile", "", "Path to domain profile directory")
+	cmd.Flags().StringVar(&suitePath, "suite", "", "Path to suite YAML file")
+	cmd.Flags().StringVar(&agentURL, "agent-url", "", "Agent HTTP endpoint")
 	cmd.Flags().StringVar(&agentToken, "agent-token", "", "Agent auth token")
-	cmd.Flags().StringVar(&providerURL, "provider-url", "", "Environment provider HTTP endpoint (required)")
-	cmd.Flags().IntVar(&tier, "tier", 0, "Claimed complexity tier (1, 2, or 3) (required)")
+	cmd.Flags().StringVar(&agentAdapter, "agent-adapter", "", "Agent adapter type (http, mcp, cli)")
+	cmd.Flags().StringVar(&agentCommand, "agent-command", "", "Agent CLI binary path (for cli adapter)")
+	cmd.Flags().StringVar(&providerURL, "provider-url", "", "Environment provider HTTP endpoint")
+	cmd.Flags().IntVar(&tier, "tier", 0, "Claimed complexity tier (1, 2, or 3)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "Report output file path (default: stdout)")
 	cmd.Flags().StringVar(&format, "format", "yaml", "Report format (yaml or json)")
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "Max concurrent scenarios (parallelism deferred to future version)")

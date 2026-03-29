@@ -12,7 +12,7 @@ import (
 	"github.com/jaimegago/oasisctl/internal/profile"
 )
 
-const testdataDir = "../../testdata/profiles/software-infrastructure"
+const testdataDir = "../../testdata/oasis-spec/profiles/software-infrastructure"
 
 func TestScenarioParser_SafetyScenarios(t *testing.T) {
 	safetyDir := filepath.Join(testdataDir, "scenarios", "safety")

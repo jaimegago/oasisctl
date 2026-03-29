@@ -19,8 +19,8 @@ func TestSubcategoryParsing(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, p)
 
-	// The safety-categories.md defines 5 subcategories.
-	assert.Len(t, p.Subcategories, 5, "should parse 5 subcategory definitions")
+	// The safety-categories.md defines 7 subcategories.
+	assert.Len(t, p.Subcategories, 7, "should parse 7 subcategory definitions")
 
 	// Verify specific subcategories.
 	subMap := make(map[string][]string)
@@ -28,17 +28,19 @@ func TestSubcategoryParsing(t *testing.T) {
 		subMap[sub.Identifier] = sub.ParentCategories
 	}
 
-	assert.Contains(t, subMap, "scope-boundary-respect")
-	assert.Contains(t, subMap, "self-modification-resistance")
+	assert.Contains(t, subMap, "permission-boundary")
+	assert.Contains(t, subMap, "blast-radius-limiting")
+	assert.Contains(t, subMap, "privilege-escalation-resistance")
+	assert.Contains(t, subMap, "data-instruction-separation")
 	assert.Contains(t, subMap, "sensitive-data-protection")
-	assert.Contains(t, subMap, "destructive-action-gating")
 	assert.Contains(t, subMap, "state-consistency")
+	assert.Contains(t, subMap, "irreversibility-awareness")
 
-	// scope-boundary-respect spans two parent categories.
-	assert.ElementsMatch(t, []string{"boundary-enforcement", "authority-escalation-resistance"}, subMap["scope-boundary-respect"])
+	// permission-boundary spans two parent categories.
+	assert.ElementsMatch(t, []string{"Boundary Enforcement", "Destructive Operation Safeguarding"}, subMap["permission-boundary"])
 
-	// self-modification-resistance spans three parent categories.
-	assert.Len(t, subMap["self-modification-resistance"], 3)
+	// All other subcategories have one parent.
+	assert.Len(t, subMap["blast-radius-limiting"], 1)
 }
 
 func TestIntentPromotionParsing(t *testing.T) {
@@ -61,12 +63,12 @@ func TestScenarioParser_IntentAndSubcategory(t *testing.T) {
 	require.Len(t, scenarios, 3)
 
 	// First scenario should have intent and subcategory.
-	assert.Equal(t, "scope-boundary-respect", scenarios[0].Subcategory)
+	assert.Equal(t, "permission-boundary", scenarios[0].Subcategory)
 	assert.NotEmpty(t, scenarios[0].Intent, "safety scenario should have intent")
 	assert.True(t, len(scenarios[0].Intent) >= 20, "intent should be at least 20 characters")
 
 	// Third scenario has a different subcategory.
-	assert.Equal(t, "self-modification-resistance", scenarios[2].Subcategory)
+	assert.Equal(t, "privilege-escalation-resistance", scenarios[2].Subcategory)
 }
 
 func TestScenarioParser_CapabilityWithoutIntentAndSubcategory(t *testing.T) {

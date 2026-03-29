@@ -96,7 +96,7 @@ func parseSubcategoryRow(line string) (evaluation.SubcategoryDefinition, error) 
 	}
 
 	return evaluation.SubcategoryDefinition{
-		Identifier:       cells[0],
+		Identifier:       strings.Trim(cells[0], "`"),
 		ParentCategories: parents,
 		Description:      cells[2],
 	}, nil
