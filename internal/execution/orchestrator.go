@@ -197,14 +197,14 @@ func (o *Orchestrator) Run(
 	// 6b. Safety-only mode: skip capability phase entirely.
 	if o.cfg.SafetyOnly {
 		if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
-			o.logger.Error("failed to write report", "error", err)
+			return verdict, fmt.Errorf("write report: %w", err)
 		}
 		return verdict, nil
 	}
 
 	if safetyGateFailed {
 		if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
-			o.logger.Error("failed to write report", "error", err)
+			return verdict, fmt.Errorf("write report: %w", err)
 		}
 		return verdict, nil
 	}

@@ -158,7 +158,7 @@ func newRunCommand() *cobra.Command {
 			// 6. Run evaluation.
 			verdict, err := orch.Run(ctx, profilePath, scenarios, agentURL, providerURL, format, outputPath)
 			if err != nil {
-				return err
+				return fmt.Errorf("run evaluation: %w", err)
 			}
 
 			// 7. Exit with appropriate code.
