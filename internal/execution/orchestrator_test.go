@@ -678,6 +678,163 @@ func TestOrchestrator_DryRunWithFilters(t *testing.T) {
 	assert.False(t, reporter.called)
 }
 
+// --- Scenario ID filter tests ---
+
+func TestOrchestrator_ScenarioIDFilter(t *testing.T) {
+	loader := &mockProfileLoader{profile: defaultProfile()}
+	agent := &mockAgentClient{response: defaultAgentResp()}
+	prov := &mockProvider{provisionResp: defaultProvision()}
+	asserter := &mockAsserter{results: []evaluation.AssertionResult{
+		{Status: evaluation.AssertionPass, Evidence: "ok"},
+	}}
+	scorer := &mockScorer{}
+	reporter := &mockReportWriter{}
+
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
+		Config{Tier: 1, ScenarioIDs: []string{"s.001"}})
+
+	scenarios := []evaluation.Scenario{
+		safetyScenario("s.001", 1),
+		safetyScenario("s.002", 1),
+		capabilityScenario("c.001", 1),
+	}
+
+	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	require.NoError(t, err)
+	require.NotNil(t, verdict)
+	assert.Len(t, verdict.SafetyResults, 1)
+	assert.Equal(t, "s.001", verdict.SafetyResults[0].ScenarioID)
+	assert.Empty(t, verdict.CapabilityResults)
+	assert.False(t, verdict.EvaluationMode.Complete)
+}
+
+func TestOrchestrator_ScenarioIDGlobFilter(t *testing.T) {
+	loader := &mockProfileLoader{profile: defaultProfile()}
+	agent := &mockAgentClient{response: defaultAgentResp()}
+	prov := &mockProvider{provisionResp: defaultProvision()}
+	asserter := &mockAsserter{results: []evaluation.AssertionResult{
+		{Status: evaluation.AssertionPass, Evidence: "ok"},
+	}}
+	scorer := &mockScorer{}
+	reporter := &mockReportWriter{}
+
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
+		Config{Tier: 1, ScenarioIDs: []string{"s.*"}})
+
+	scenarios := []evaluation.Scenario{
+		safetyScenario("s.001", 1),
+		safetyScenario("s.002", 1),
+		capabilityScenario("c.001", 1),
+	}
+
+	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	require.NoError(t, err)
+	require.NotNil(t, verdict)
+	assert.Len(t, verdict.SafetyResults, 2)
+	assert.Empty(t, verdict.CapabilityResults)
+	assert.False(t, verdict.EvaluationMode.Complete)
+}
+
+func TestMatchesAnyPattern(t *testing.T) {
+	tests := []struct {
+		name     string
+		id       string
+		patterns []string
+		expected bool
+	}{
+		{
+			name:     "exact match",
+			id:       "s.001",
+			patterns: []string{"s.001"},
+			expected: true,
+		},
+		{
+			name:     "glob star match",
+			id:       "s.001",
+			patterns: []string{"s.*"},
+			expected: true,
+		},
+		{
+			name:     "no match",
+			id:       "c.001",
+			patterns: []string{"s.*"},
+			expected: false,
+		},
+		{
+			name:     "multiple patterns, one matches",
+			id:       "c.001",
+			patterns: []string{"s.*", "c.*"},
+			expected: true,
+		},
+		{
+			name:     "multiple patterns, none match",
+			id:       "x.001",
+			patterns: []string{"s.*", "c.*"},
+			expected: false,
+		},
+		{
+			name:     "question mark glob",
+			id:       "s.001",
+			patterns: []string{"s.00?"},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, matchesAnyPattern(tt.id, tt.patterns))
+		})
+	}
+}
+
+// --- Parallel execution tests ---
+
+func TestOrchestrator_ParallelExecution(t *testing.T) {
+	loader := &mockProfileLoader{profile: defaultProfile()}
+	agent := &mockAgentClient{response: defaultAgentResp()}
+	prov := &mockProvider{provisionResp: defaultProvision()}
+	asserter := &mockAsserter{results: []evaluation.AssertionResult{
+		{Status: evaluation.AssertionPass, Evidence: "ok"},
+	}}
+	scorer := &mockScorer{}
+	reporter := &mockReportWriter{}
+
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
+		Config{Tier: 1, Parallel: 3})
+
+	scenarios := []evaluation.Scenario{
+		safetyScenario("s.001", 1),
+		safetyScenario("s.002", 1),
+		safetyScenario("s.003", 1),
+		capabilityScenario("c.001", 1),
+		capabilityScenario("c.002", 1),
+	}
+
+	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	require.NoError(t, err)
+	require.NotNil(t, verdict)
+	assert.True(t, verdict.SafetyPassed)
+	assert.Len(t, verdict.SafetyResults, 3)
+	assert.Len(t, verdict.CapabilityResults, 2)
+
+	// Verify all scenario IDs are present in results.
+	safetyIDs := make(map[string]bool)
+	for _, r := range verdict.SafetyResults {
+		safetyIDs[r.ScenarioID] = true
+	}
+	assert.True(t, safetyIDs["s.001"])
+	assert.True(t, safetyIDs["s.002"])
+	assert.True(t, safetyIDs["s.003"])
+
+	capIDs := make(map[string]bool)
+	for _, r := range verdict.CapabilityResults {
+		capIDs[r.ScenarioID] = true
+	}
+	assert.True(t, capIDs["c.001"])
+	assert.True(t, capIDs["c.002"])
+	assert.True(t, reporter.called)
+}
+
 func TestOrchestrator_ReportLabeling(t *testing.T) {
 	tests := []struct {
 		name         string

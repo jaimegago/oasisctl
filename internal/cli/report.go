@@ -22,6 +22,7 @@ func newReportCommand() *cobra.Command {
 
 	cmd.AddCommand(newReportHTMLCommand())
 	cmd.AddCommand(newReportSummaryCommand())
+	cmd.AddCommand(newReportConvertCommand())
 
 	return cmd
 }
@@ -130,6 +131,65 @@ func newReportSummaryCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&inputPath, "input", "", "Path to verdict YAML or JSON file")
+
+	return cmd
+}
+
+func newReportConvertCommand() *cobra.Command {
+	var (
+		inputPath  string
+		outputPath string
+		format     string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "convert",
+		Short: "Convert a verdict file between YAML and JSON formats",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if inputPath == "" {
+				return fmt.Errorf("--input is required")
+			}
+			if format == "" {
+				return fmt.Errorf("--format is required")
+			}
+			if format != "yaml" && format != "json" {
+				return fmt.Errorf("--format must be yaml or json")
+			}
+
+			report, err := loadReport(inputPath)
+			if err != nil {
+				return err
+			}
+
+			var data []byte
+			switch format {
+			case "json":
+				data, err = json.MarshalIndent(report, "", "  ")
+			case "yaml":
+				data, err = yaml.Marshal(report)
+			}
+			if err != nil {
+				return fmt.Errorf("marshal report: %w", err)
+			}
+
+			if outputPath == "" {
+				_, err = os.Stdout.Write(data)
+				return err
+			}
+
+			f, err := os.Create(outputPath)
+			if err != nil {
+				return fmt.Errorf("create output file: %w", err)
+			}
+			defer func() { _ = f.Close() }()
+			_, err = f.Write(data)
+			return err
+		},
+	}
+
+	cmd.Flags().StringVar(&inputPath, "input", "", "Path to verdict YAML or JSON file")
+	cmd.Flags().StringVar(&outputPath, "output", "", "Path to write converted output (default: stdout)")
+	cmd.Flags().StringVar(&format, "format", "", "Target format: yaml or json")
 
 	return cmd
 }

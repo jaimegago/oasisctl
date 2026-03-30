@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	"github.com/jaimegago/oasisctl/internal/agent"
 	"github.com/jaimegago/oasisctl/internal/evaluation"
@@ -39,6 +40,7 @@ func newRunCommand() *cobra.Command {
 		safetyOnly    bool
 		categories    []string
 		subcategories []string
+		scenarioIDs   []string
 		openBrowser   bool
 	)
 
@@ -86,6 +88,9 @@ func newRunCommand() *cobra.Command {
 				if !cmd.Flags().Changed("timeout") && rc.Evaluation.Timeout != "" {
 					timeout = rc.Evaluation.Timeout
 				}
+				if !cmd.Flags().Changed("scenario") && len(rc.Evaluation.Scenarios) > 0 {
+					scenarioIDs = rc.Evaluation.Scenarios
+				}
 			}
 
 			// 2. Validate required values.
@@ -126,6 +131,18 @@ func newRunCommand() *cobra.Command {
 				return fmt.Errorf("load scenarios: %w", err)
 			}
 
+			// 4b2. If --suite is provided, filter and order scenarios by suite definition.
+			if suitePath != "" {
+				suite, serr := loadSuite(suitePath)
+				if serr != nil {
+					return fmt.Errorf("load suite: %w", serr)
+				}
+				scenarios, serr = filterBySuite(suite, scenarios)
+				if serr != nil {
+					return serr
+				}
+			}
+
 			// 4c. Create agent client via adapter factory.
 			agentCfg := agent.AgentConfig{
 				Adapter: agentAdapter,
@@ -155,6 +172,7 @@ func newRunCommand() *cobra.Command {
 				SafetyOnly:    safetyOnly,
 				Categories:    categories,
 				Subcategories: subcategories,
+				ScenarioIDs:   scenarioIDs,
 			}
 			orch := execution.NewOrchestrator(loader, agentClient, providerClient, asserter, scorer, reporter, logger, cfg)
 
@@ -191,13 +209,14 @@ func newRunCommand() *cobra.Command {
 	cmd.Flags().IntVar(&tier, "tier", 0, "Claimed complexity tier (1, 2, or 3)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "Report output file path (default: stdout)")
 	cmd.Flags().StringVar(&format, "format", "yaml", "Report format: yaml, json, or html")
-	cmd.Flags().IntVar(&parallel, "parallel", 1, "Max concurrent scenarios (parallelism deferred to future version)")
+	cmd.Flags().IntVar(&parallel, "parallel", 1, "Max concurrent scenarios")
 	cmd.Flags().StringVar(&timeout, "timeout", "5m", "Per-scenario timeout")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate inputs without executing")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "Verbose execution output")
 	cmd.Flags().BoolVar(&safetyOnly, "safety-only", false, "Run only safety scenarios, skip capability")
 	cmd.Flags().StringSliceVar(&categories, "category", nil, "Filter scenarios by category (repeatable)")
 	cmd.Flags().StringSliceVar(&subcategories, "subcategory", nil, "Filter scenarios by subcategory (repeatable)")
+	cmd.Flags().StringSliceVar(&scenarioIDs, "scenario", nil, "Filter scenarios by ID glob pattern (repeatable)")
 	cmd.Flags().BoolVar(&openBrowser, "open", false, "Open HTML report in default browser")
 
 	return cmd
@@ -214,6 +233,40 @@ func openInBrowser(path string) {
 		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
 	}
 	_ = cmd.Start()
+}
+
+// loadSuite reads and parses a suite YAML file.
+func loadSuite(path string) (*evaluation.Suite, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read suite file: %w", err)
+	}
+	var suite evaluation.Suite
+	if err := yaml.Unmarshal(data, &suite); err != nil {
+		return nil, fmt.Errorf("parse suite file: %w", err)
+	}
+	if len(suite.Scenarios) == 0 {
+		return nil, fmt.Errorf("suite file contains no scenarios")
+	}
+	return &suite, nil
+}
+
+// filterBySuite returns scenarios ordered by suite definition, validating all IDs exist.
+func filterBySuite(suite *evaluation.Suite, scenarios []evaluation.Scenario) ([]evaluation.Scenario, error) {
+	byID := make(map[string]evaluation.Scenario, len(scenarios))
+	for _, s := range scenarios {
+		byID[s.ID] = s
+	}
+
+	var ordered []evaluation.Scenario
+	for _, id := range suite.Scenarios {
+		s, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("suite references scenario %q which does not exist in the profile", id)
+		}
+		ordered = append(ordered, s)
+	}
+	return ordered, nil
 }
 
 // loadAllScenarios loads all safety and capability scenarios from the profile directory.

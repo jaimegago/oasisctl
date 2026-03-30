@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/jaimegago/oasisctl/internal/evaluation"
@@ -12,13 +14,14 @@ import (
 // Config controls orchestrator behaviour.
 type Config struct {
 	Tier          int
-	Parallel      int // reserved — currently always 1
+	Parallel      int
 	Timeout       time.Duration
 	DryRun        bool
 	Verbose       bool
 	SafetyOnly    bool
 	Categories    []string
 	Subcategories []string
+	ScenarioIDs   []string // glob patterns to filter by scenario ID
 }
 
 // Orchestrator runs the full OASIS evaluation loop.
@@ -182,11 +185,10 @@ func (o *Orchestrator) Run(
 	}
 
 	// 5. Phase 1 — Safety gate.
+	verdict.SafetyResults = o.runScenariosParallel(ctx, safetyScenarios, profile, evaluation.ClassificationSafety)
 	safetyGateFailed := false
-	for _, s := range safetyScenarios {
-		result := o.runScenario(ctx, s, profile, evaluation.ClassificationSafety)
-		verdict.SafetyResults = append(verdict.SafetyResults, result)
-		if !result.Passed {
+	for _, r := range verdict.SafetyResults {
+		if !r.Passed {
 			safetyGateFailed = true
 		}
 	}
@@ -210,10 +212,7 @@ func (o *Orchestrator) Run(
 	}
 
 	// 7. Phase 2 — Capability scoring.
-	for _, s := range capabilityScenarios {
-		result := o.runScenario(ctx, s, profile, evaluation.ClassificationCapability)
-		verdict.CapabilityResults = append(verdict.CapabilityResults, result)
-	}
+	verdict.CapabilityResults = o.runScenariosParallel(ctx, capabilityScenarios, profile, evaluation.ClassificationCapability)
 
 	// 8. Aggregate scores.
 	archetypeScores := AggregateArchetype(verdict.CapabilityResults, capabilityScenarios)
@@ -239,6 +238,45 @@ func (o *Orchestrator) Run(
 	}
 
 	return verdict, nil
+}
+
+// runScenariosParallel runs scenarios with up to cfg.Parallel concurrent workers.
+// Results are returned in the same order as the input scenarios.
+func (o *Orchestrator) runScenariosParallel(
+	ctx context.Context,
+	scenarios []evaluation.Scenario,
+	profile *evaluation.Profile,
+	classification evaluation.Classification,
+) []evaluation.ScenarioResult {
+	if len(scenarios) == 0 {
+		return nil
+	}
+
+	results := make([]evaluation.ScenarioResult, len(scenarios))
+	workers := o.cfg.Parallel
+	if workers <= 1 {
+		// Sequential fallback.
+		for i, s := range scenarios {
+			results[i] = o.runScenario(ctx, s, profile, classification)
+		}
+		return results
+	}
+
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+
+	for i, s := range scenarios {
+		wg.Add(1)
+		go func(idx int, sc evaluation.Scenario) {
+			defer wg.Done()
+			sem <- struct{}{}        // acquire
+			defer func() { <-sem }() // release
+			results[idx] = o.runScenario(ctx, sc, profile, classification)
+		}(i, s)
+	}
+
+	wg.Wait()
+	return results
 }
 
 // runScenario executes a single scenario and returns its result.
@@ -383,8 +421,19 @@ func buildAgentRequest(s evaluation.Scenario) evaluation.AgentRequest {
 	return req
 }
 
-// applyFilters filters scenarios by safety-only, category, and subcategory flags.
+// applyFilters filters scenarios by scenario ID, safety-only, category, and subcategory flags.
 func (o *Orchestrator) applyFilters(scenarios []evaluation.Scenario) []evaluation.Scenario {
+	// Scenario ID filter (glob patterns).
+	if len(o.cfg.ScenarioIDs) > 0 {
+		var out []evaluation.Scenario
+		for _, s := range scenarios {
+			if matchesAnyPattern(s.ID, o.cfg.ScenarioIDs) {
+				out = append(out, s)
+			}
+		}
+		scenarios = out
+	}
+
 	// Safety-only: drop capability scenarios.
 	if o.cfg.SafetyOnly {
 		var out []evaluation.Scenario
@@ -433,7 +482,7 @@ func (o *Orchestrator) buildEvaluationMode() evaluation.EvaluationMode {
 		Categories:    o.cfg.Categories,
 		Subcategories: o.cfg.Subcategories,
 	}
-	mode.Complete = !o.cfg.SafetyOnly && len(o.cfg.Categories) == 0 && len(o.cfg.Subcategories) == 0
+	mode.Complete = !o.cfg.SafetyOnly && len(o.cfg.Categories) == 0 && len(o.cfg.Subcategories) == 0 && len(o.cfg.ScenarioIDs) == 0
 	return mode
 }
 
@@ -443,6 +492,20 @@ func toSet(items []string) map[string]struct{} {
 		m[item] = struct{}{}
 	}
 	return m
+}
+
+// matchesAnyPattern checks if id matches any of the given glob patterns.
+func matchesAnyPattern(id string, patterns []string) bool {
+	for _, p := range patterns {
+		if matched, _ := filepath.Match(p, id); matched {
+			return true
+		}
+		// Also support exact match.
+		if p == id {
+			return true
+		}
+	}
+	return false
 }
 
 // errorResult builds a failed ScenarioResult from a plain error string.
