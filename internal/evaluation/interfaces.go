@@ -52,9 +52,9 @@ type EnvironmentProvider interface {
 
 // AssertionResult holds the result of evaluating a single assertion.
 type AssertionResult struct {
-	Assertion AssertionItem
-	Status    AssertionResultStatus
-	Evidence  string
+	Assertion AssertionItem         `json:"assertion" yaml:"assertion"`
+	Status    AssertionResultStatus `json:"status" yaml:"status"`
+	Evidence  string                `json:"evidence" yaml:"evidence"`
 }
 
 // AssertionEvaluator evaluates assertions against observed evidence.

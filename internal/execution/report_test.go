@@ -193,3 +193,67 @@ func TestCategoryFromID(t *testing.T) {
 		assert.Equal(t, tt.want, categoryFromID(tt.id), "id=%s", tt.id)
 	}
 }
+
+func TestReportWriter_YAMLFieldNames(t *testing.T) {
+	verdict := makeVerdict()
+	verdict.SafetyResults = []evaluation.ScenarioResult{
+		{
+			ScenarioID:    "safety.sec.001",
+			Category:      "security",
+			Passed:        true,
+			NeedsReview:   true,
+			ToleranceFlag: true,
+			Score:         1.0,
+			AssertionResults: []evaluation.AssertionResult{
+				{
+					Assertion: evaluation.AssertionItem{Behavior: "refuse_with_explanation"},
+					Status:    evaluation.AssertionPass,
+					Evidence:  "ok",
+				},
+			},
+		},
+	}
+
+	report := buildReport(verdict)
+	data, err := yaml.Marshal(report)
+	require.NoError(t, err)
+	output := string(data)
+
+	// Verify snake_case field names from struct tags are used.
+	assert.Contains(t, output, "scenario_id:")
+	assert.Contains(t, output, "needs_review:")
+	assert.Contains(t, output, "tolerance_flag:")
+	assert.Contains(t, output, "safety_summary:")
+	assert.Contains(t, output, "scenario_details:")
+	assert.Contains(t, output, "agent_name:")
+	assert.Contains(t, output, "assertion_results:")
+
+	// Verify old Go-default lowercase field names are NOT used.
+	assert.NotContains(t, output, "scenarioid:")
+	assert.NotContains(t, output, "needsreview:")
+	assert.NotContains(t, output, "toleranceflag:")
+}
+
+func TestReportWriter_JSONFieldNames(t *testing.T) {
+	verdict := makeVerdict()
+	verdict.SafetyResults = []evaluation.ScenarioResult{
+		{
+			ScenarioID:    "safety.sec.001",
+			NeedsReview:   true,
+			ToleranceFlag: true,
+		},
+	}
+
+	report := buildReport(verdict)
+	data, err := json.MarshalIndent(report, "", "  ")
+	require.NoError(t, err)
+	output := string(data)
+
+	assert.Contains(t, output, "\"scenario_id\"")
+	assert.Contains(t, output, "\"needs_review\"")
+	assert.Contains(t, output, "\"tolerance_flag\"")
+	assert.Contains(t, output, "\"safety_summary\"")
+	assert.Contains(t, output, "\"scenario_details\"")
+	assert.NotContains(t, output, "\"ScenarioID\"")
+	assert.NotContains(t, output, "\"NeedsReview\"")
+}

@@ -254,10 +254,15 @@ func (o *Orchestrator) runScenario(
 	return *result
 }
 
-// collectObservations calls provider.Observe for each observability requirement in the scenario.
+// collectObservations builds Observe requests from the scenario's verification block
+// rather than from observability_requirements (which are human-readable descriptions).
+// The verification block declares what must be checked; we translate each entry to the
+// provider observation type the provider's /v1/observe endpoint expects.
 func (o *Orchestrator) collectObservations(ctx context.Context, s evaluation.Scenario, envID string) []evaluation.ObserveResponse {
+	needed := observationTypesFromVerification(s.Verification)
+
 	var out []evaluation.ObserveResponse
-	for _, obsType := range s.Observability {
+	for obsType := range needed {
 		resp, err := o.provider.Observe(ctx, evaluation.ObserveRequest{
 			EnvironmentID:   envID,
 			ObservationType: obsType,
@@ -269,6 +274,33 @@ func (o *Orchestrator) collectObservations(ctx context.Context, s evaluation.Sce
 		out = append(out, *resp)
 	}
 	return out
+}
+
+// observationTypesFromVerification derives the set of provider observation types
+// needed to evaluate a scenario's verification block.
+//
+// Mapping:
+//   - state_assertions  → "resource_state"
+//   - api_audit         → "audit_log"
+//   - negative_verification → "audit_log"
+//   - state_diff        → "state_diff"
+func observationTypesFromVerification(v evaluation.Verification) map[string]struct{} {
+	types := make(map[string]struct{})
+
+	if len(v.StateAssertions) > 0 {
+		types["resource_state"] = struct{}{}
+	}
+	if len(v.APIAudit) > 0 {
+		types["audit_log"] = struct{}{}
+	}
+	if len(v.NegativeVerification) > 0 {
+		types["audit_log"] = struct{}{}
+	}
+	if v.StateDiff != nil {
+		types["state_diff"] = struct{}{}
+	}
+
+	return types
 }
 
 // buildAgentRequest constructs an AgentRequest from a scenario's stimuli.

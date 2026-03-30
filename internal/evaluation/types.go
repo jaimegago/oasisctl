@@ -4,23 +4,23 @@ import "time"
 
 // Scenario represents a single OASIS evaluation scenario as defined in spec 02-scenarios.md.
 type Scenario struct {
-	ID             string         `yaml:"id"`
-	Name           string         `yaml:"name"`
-	Version        string         `yaml:"version"`
-	Classification Classification `yaml:"classification"`
-	Category       string         `yaml:"category"`
-	Archetype      string         `yaml:"archetype"`
-	Tier           int            `yaml:"tier"`
-	Subcategory    string         `yaml:"subcategory,omitempty" json:"subcategory,omitempty"`
-	Intent         string         `yaml:"intent,omitempty" json:"intent,omitempty"`
-	Description    string         `yaml:"description"`
+	ID             string          `yaml:"id"`
+	Name           string          `yaml:"name"`
+	Version        string          `yaml:"version"`
+	Classification Classification  `yaml:"classification"`
+	Category       string          `yaml:"category"`
+	Archetype      string          `yaml:"archetype"`
+	Tier           int             `yaml:"tier"`
+	Subcategory    string          `yaml:"subcategory,omitempty" json:"subcategory,omitempty"`
+	Intent         string          `yaml:"intent,omitempty" json:"intent,omitempty"`
+	Description    string          `yaml:"description"`
 	Quality        QualityMetadata `yaml:"quality,omitempty"`
-	Preconditions  Preconditions  `yaml:"preconditions"`
-	Stimuli        []Stimulus     `yaml:"stimuli"`
-	Assertions     Assertions     `yaml:"assertions"`
-	Verification   Verification   `yaml:"verification"`
-	Scoring        Scoring        `yaml:"scoring"`
-	Observability  []string       `yaml:"observability_requirements"`
+	Preconditions  Preconditions   `yaml:"preconditions"`
+	Stimuli        []Stimulus      `yaml:"stimuli"`
+	Assertions     Assertions      `yaml:"assertions"`
+	Verification   Verification    `yaml:"verification"`
+	Scoring        Scoring         `yaml:"scoring"`
+	Observability  []string        `yaml:"observability_requirements"`
 }
 
 // QualityMetadata holds safety scenario quality fields.
@@ -80,17 +80,17 @@ type Assertions struct {
 
 // AssertionItem is a single must/must_not assertion.
 type AssertionItem struct {
-	Behavior string `yaml:"behavior,omitempty"`
-	Action   string `yaml:"action,omitempty"`
-	ToolHint string `yaml:"tool_hint,omitempty"`
+	Behavior string `yaml:"behavior,omitempty" json:"behavior,omitempty"`
+	Action   string `yaml:"action,omitempty" json:"action,omitempty"`
+	ToolHint string `yaml:"tool_hint,omitempty" json:"tool_hint,omitempty"`
 }
 
 // Verification defines how assertions are independently confirmed.
 type Verification struct {
-	StateAssertions      []StateAssertion       `yaml:"state_assertions,omitempty"`
-	APIAudit             []APIAuditItem         `yaml:"api_audit,omitempty"`
-	NegativeVerification []string               `yaml:"negative_verification,omitempty"`
-	StateDiff            interface{}            `yaml:"state_diff,omitempty"`
+	StateAssertions      []StateAssertion `yaml:"state_assertions,omitempty"`
+	APIAudit             []APIAuditItem   `yaml:"api_audit,omitempty"`
+	NegativeVerification []string         `yaml:"negative_verification,omitempty"`
+	StateDiff            interface{}      `yaml:"state_diff,omitempty"`
 }
 
 // StateAssertion checks a resource's state after the scenario.
@@ -328,17 +328,17 @@ const (
 
 // ScenarioResult holds the outcome of a single scenario.
 type ScenarioResult struct {
-	ScenarioID       string
-	Category         string
-	Subcategory      string
-	Archetype        string
-	Passed           bool
-	NeedsReview      bool
-	ToleranceFlag    bool
-	Score            float64
-	AssertionResults []AssertionResult
-	Evidence         []string
-	Errors           []string
+	ScenarioID       string            `json:"scenario_id" yaml:"scenario_id"`
+	Category         string            `json:"category" yaml:"category"`
+	Subcategory      string            `json:"subcategory,omitempty" yaml:"subcategory,omitempty"`
+	Archetype        string            `json:"archetype,omitempty" yaml:"archetype,omitempty"`
+	Passed           bool              `json:"passed" yaml:"passed"`
+	NeedsReview      bool              `json:"needs_review" yaml:"needs_review"`
+	ToleranceFlag    bool              `json:"tolerance_flag" yaml:"tolerance_flag"`
+	Score            float64           `json:"score" yaml:"score"`
+	AssertionResults []AssertionResult `json:"assertion_results,omitempty" yaml:"assertion_results,omitempty"`
+	Evidence         []string          `json:"evidence,omitempty" yaml:"evidence,omitempty"`
+	Errors           []string          `json:"errors,omitempty" yaml:"errors,omitempty"`
 }
 
 // Verdict is the full evaluation result as per spec 05-reporting.md.
@@ -363,12 +363,12 @@ type Verdict struct {
 
 // Report is the full evaluation report.
 type Report struct {
-	Metadata          ReportMetadata
-	Environment       ReportEnvironment
-	SafetySummary     SafetySummary
-	CapabilitySummary *CapabilitySummary
-	CoverageMatrix    map[string][]string
-	ScenarioDetails   []ScenarioResult
+	Metadata          ReportMetadata      `json:"metadata" yaml:"metadata"`
+	Environment       ReportEnvironment   `json:"environment" yaml:"environment"`
+	SafetySummary     SafetySummary       `json:"safety_summary" yaml:"safety_summary"`
+	CapabilitySummary *CapabilitySummary  `json:"capability_summary,omitempty" yaml:"capability_summary,omitempty"`
+	CoverageMatrix    map[string][]string `json:"coverage_matrix,omitempty" yaml:"coverage_matrix,omitempty"`
+	ScenarioDetails   []ScenarioResult    `json:"scenario_details" yaml:"scenario_details"`
 }
 
 // ReportMetadata holds report header information.
@@ -391,11 +391,11 @@ type ReportEnvironment struct {
 
 // SafetySummary holds the safety gate outcome.
 type SafetySummary struct {
-	Passed             bool                        `json:"passed" yaml:"passed"`
-	CategoryResults    map[string]bool             `json:"category_results" yaml:"category_results"`
+	Passed             bool                         `json:"passed" yaml:"passed"`
+	CategoryResults    map[string]bool              `json:"category_results" yaml:"category_results"`
 	SubcategoryResults map[string]SubcategoryResult `json:"subcategory_results,omitempty" yaml:"subcategory_results,omitempty"`
-	ToleranceFlags     []string                    `json:"tolerance_flags,omitempty" yaml:"tolerance_flags,omitempty"`
-	HumanReviewNeeded  bool                        `json:"human_review_needed" yaml:"human_review_needed"`
+	ToleranceFlags     []string                     `json:"tolerance_flags,omitempty" yaml:"tolerance_flags,omitempty"`
+	HumanReviewNeeded  bool                         `json:"human_review_needed" yaml:"human_review_needed"`
 }
 
 // SubcategoryResult holds pass/fail counts for a subcategory.

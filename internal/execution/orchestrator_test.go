@@ -32,13 +32,15 @@ func (m *mockAgentClient) Execute(_ context.Context, _ evaluation.AgentRequest) 
 }
 
 type mockProvider struct {
-	provisionResp    *evaluation.ProvisionResponse
-	provisionErr     error
-	snapshotErr      error
-	teardownErr      error
-	injectErr        error
-	observeResp      *evaluation.ObserveResponse
-	observeErr       error
+	provisionResp   *evaluation.ProvisionResponse
+	provisionErr    error
+	snapshotErr     error
+	teardownErr     error
+	injectErr       error
+	observeResp     *evaluation.ObserveResponse
+	observeErr      error
+	observeByType   map[string]*evaluation.ObserveResponse
+	observeRequests []evaluation.ObserveRequest
 }
 
 func (m *mockProvider) Provision(_ context.Context, _ evaluation.ProvisionRequest) (*evaluation.ProvisionResponse, error) {
@@ -60,7 +62,13 @@ func (m *mockProvider) InjectState(_ context.Context, _ evaluation.InjectStateRe
 	return m.injectErr
 }
 
-func (m *mockProvider) Observe(_ context.Context, _ evaluation.ObserveRequest) (*evaluation.ObserveResponse, error) {
+func (m *mockProvider) Observe(_ context.Context, req evaluation.ObserveRequest) (*evaluation.ObserveResponse, error) {
+	m.observeRequests = append(m.observeRequests, req)
+	if m.observeByType != nil {
+		if resp, ok := m.observeByType[req.ObservationType]; ok {
+			return resp, nil
+		}
+	}
 	return m.observeResp, m.observeErr
 }
 
@@ -244,8 +252,8 @@ func TestOrchestrator_TierFiltering(t *testing.T) {
 	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 1})
 
 	scenarios := []evaluation.Scenario{
-		safetyScenario("s.001", 1), // included
-		safetyScenario("s.002", 2), // excluded (tier 2 > tier 1)
+		safetyScenario("s.001", 1),     // included
+		safetyScenario("s.002", 2),     // excluded (tier 2 > tier 1)
 		capabilityScenario("c.001", 1), // included
 		capabilityScenario("c.002", 3), // excluded
 	}
@@ -323,7 +331,7 @@ func TestOrchestrator_DefaultTimeout(t *testing.T) {
 
 func TestOrchestrator_CapabilityScoreAggregation(t *testing.T) {
 	profile := &evaluation.Profile{
-		Metadata: evaluation.ProfileMetadata{Name: "test"},
+		Metadata:            evaluation.ProfileMetadata{Name: "test"},
 		BehaviorDefinitions: map[string]evaluation.BehaviorDefinition{},
 		CapabilityCategories: []evaluation.Category{
 			{ID: "ops", Archetypes: []string{"deploy"}},
@@ -360,4 +368,112 @@ func TestOrchestrator_CapabilityScoreAggregation(t *testing.T) {
 	assert.InDelta(t, 0.9, verdict.CategoryScores["ops"], 0.001)
 	assert.InDelta(t, 0.9, verdict.DimensionScores["operational"], 0.001)
 	assert.InDelta(t, 0.9, verdict.CapabilityScore, 0.001)
+}
+
+func TestObservationTypesFromVerification(t *testing.T) {
+	tests := []struct {
+		name     string
+		v        evaluation.Verification
+		expected map[string]struct{}
+	}{
+		{
+			name:     "empty verification produces no types",
+			v:        evaluation.Verification{},
+			expected: map[string]struct{}{},
+		},
+		{
+			name: "state_assertions produces resource_state",
+			v: evaluation.Verification{
+				StateAssertions: []evaluation.StateAssertion{{Resource: "deployment/nginx", Condition: "exists"}},
+			},
+			expected: map[string]struct{}{"resource_state": {}},
+		},
+		{
+			name: "api_audit produces audit_log",
+			v: evaluation.Verification{
+				APIAudit: []evaluation.APIAuditItem{{Forbidden: "delete deployment/*"}},
+			},
+			expected: map[string]struct{}{"audit_log": {}},
+		},
+		{
+			name: "negative_verification produces audit_log",
+			v: evaluation.Verification{
+				NegativeVerification: []string{"no deletions"},
+			},
+			expected: map[string]struct{}{"audit_log": {}},
+		},
+		{
+			name: "state_diff produces state_diff",
+			v: evaluation.Verification{
+				StateDiff: map[string]interface{}{"before": "a"},
+			},
+			expected: map[string]struct{}{"state_diff": {}},
+		},
+		{
+			name: "combined verification deduplicates audit_log",
+			v: evaluation.Verification{
+				StateAssertions:      []evaluation.StateAssertion{{Resource: "pod/x"}},
+				APIAudit:             []evaluation.APIAuditItem{{Required: "get pods"}},
+				NegativeVerification: []string{"no deletes"},
+				StateDiff:            "present",
+			},
+			expected: map[string]struct{}{
+				"resource_state": {},
+				"audit_log":      {},
+				"state_diff":     {},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := observationTypesFromVerification(tt.v)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestOrchestrator_CollectObservationsFromVerification(t *testing.T) {
+	loader := &mockProfileLoader{profile: defaultProfile()}
+	agent := &mockAgentClient{response: defaultAgentResp()}
+	prov := &mockProvider{
+		provisionResp: defaultProvision(),
+		observeByType: map[string]*evaluation.ObserveResponse{
+			"audit_log":      {ObservationType: "audit_log", Data: &evaluation.AuditLogData{}},
+			"resource_state": {ObservationType: "resource_state"},
+		},
+	}
+	asserter := &mockAsserter{results: []evaluation.AssertionResult{{Status: evaluation.AssertionPass}}}
+	scorer := &mockScorer{}
+	reporter := &mockReportWriter{}
+
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 1})
+
+	scenarios := []evaluation.Scenario{
+		{
+			ID:             "s.001",
+			Classification: evaluation.ClassificationSafety,
+			Tier:           1,
+			Verification: evaluation.Verification{
+				APIAudit:        []evaluation.APIAuditItem{{Forbidden: "delete"}},
+				StateAssertions: []evaluation.StateAssertion{{Resource: "deploy/x"}},
+			},
+			// observability_requirements are intentionally human-readable —
+			// the orchestrator should ignore them and use verification block.
+			Observability: []string{"agent reasoning trace", "container orchestration API audit log"},
+		},
+	}
+
+	_, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	require.NoError(t, err)
+
+	// Verify that Observe was called with provider types, not human-readable strings.
+	var requestedTypes []string
+	for _, req := range prov.observeRequests {
+		requestedTypes = append(requestedTypes, req.ObservationType)
+	}
+	assert.Contains(t, requestedTypes, "audit_log")
+	assert.Contains(t, requestedTypes, "resource_state")
+	assert.NotContains(t, requestedTypes, "agent reasoning trace")
+	assert.NotContains(t, requestedTypes, "container orchestration API audit log")
 }
