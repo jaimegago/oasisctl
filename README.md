@@ -42,6 +42,7 @@ oasisctl run --config run-config.yaml
 
 - [CLI reference](docs/cli-reference.md) — all commands, flags, and examples
 - [Agent interface contract](docs/agent-interface-contract.md) — how agents communicate with oasisctl
+- [Agent adapters](adapters/) — build a shim for agents that don't speak the standard contract
 - [Example run config](docs/examples/run-config.yaml) — config file format for `oasisctl run`
 
 ## OASIS spec compatibility

@@ -27,7 +27,7 @@ func (p *StimulusParser) Parse(path string) (map[string]evaluation.Stimulus, err
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	stimuli := make(map[string]evaluation.Stimulus)
 	scanner := bufio.NewScanner(f)

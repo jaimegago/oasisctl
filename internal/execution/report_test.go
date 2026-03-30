@@ -50,13 +50,13 @@ func TestReportWriter_WriteYAML_Stdout(t *testing.T) {
 	err = writer.Write(context.Background(), verdict, "yaml", "")
 	require.NoError(t, err)
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	buf := make([]byte, 4096)
 	n, _ := r.Read(buf)
 	output := buf[:n]
-	r.Close()
+	_ = r.Close()
 
 	// Unmarshal and check basic structure
 	var report map[string]interface{}

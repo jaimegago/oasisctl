@@ -71,8 +71,8 @@ func ComputeCoverage(scenarios []evaluation.Scenario) CoverageReport {
 type IntentCoverageReport struct {
 	Total              int
 	WithIntent         int
-	MissingRequired    []string // scenario IDs missing intent where required
-	MissingRecommended []string // scenario IDs missing intent where recommended
+	MissingRequired    []string            // scenario IDs missing intent where required
+	MissingRecommended []string            // scenario IDs missing intent where recommended
 	DuplicateIntents   map[string][]string // intent text -> list of scenario IDs
 }
 
@@ -118,7 +118,7 @@ func ComputeIntentCoverage(scenarios []evaluation.Scenario, config evaluation.In
 
 // SubcategoryDistribution describes how scenarios map to subcategories.
 type SubcategoryDistribution struct {
-	PerSubcategory     map[string]int // subcategory identifier -> scenario count
+	PerSubcategory      map[string]int // subcategory identifier -> scenario count
 	UnusedSubcategories []string       // defined but zero scenarios
 	Unassigned          []string       // scenario IDs without subcategory where one exists for their category
 }

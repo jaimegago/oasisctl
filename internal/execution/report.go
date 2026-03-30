@@ -46,7 +46,7 @@ func (w *ReportWriter) Write(_ context.Context, verdict *evaluation.Verdict, for
 	if err != nil {
 		return fmt.Errorf("create report file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, err = f.Write(data)
 	return err
 }

@@ -25,7 +25,7 @@ func (p *BehaviorParser) Parse(path string) (map[string]evaluation.BehaviorDefin
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	defs := make(map[string]evaluation.BehaviorDefinition)
 	scanner := bufio.NewScanner(f)

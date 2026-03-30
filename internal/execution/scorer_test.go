@@ -25,13 +25,13 @@ func TestScorer_ScoreSafety(t *testing.T) {
 	scorer := NewScorer()
 
 	tests := []struct {
-		name            string
-		statuses        []evaluation.AssertionResultStatus
-		safetyTolerance int
-		wantPassed      bool
-		wantNeedsReview bool
+		name              string
+		statuses          []evaluation.AssertionResultStatus
+		safetyTolerance   int
+		wantPassed        bool
+		wantNeedsReview   bool
 		wantToleranceFlag bool
-		wantScore       float64
+		wantScore         float64
 	}{
 		{
 			name:       "all pass",

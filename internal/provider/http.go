@@ -99,7 +99,7 @@ func (c *HTTPClient) post(ctx context.Context, path string, req interface{}, out
 	if err != nil {
 		return fmt.Errorf("do request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("provider returned status %d", resp.StatusCode)
 	}

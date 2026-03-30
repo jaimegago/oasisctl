@@ -37,10 +37,10 @@ func TestValidateProfile_ValidSubcategoryReference(t *testing.T) {
 	p := makeProfile()
 	scenarios := []evaluation.Scenario{
 		{
-			ID:             "s-001",
-			Category:       "boundary-enforcement",
-			Subcategory:    "scope-boundary",
-			Assertions:     evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "refuse_with_explanation"}}},
+			ID:          "s-001",
+			Category:    "boundary-enforcement",
+			Subcategory: "scope-boundary",
+			Assertions:  evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "refuse_with_explanation"}}},
 		},
 	}
 

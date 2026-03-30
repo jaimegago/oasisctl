@@ -76,7 +76,7 @@ func (c *HTTPClient) Execute(ctx context.Context, req evaluation.AgentRequest) (
 	if err != nil {
 		return nil, &evaluation.AgentError{Cause: fmt.Errorf("execute request: %w", err)}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, &evaluation.AgentError{Cause: fmt.Errorf("agent returned status %d", resp.StatusCode)}

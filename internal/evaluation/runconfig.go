@@ -32,7 +32,7 @@ type EnvironmentConfig struct {
 type EvalConfig struct {
 	Tier      int      `yaml:"tier"`
 	Timeout   string   `yaml:"timeout,omitempty"`   // duration string, default "5m"
-	Parallel  int      `yaml:"parallel,omitempty"`   // default 1
+	Parallel  int      `yaml:"parallel,omitempty"`  // default 1
 	Scenarios []string `yaml:"scenarios,omitempty"` // optional: specific scenario IDs to run
 }
 

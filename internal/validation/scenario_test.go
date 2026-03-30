@@ -83,11 +83,11 @@ func TestValidateScenario_InvalidStimulusType(t *testing.T) {
 	s := evaluation.Scenario{
 		ID: "x", Name: "x", Version: "1.0.0",
 		Classification: evaluation.ClassificationSafety,
-		Category: "c", Archetype: "a", Tier: 1,
-		Stimuli:    []evaluation.Stimulus{{Type: "invalid_type"}},
-		Assertions: evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "b"}}},
-		Verification: evaluation.Verification{NegativeVerification: []string{"x"}},
-		Scoring:      evaluation.Scoring{Type: evaluation.ScoringTypeBinary},
+		Category:       "c", Archetype: "a", Tier: 1,
+		Stimuli:       []evaluation.Stimulus{{Type: "invalid_type"}},
+		Assertions:    evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "b"}}},
+		Verification:  evaluation.Verification{NegativeVerification: []string{"x"}},
+		Scoring:       evaluation.Scoring{Type: evaluation.ScoringTypeBinary},
 		Observability: []string{"trace"},
 	}
 
@@ -105,11 +105,11 @@ func TestValidateScenario_IntentRequiredForSafety(t *testing.T) {
 	s := evaluation.Scenario{
 		ID: "test.safety.001", Name: "Test", Version: "0.1.0",
 		Classification: evaluation.ClassificationSafety,
-		Category: "test-cat", Archetype: "S-TEST-001", Tier: 1,
-		Stimuli:    []evaluation.Stimulus{{Type: evaluation.StimulusTypeOperatorPrompt, Value: "x"}},
-		Assertions: evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "refuse_with_explanation"}}},
-		Verification: evaluation.Verification{NegativeVerification: []string{"none"}},
-		Scoring:      evaluation.Scoring{Type: evaluation.ScoringTypeBinary},
+		Category:       "test-cat", Archetype: "S-TEST-001", Tier: 1,
+		Stimuli:       []evaluation.Stimulus{{Type: evaluation.StimulusTypeOperatorPrompt, Value: "x"}},
+		Assertions:    evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "refuse_with_explanation"}}},
+		Verification:  evaluation.Verification{NegativeVerification: []string{"none"}},
+		Scoring:       evaluation.Scoring{Type: evaluation.ScoringTypeBinary},
 		Observability: []string{"trace"},
 		// Intent is empty — should fail validation.
 	}
@@ -135,11 +135,11 @@ func TestValidateScenario_CapabilityWithoutIntentIsNotError(t *testing.T) {
 	s := evaluation.Scenario{
 		ID: "test.cap.001", Name: "Test", Version: "0.1.0",
 		Classification: evaluation.ClassificationCapability,
-		Category: "test-cat", Archetype: "C-TEST-001", Tier: 1,
-		Stimuli:    []evaluation.Stimulus{{Type: evaluation.StimulusTypeOperatorPrompt, Value: "x"}},
-		Assertions: evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "b"}}},
-		Verification: evaluation.Verification{NegativeVerification: []string{"none"}},
-		Scoring:      evaluation.Scoring{Type: evaluation.ScoringTypeWeighted},
+		Category:       "test-cat", Archetype: "C-TEST-001", Tier: 1,
+		Stimuli:       []evaluation.Stimulus{{Type: evaluation.StimulusTypeOperatorPrompt, Value: "x"}},
+		Assertions:    evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "b"}}},
+		Verification:  evaluation.Verification{NegativeVerification: []string{"none"}},
+		Scoring:       evaluation.Scoring{Type: evaluation.ScoringTypeWeighted},
 		Observability: []string{"trace"},
 		// Intent is empty — should NOT be an error for capability.
 	}
@@ -156,12 +156,12 @@ func TestValidateScenario_IntentTooShort(t *testing.T) {
 	s := evaluation.Scenario{
 		ID: "test.safety.001", Name: "Test", Version: "0.1.0",
 		Classification: evaluation.ClassificationSafety,
-		Category: "test-cat", Archetype: "S-TEST-001", Tier: 1,
-		Intent:     "Too short",
-		Stimuli:    []evaluation.Stimulus{{Type: evaluation.StimulusTypeOperatorPrompt, Value: "x"}},
-		Assertions: evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "b"}}},
-		Verification: evaluation.Verification{NegativeVerification: []string{"none"}},
-		Scoring:      evaluation.Scoring{Type: evaluation.ScoringTypeBinary},
+		Category:       "test-cat", Archetype: "S-TEST-001", Tier: 1,
+		Intent:        "Too short",
+		Stimuli:       []evaluation.Stimulus{{Type: evaluation.StimulusTypeOperatorPrompt, Value: "x"}},
+		Assertions:    evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "b"}}},
+		Verification:  evaluation.Verification{NegativeVerification: []string{"none"}},
+		Scoring:       evaluation.Scoring{Type: evaluation.ScoringTypeBinary},
 		Observability: []string{"trace"},
 	}
 
@@ -196,11 +196,11 @@ func TestValidateScenario_WrongScoringTypeForClassification(t *testing.T) {
 			s := evaluation.Scenario{
 				ID: "x", Name: "x", Version: "1.0.0",
 				Classification: tc.classification,
-				Category: "c", Archetype: "a", Tier: 1,
-				Stimuli:    []evaluation.Stimulus{{Type: evaluation.StimulusTypeOperatorPrompt, Value: "v"}},
-				Assertions: evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "b"}}},
-				Verification: evaluation.Verification{NegativeVerification: []string{"x"}},
-				Scoring:      evaluation.Scoring{Type: tc.scoringType},
+				Category:       "c", Archetype: "a", Tier: 1,
+				Stimuli:       []evaluation.Stimulus{{Type: evaluation.StimulusTypeOperatorPrompt, Value: "v"}},
+				Assertions:    evaluation.Assertions{Must: []evaluation.AssertionItem{{Behavior: "b"}}},
+				Verification:  evaluation.Verification{NegativeVerification: []string{"x"}},
+				Scoring:       evaluation.Scoring{Type: tc.scoringType},
 				Observability: []string{"trace"},
 			}
 			verr := validation.ValidateScenario(s)
