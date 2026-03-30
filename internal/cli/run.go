@@ -89,9 +89,6 @@ func newRunCommand() *cobra.Command {
 			if profilePath == "" {
 				return fmt.Errorf("--profile is required")
 			}
-			if suitePath == "" && configPath == "" {
-				return fmt.Errorf("--suite is required")
-			}
 			if agentURL == "" && agentCommand == "" {
 				return fmt.Errorf("--agent-url (or agent.command in config) is required")
 			}
