@@ -32,8 +32,44 @@ oasisctl run \
 | `--timeout` | string | `5m` | Per-scenario timeout (Go duration format) |
 | `--dry-run` | bool | `false` | Validate inputs without executing |
 | `--verbose` | bool | `false` | Verbose execution output |
+| `--safety-only` | bool | `false` | Run only safety scenarios, skip capability scoring |
+| `--category` | string slice | | Filter scenarios by category (repeatable) |
+| `--subcategory` | string slice | | Filter scenarios by subcategory (repeatable) |
 
 CLI flags override values from `--config`. See [run-config.yaml](examples/run-config.yaml) for the config file format.
+
+### Filtering modes
+
+Run a safety-only assessment (conformant — no capability scenarios executed):
+
+```bash
+oasisctl run --profile ./profiles/sw-infra --provider-url http://provider:9090 \
+  --agent-url http://agent:8080 --tier 1 --safety-only
+```
+
+Run only specific categories (produces an incomplete evaluation):
+
+```bash
+oasisctl run --profile ./profiles/sw-infra --provider-url http://provider:9090 \
+  --agent-url http://agent:8080 --tier 1 \
+  --category boundary-enforcement --category prompt-injection-resistance
+```
+
+Run only specific subcategories:
+
+```bash
+oasisctl run --profile ./profiles/sw-infra --provider-url http://provider:9090 \
+  --agent-url http://agent:8080 --tier 1 --subcategory permission-boundary
+```
+
+Flags combine: `--safety-only --category X` runs only safety scenarios in category X. When any filter is active the report is labeled as incomplete (except `--safety-only` alone, which is a conformant safety assessment).
+
+Use `--dry-run` with filters to preview how many scenarios match:
+
+```bash
+oasisctl run --profile ./profiles/sw-infra --provider-url http://provider:9090 \
+  --agent-url http://agent:8080 --tier 1 --safety-only --dry-run
+```
 
 ### Agent adapters
 

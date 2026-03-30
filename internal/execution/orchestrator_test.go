@@ -153,11 +153,31 @@ func safetyScenario(id string, tier int) evaluation.Scenario {
 	}
 }
 
+func safetyScenarioWithCategorySub(id string, tier int, category, subcategory string) evaluation.Scenario {
+	return evaluation.Scenario{
+		ID:             id,
+		Classification: evaluation.ClassificationSafety,
+		Tier:           tier,
+		Category:       category,
+		Subcategory:    subcategory,
+	}
+}
+
 func capabilityScenario(id string, tier int) evaluation.Scenario {
 	return evaluation.Scenario{
 		ID:             id,
 		Classification: evaluation.ClassificationCapability,
 		Tier:           tier,
+		Archetype:      "deploy",
+	}
+}
+
+func capabilityScenarioWithCategory(id string, tier int, category string) evaluation.Scenario {
+	return evaluation.Scenario{
+		ID:             id,
+		Classification: evaluation.ClassificationCapability,
+		Tier:           tier,
+		Category:       category,
 		Archetype:      "deploy",
 	}
 }
@@ -476,4 +496,230 @@ func TestOrchestrator_CollectObservationsFromVerification(t *testing.T) {
 	assert.Contains(t, requestedTypes, "resource_state")
 	assert.NotContains(t, requestedTypes, "agent reasoning trace")
 	assert.NotContains(t, requestedTypes, "container orchestration API audit log")
+}
+
+// --- Filter tests ---
+
+func TestOrchestrator_SafetyOnly(t *testing.T) {
+	loader := &mockProfileLoader{profile: defaultProfile()}
+	agent := &mockAgentClient{response: defaultAgentResp()}
+	prov := &mockProvider{provisionResp: defaultProvision()}
+	asserter := &mockAsserter{results: []evaluation.AssertionResult{
+		{Status: evaluation.AssertionPass, Evidence: "ok"},
+	}}
+	scorer := &mockScorer{}
+	reporter := &mockReportWriter{}
+
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
+		Config{Tier: 1, SafetyOnly: true})
+
+	scenarios := []evaluation.Scenario{
+		safetyScenario("s.001", 1),
+		safetyScenario("s.002", 1),
+		capabilityScenario("c.001", 1),
+	}
+
+	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	require.NoError(t, err)
+	require.NotNil(t, verdict)
+	assert.Len(t, verdict.SafetyResults, 2)
+	assert.Empty(t, verdict.CapabilityResults)
+	assert.True(t, verdict.EvaluationMode.SafetyOnly)
+	assert.False(t, verdict.EvaluationMode.Complete)
+	assert.True(t, reporter.called)
+}
+
+func TestOrchestrator_CategoryFilterSingle(t *testing.T) {
+	loader := &mockProfileLoader{profile: defaultProfile()}
+	agent := &mockAgentClient{response: defaultAgentResp()}
+	prov := &mockProvider{provisionResp: defaultProvision()}
+	asserter := &mockAsserter{results: []evaluation.AssertionResult{
+		{Status: evaluation.AssertionPass, Evidence: "ok"},
+	}}
+	scorer := &mockScorer{}
+	reporter := &mockReportWriter{}
+
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
+		Config{Tier: 1, Categories: []string{"boundary-enforcement"}})
+
+	scenarios := []evaluation.Scenario{
+		safetyScenarioWithCategorySub("s.001", 1, "boundary-enforcement", "permission-boundary"),
+		safetyScenarioWithCategorySub("s.002", 1, "prompt-injection-resistance", "data-instruction-separation"),
+		capabilityScenarioWithCategory("c.001", 1, "boundary-enforcement"),
+		capabilityScenarioWithCategory("c.002", 1, "operational-excellence"),
+	}
+
+	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	require.NoError(t, err)
+	require.NotNil(t, verdict)
+	assert.Len(t, verdict.SafetyResults, 1)
+	assert.Equal(t, "s.001", verdict.SafetyResults[0].ScenarioID)
+	assert.Len(t, verdict.CapabilityResults, 1)
+	assert.Equal(t, "c.001", verdict.CapabilityResults[0].ScenarioID)
+	assert.False(t, verdict.EvaluationMode.Complete)
+}
+
+func TestOrchestrator_CategoryFilterMultiple(t *testing.T) {
+	loader := &mockProfileLoader{profile: defaultProfile()}
+	agent := &mockAgentClient{response: defaultAgentResp()}
+	prov := &mockProvider{provisionResp: defaultProvision()}
+	asserter := &mockAsserter{results: []evaluation.AssertionResult{
+		{Status: evaluation.AssertionPass, Evidence: "ok"},
+	}}
+	scorer := &mockScorer{}
+	reporter := &mockReportWriter{}
+
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
+		Config{Tier: 1, Categories: []string{"boundary-enforcement", "prompt-injection-resistance"}})
+
+	scenarios := []evaluation.Scenario{
+		safetyScenarioWithCategorySub("s.001", 1, "boundary-enforcement", "permission-boundary"),
+		safetyScenarioWithCategorySub("s.002", 1, "prompt-injection-resistance", "data-instruction-separation"),
+		safetyScenarioWithCategorySub("s.003", 1, "data-protection", ""),
+	}
+
+	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	require.NoError(t, err)
+	require.NotNil(t, verdict)
+	assert.Len(t, verdict.SafetyResults, 2)
+}
+
+func TestOrchestrator_SubcategoryFilter(t *testing.T) {
+	loader := &mockProfileLoader{profile: defaultProfile()}
+	agent := &mockAgentClient{response: defaultAgentResp()}
+	prov := &mockProvider{provisionResp: defaultProvision()}
+	asserter := &mockAsserter{results: []evaluation.AssertionResult{
+		{Status: evaluation.AssertionPass, Evidence: "ok"},
+	}}
+	scorer := &mockScorer{}
+	reporter := &mockReportWriter{}
+
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
+		Config{Tier: 1, Subcategories: []string{"permission-boundary"}})
+
+	scenarios := []evaluation.Scenario{
+		safetyScenarioWithCategorySub("s.001", 1, "boundary-enforcement", "permission-boundary"),
+		safetyScenarioWithCategorySub("s.002", 1, "boundary-enforcement", "resource-scope"),
+		safetyScenarioWithCategorySub("s.003", 1, "prompt-injection-resistance", ""),
+	}
+
+	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	require.NoError(t, err)
+	require.NotNil(t, verdict)
+	assert.Len(t, verdict.SafetyResults, 1)
+	assert.Equal(t, "s.001", verdict.SafetyResults[0].ScenarioID)
+	assert.False(t, verdict.EvaluationMode.Complete)
+}
+
+func TestOrchestrator_SafetyOnlyWithCategory(t *testing.T) {
+	loader := &mockProfileLoader{profile: defaultProfile()}
+	agent := &mockAgentClient{response: defaultAgentResp()}
+	prov := &mockProvider{provisionResp: defaultProvision()}
+	asserter := &mockAsserter{results: []evaluation.AssertionResult{
+		{Status: evaluation.AssertionPass, Evidence: "ok"},
+	}}
+	scorer := &mockScorer{}
+	reporter := &mockReportWriter{}
+
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
+		Config{Tier: 1, SafetyOnly: true, Categories: []string{"boundary-enforcement"}})
+
+	scenarios := []evaluation.Scenario{
+		safetyScenarioWithCategorySub("s.001", 1, "boundary-enforcement", "permission-boundary"),
+		safetyScenarioWithCategorySub("s.002", 1, "prompt-injection-resistance", ""),
+		capabilityScenarioWithCategory("c.001", 1, "boundary-enforcement"),
+	}
+
+	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	require.NoError(t, err)
+	require.NotNil(t, verdict)
+	// Only safety scenarios in boundary-enforcement
+	assert.Len(t, verdict.SafetyResults, 1)
+	assert.Equal(t, "s.001", verdict.SafetyResults[0].ScenarioID)
+	// No capability results (safety-only)
+	assert.Empty(t, verdict.CapabilityResults)
+	assert.True(t, verdict.EvaluationMode.SafetyOnly)
+}
+
+func TestOrchestrator_FilterNoMatches(t *testing.T) {
+	loader := &mockProfileLoader{profile: defaultProfile()}
+	reporter := &mockReportWriter{}
+
+	orch := NewOrchestrator(loader, nil, nil, nil, nil, reporter, nil,
+		Config{Tier: 1, Categories: []string{"nonexistent-category"}})
+
+	scenarios := []evaluation.Scenario{
+		safetyScenarioWithCategorySub("s.001", 1, "boundary-enforcement", "permission-boundary"),
+	}
+
+	_, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no scenarios match the specified filters")
+}
+
+func TestOrchestrator_DryRunWithFilters(t *testing.T) {
+	loader := &mockProfileLoader{profile: defaultProfile()}
+	reporter := &mockReportWriter{}
+
+	orch := NewOrchestrator(loader, nil, nil, nil, nil, reporter, nil,
+		Config{Tier: 1, DryRun: true, SafetyOnly: true})
+
+	scenarios := []evaluation.Scenario{
+		safetyScenario("s.001", 1),
+		safetyScenario("s.002", 1),
+		capabilityScenario("c.001", 1),
+	}
+
+	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	require.NoError(t, err)
+	require.NotNil(t, verdict)
+	assert.True(t, verdict.EvaluationMode.SafetyOnly)
+	assert.False(t, verdict.EvaluationMode.Complete)
+	assert.False(t, reporter.called)
+}
+
+func TestOrchestrator_ReportLabeling(t *testing.T) {
+	tests := []struct {
+		name         string
+		mode         evaluation.EvaluationMode
+		expectNote   string
+		expectAbsent string
+	}{
+		{
+			name:         "complete evaluation has no note",
+			mode:         evaluation.EvaluationMode{Complete: true},
+			expectNote:   "",
+			expectAbsent: "filtered",
+		},
+		{
+			name:       "safety-only is conformant",
+			mode:       evaluation.EvaluationMode{SafetyOnly: true},
+			expectNote: "Evaluation mode: safety-only. Capability scenarios were not executed.",
+		},
+		{
+			name:       "category filter is incomplete",
+			mode:       evaluation.EvaluationMode{Categories: []string{"boundary-enforcement"}},
+			expectNote: "not a complete OASIS assessment",
+		},
+		{
+			name:       "subcategory filter is incomplete",
+			mode:       evaluation.EvaluationMode{Subcategories: []string{"permission-boundary"}},
+			expectNote: "not a complete OASIS assessment",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := &evaluation.Verdict{
+				EvaluationMode: tt.mode,
+				SafetyPassed:   true,
+			}
+			report := buildReport(v)
+			if tt.expectNote == "" {
+				assert.Empty(t, report.Metadata.EvaluationNote)
+			} else {
+				assert.Contains(t, report.Metadata.EvaluationNote, tt.expectNote)
+			}
+		})
+	}
 }

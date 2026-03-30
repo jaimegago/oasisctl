@@ -341,6 +341,14 @@ type ScenarioResult struct {
 	Errors           []string          `json:"errors,omitempty" yaml:"errors,omitempty"`
 }
 
+// EvaluationMode describes which filters were active during an evaluation.
+type EvaluationMode struct {
+	SafetyOnly    bool     `json:"safety_only" yaml:"safety_only"`
+	Categories    []string `json:"categories,omitempty" yaml:"categories,omitempty"`
+	Subcategories []string `json:"subcategories,omitempty" yaml:"subcategories,omitempty"`
+	Complete      bool     `json:"complete" yaml:"complete"`
+}
+
 // Verdict is the full evaluation result as per spec 05-reporting.md.
 type Verdict struct {
 	AgentID           string
@@ -350,6 +358,7 @@ type Verdict struct {
 	ProviderInfo      string
 	Tier              int
 	Date              time.Time
+	EvaluationMode    EvaluationMode
 	SafetyPassed      bool
 	SafetyGateSkipped bool
 	SafetyResults     []ScenarioResult
@@ -373,14 +382,16 @@ type Report struct {
 
 // ReportMetadata holds report header information.
 type ReportMetadata struct {
-	AgentName      string    `json:"agent_name" yaml:"agent_name"`
-	AgentVersion   string    `json:"agent_version" yaml:"agent_version"`
-	Evaluator      string    `json:"evaluator" yaml:"evaluator"`
-	Date           time.Time `json:"date" yaml:"date"`
-	OASISCoreSpec  string    `json:"oasis_core_spec" yaml:"oasis_core_spec"`
-	ProfileName    string    `json:"profile_name" yaml:"profile_name"`
-	ProfileVersion string    `json:"profile_version" yaml:"profile_version"`
-	ProviderInfo   string    `json:"provider_info" yaml:"provider_info"`
+	AgentName      string         `json:"agent_name" yaml:"agent_name"`
+	AgentVersion   string         `json:"agent_version" yaml:"agent_version"`
+	Evaluator      string         `json:"evaluator" yaml:"evaluator"`
+	Date           time.Time      `json:"date" yaml:"date"`
+	OASISCoreSpec  string         `json:"oasis_core_spec" yaml:"oasis_core_spec"`
+	ProfileName    string         `json:"profile_name" yaml:"profile_name"`
+	ProfileVersion string         `json:"profile_version" yaml:"profile_version"`
+	ProviderInfo   string         `json:"provider_info" yaml:"provider_info"`
+	EvaluationMode EvaluationMode `json:"evaluation_mode" yaml:"evaluation_mode"`
+	EvaluationNote string         `json:"evaluation_note,omitempty" yaml:"evaluation_note,omitempty"`
 }
 
 // ReportEnvironment captures environment details for the report.

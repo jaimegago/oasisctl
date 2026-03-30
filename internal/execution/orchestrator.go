@@ -11,11 +11,14 @@ import (
 
 // Config controls orchestrator behaviour.
 type Config struct {
-	Tier     int
-	Parallel int // reserved — currently always 1
-	Timeout  time.Duration
-	DryRun   bool
-	Verbose  bool
+	Tier          int
+	Parallel      int // reserved — currently always 1
+	Timeout       time.Duration
+	DryRun        bool
+	Verbose       bool
+	SafetyOnly    bool
+	Categories    []string
+	Subcategories []string
 }
 
 // Orchestrator runs the full OASIS evaluation loop.
@@ -84,8 +87,30 @@ func (o *Orchestrator) Run(
 		}
 	}
 
+	// 2b. Filter by category/subcategory.
+	filtered = o.applyFilters(filtered)
+
+	// 2c. Build evaluation mode.
+	evalMode := o.buildEvaluationMode()
+
+	// 2d. Check for empty result set after filtering.
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("no scenarios match the specified filters")
+	}
+
 	// 3. Dry-run: validate and summarise.
 	if o.cfg.DryRun {
+		totalSafety := 0
+		totalCapability := 0
+		for _, s := range scenarios {
+			if s.Tier <= o.cfg.Tier {
+				if s.Classification == evaluation.ClassificationSafety {
+					totalSafety++
+				} else {
+					totalCapability++
+				}
+			}
+		}
 		safety := 0
 		capability := 0
 		for _, s := range filtered {
@@ -95,15 +120,44 @@ func (o *Orchestrator) Run(
 				capability++
 			}
 		}
-		o.logger.Info("dry-run summary",
-			"tier", o.cfg.Tier,
-			"safety_scenarios", safety,
-			"capability_scenarios", capability,
-		)
+
+		attrs := []any{"tier", o.cfg.Tier}
+		if o.cfg.SafetyOnly {
+			attrs = append(attrs, "mode", "safety-only")
+		}
+		if len(o.cfg.Categories) > 0 {
+			attrs = append(attrs, "categories", o.cfg.Categories)
+		}
+		if len(o.cfg.Subcategories) > 0 {
+			attrs = append(attrs, "subcategories", o.cfg.Subcategories)
+		}
+
+		if o.cfg.SafetyOnly {
+			if len(o.cfg.Categories) > 0 || len(o.cfg.Subcategories) > 0 {
+				attrs = append(attrs, "safety_scenarios", fmt.Sprintf("%d (filtered from %d)", safety, totalSafety))
+			} else {
+				attrs = append(attrs, "safety_scenarios", fmt.Sprintf("%d (all)", safety))
+			}
+			attrs = append(attrs, "capability_scenarios", "0 (skipped — safety-only mode)")
+		} else if len(o.cfg.Categories) > 0 || len(o.cfg.Subcategories) > 0 {
+			attrs = append(attrs, "safety_scenarios", fmt.Sprintf("%d (filtered from %d)", safety, totalSafety))
+			attrs = append(attrs, "capability_scenarios", fmt.Sprintf("%d (filtered from %d)", capability, totalCapability))
+		} else {
+			attrs = append(attrs, "safety_scenarios", safety)
+			attrs = append(attrs, "capability_scenarios", capability)
+		}
+
+		if !evalMode.Complete {
+			attrs = append(attrs, "note", "filtered evaluation — not a complete OASIS assessment")
+		}
+
+		o.logger.Info("dry-run summary", attrs...)
+
 		return &evaluation.Verdict{
-			AgentID:   agentID,
-			ProfileID: profile.Metadata.Name,
-			Tier:      o.cfg.Tier,
+			AgentID:        agentID,
+			ProfileID:      profile.Metadata.Name,
+			Tier:           o.cfg.Tier,
+			EvaluationMode: evalMode,
 		}, nil
 	}
 
@@ -124,6 +178,7 @@ func (o *Orchestrator) Run(
 		ProviderInfo:   providerInfo,
 		Tier:           o.cfg.Tier,
 		Date:           time.Now().UTC(),
+		EvaluationMode: evalMode,
 	}
 
 	// 5. Phase 1 — Safety gate.
@@ -138,6 +193,15 @@ func (o *Orchestrator) Run(
 
 	// 6. Compute safety verdict.
 	verdict.SafetyPassed = !safetyGateFailed
+
+	// 6b. Safety-only mode: skip capability phase entirely.
+	if o.cfg.SafetyOnly {
+		if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
+			o.logger.Error("failed to write report", "error", err)
+		}
+		return verdict, nil
+	}
+
 	if safetyGateFailed {
 		if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
 			o.logger.Error("failed to write report", "error", err)
@@ -317,6 +381,68 @@ func buildAgentRequest(s evaluation.Scenario) evaluation.AgentRequest {
 		}
 	}
 	return req
+}
+
+// applyFilters filters scenarios by safety-only, category, and subcategory flags.
+func (o *Orchestrator) applyFilters(scenarios []evaluation.Scenario) []evaluation.Scenario {
+	// Safety-only: drop capability scenarios.
+	if o.cfg.SafetyOnly {
+		var out []evaluation.Scenario
+		for _, s := range scenarios {
+			if s.Classification == evaluation.ClassificationSafety {
+				out = append(out, s)
+			}
+		}
+		scenarios = out
+	}
+
+	// Category filter.
+	if len(o.cfg.Categories) > 0 {
+		cats := toSet(o.cfg.Categories)
+		var out []evaluation.Scenario
+		for _, s := range scenarios {
+			if _, ok := cats[s.Category]; ok {
+				out = append(out, s)
+			}
+		}
+		scenarios = out
+	}
+
+	// Subcategory filter.
+	if len(o.cfg.Subcategories) > 0 {
+		subs := toSet(o.cfg.Subcategories)
+		var out []evaluation.Scenario
+		for _, s := range scenarios {
+			if s.Subcategory == "" {
+				continue
+			}
+			if _, ok := subs[s.Subcategory]; ok {
+				out = append(out, s)
+			}
+		}
+		scenarios = out
+	}
+
+	return scenarios
+}
+
+// buildEvaluationMode returns the EvaluationMode reflecting the current config.
+func (o *Orchestrator) buildEvaluationMode() evaluation.EvaluationMode {
+	mode := evaluation.EvaluationMode{
+		SafetyOnly:    o.cfg.SafetyOnly,
+		Categories:    o.cfg.Categories,
+		Subcategories: o.cfg.Subcategories,
+	}
+	mode.Complete = !o.cfg.SafetyOnly && len(o.cfg.Categories) == 0 && len(o.cfg.Subcategories) == 0
+	return mode
+}
+
+func toSet(items []string) map[string]struct{} {
+	m := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		m[item] = struct{}{}
+	}
+	return m
 }
 
 // errorResult builds a failed ScenarioResult from a plain error string.

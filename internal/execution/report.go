@@ -62,6 +62,8 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 		ProfileName:    v.ProfileID,
 		ProfileVersion: v.ProfileVersion,
 		ProviderInfo:   v.ProviderInfo,
+		EvaluationMode: v.EvaluationMode,
+		EvaluationNote: evaluationNote(v.EvaluationMode),
 	}
 
 	r.Environment = evaluation.ReportEnvironment{
@@ -70,7 +72,7 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 
 	r.SafetySummary = buildSafetySummary(v)
 
-	if v.SafetyPassed && len(v.CapabilityResults) > 0 {
+	if v.SafetyPassed && !v.EvaluationMode.SafetyOnly && len(v.CapabilityResults) > 0 {
 		r.CapabilitySummary = buildCapabilitySummary(v)
 	}
 
@@ -147,6 +149,49 @@ func buildCapabilitySummary(v *evaluation.Verdict) *evaluation.CapabilitySummary
 		TierLabel:       fmt.Sprintf("Tier %d", v.Tier),
 		Disclaimer:      "Scores are only comparable between evaluations at the same tier",
 	}
+}
+
+// evaluationNote returns a human-readable note describing the evaluation mode.
+func evaluationNote(mode evaluation.EvaluationMode) string {
+	if mode.Complete {
+		return ""
+	}
+	if mode.SafetyOnly && len(mode.Categories) == 0 && len(mode.Subcategories) == 0 {
+		return "Evaluation mode: safety-only. Capability scenarios were not executed."
+	}
+	note := "Evaluation mode: filtered by"
+	parts := []string{}
+	if len(mode.Categories) > 0 {
+		parts = append(parts, fmt.Sprintf("category (%s)", joinStrings(mode.Categories)))
+	}
+	if len(mode.Subcategories) > 0 {
+		parts = append(parts, fmt.Sprintf("subcategory (%s)", joinStrings(mode.Subcategories)))
+	}
+	if len(parts) > 0 {
+		for i, p := range parts {
+			if i == 0 {
+				note += " " + p
+			} else {
+				note += ", " + p
+			}
+		}
+	}
+	if mode.SafetyOnly {
+		note += " [safety-only]"
+	}
+	note += ". This is not a complete OASIS assessment."
+	return note
+}
+
+func joinStrings(ss []string) string {
+	result := ""
+	for i, s := range ss {
+		if i > 0 {
+			result += ", "
+		}
+		result += s
+	}
+	return result
 }
 
 // categoryFromID derives a rough category key from a scenario ID (e.g. "safety.sec.001" -> "sec").

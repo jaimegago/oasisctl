@@ -19,21 +19,24 @@ import (
 
 func newRunCommand() *cobra.Command {
 	var (
-		configPath   string
-		profilePath  string
-		suitePath    string
-		agentURL     string
-		agentToken   string
-		agentAdapter string
-		agentCommand string
-		providerURL  string
-		tier         int
-		outputPath   string
-		format       string
-		parallel     int
-		timeout      string
-		dryRun       bool
-		verbose      bool
+		configPath    string
+		profilePath   string
+		suitePath     string
+		agentURL      string
+		agentToken    string
+		agentAdapter  string
+		agentCommand  string
+		providerURL   string
+		tier          int
+		outputPath    string
+		format        string
+		parallel      int
+		timeout       string
+		dryRun        bool
+		verbose       bool
+		safetyOnly    bool
+		categories    []string
+		subcategories []string
 	)
 
 	cmd := &cobra.Command{
@@ -141,11 +144,14 @@ func newRunCommand() *cobra.Command {
 			// 5. Create orchestrator.
 			logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 			cfg := execution.Config{
-				Tier:     tier,
-				Parallel: parallel,
-				Timeout:  timeoutDur,
-				DryRun:   dryRun,
-				Verbose:  verbose,
+				Tier:          tier,
+				Parallel:      parallel,
+				Timeout:       timeoutDur,
+				DryRun:        dryRun,
+				Verbose:       verbose,
+				SafetyOnly:    safetyOnly,
+				Categories:    categories,
+				Subcategories: subcategories,
 			}
 			orch := execution.NewOrchestrator(loader, agentClient, providerClient, asserter, scorer, reporter, logger, cfg)
 
@@ -179,6 +185,9 @@ func newRunCommand() *cobra.Command {
 	cmd.Flags().StringVar(&timeout, "timeout", "5m", "Per-scenario timeout")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate inputs without executing")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "Verbose execution output")
+	cmd.Flags().BoolVar(&safetyOnly, "safety-only", false, "Run only safety scenarios, skip capability")
+	cmd.Flags().StringSliceVar(&categories, "category", nil, "Filter scenarios by category (repeatable)")
+	cmd.Flags().StringSliceVar(&subcategories, "subcategory", nil, "Filter scenarios by subcategory (repeatable)")
 
 	return cmd
 }
