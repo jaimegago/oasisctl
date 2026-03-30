@@ -22,6 +22,7 @@ full OASIS evaluations against agents.`,
 	root.AddCommand(newRunCommand())
 	root.AddCommand(newValidateCommand())
 	root.AddCommand(newVersionCommand())
+	root.AddCommand(newReportCommand())
 
 	return root
 }

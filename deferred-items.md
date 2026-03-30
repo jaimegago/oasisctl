@@ -28,22 +28,27 @@ Large
 
 ---
 
-## 002 — Report format conversion subcommand
+## 002 — Report format conversion subcommand (partially complete)
 
 ### Context
-The oasisctl report subcommand was planned for format conversion and rendering. Currently the run command emits YAML or JSON directly. A separate report subcommand would allow converting between formats and rendering human-readable HTML reports from saved verdict files.
+The oasisctl report subcommand was planned for format conversion and rendering.
 
-### Scope
-Implement `oasisctl report` with subcommands:
+### Completed
+
+- `oasisctl report html --input verdict.yaml --output report.html` — renders a self-contained HTML report with embedded CSS
+- `oasisctl report summary --input verdict.yaml` — prints a one-line text summary to stdout
+- `oasisctl run --format html --output report.html` — HTML output from the run command
+- `--open` flag on both `run` and `report html` to open in default browser
+
+### Remaining
+
 - `oasisctl report convert --input verdict.yaml --format json --output verdict.json` — convert between YAML and JSON
-- `oasisctl report summary --input verdict.yaml` — print a human-readable summary to stdout (safety verdict, capability scores, failed scenarios)
-- `oasisctl report html --input verdict.yaml --output report.html` — render an HTML report (deferred, but define the subcommand structure)
 
 ### Dependencies
 None.
 
 ### Estimated complexity
-Small (convert and summary), Medium (HTML rendering)
+Small (convert only — html and summary are done)
 
 ---
 

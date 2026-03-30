@@ -38,6 +38,23 @@ Or use a config file:
 oasisctl run --config run-config.yaml
 ```
 
+Generate an HTML report:
+
+```bash
+oasisctl run --format html --output report.html --open \
+  --profile ./profiles/software-infrastructure \
+  --agent-url http://agent:8080 \
+  --provider-url http://provider:9090 \
+  --tier 1
+```
+
+Re-render a saved verdict as HTML, or print a summary:
+
+```bash
+oasisctl report html --input verdict.yaml --output report.html
+oasisctl report summary --input verdict.yaml
+```
+
 ## Documentation
 
 - [CLI reference](docs/cli-reference.md) — all commands, flags, and examples

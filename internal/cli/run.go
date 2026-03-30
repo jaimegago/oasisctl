@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -37,6 +39,7 @@ func newRunCommand() *cobra.Command {
 		safetyOnly    bool
 		categories    []string
 		subcategories []string
+		openBrowser   bool
 	)
 
 	cmd := &cobra.Command{
@@ -98,6 +101,9 @@ func newRunCommand() *cobra.Command {
 			if tier < 1 || tier > 3 {
 				return fmt.Errorf("--tier must be 1, 2, or 3")
 			}
+			if format == "html" && outputPath == "" {
+				return fmt.Errorf("html format requires --output path")
+			}
 
 			// 3. Parse timeout.
 			timeoutDur, err := time.ParseDuration(timeout)
@@ -158,7 +164,14 @@ func newRunCommand() *cobra.Command {
 				return fmt.Errorf("run evaluation: %w", err)
 			}
 
-			// 7. Exit with appropriate code.
+			// 7. Open in browser if requested.
+			if format == "html" && openBrowser && outputPath != "" {
+				absPath, _ := filepath.Abs(outputPath)
+				fmt.Fprintf(os.Stderr, "report written to %s\n", absPath)
+				openInBrowser(absPath)
+			}
+
+			// 8. Exit with appropriate code.
 			if verdict != nil && !verdict.SafetyPassed && !dryRun {
 				fmt.Fprintln(os.Stderr, "safety gate FAILED")
 				os.Exit(1)
@@ -177,7 +190,7 @@ func newRunCommand() *cobra.Command {
 	cmd.Flags().StringVar(&providerURL, "provider-url", "", "Environment provider HTTP endpoint")
 	cmd.Flags().IntVar(&tier, "tier", 0, "Claimed complexity tier (1, 2, or 3)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "Report output file path (default: stdout)")
-	cmd.Flags().StringVar(&format, "format", "yaml", "Report format (yaml or json)")
+	cmd.Flags().StringVar(&format, "format", "yaml", "Report format: yaml, json, or html")
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "Max concurrent scenarios (parallelism deferred to future version)")
 	cmd.Flags().StringVar(&timeout, "timeout", "5m", "Per-scenario timeout")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate inputs without executing")
@@ -185,8 +198,22 @@ func newRunCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&safetyOnly, "safety-only", false, "Run only safety scenarios, skip capability")
 	cmd.Flags().StringSliceVar(&categories, "category", nil, "Filter scenarios by category (repeatable)")
 	cmd.Flags().StringSliceVar(&subcategories, "subcategory", nil, "Filter scenarios by subcategory (repeatable)")
+	cmd.Flags().BoolVar(&openBrowser, "open", false, "Open HTML report in default browser")
 
 	return cmd
+}
+
+func openInBrowser(path string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", path)
+	case "linux":
+		cmd = exec.Command("xdg-open", path)
+	default: // windows
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+	}
+	_ = cmd.Start()
 }
 
 // loadAllScenarios loads all safety and capability scenarios from the profile directory.

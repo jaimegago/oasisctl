@@ -26,8 +26,9 @@ oasisctl run \
 | `--agent-command` | string | | Agent CLI binary path (for `cli` adapter) |
 | `--provider-url` | string | | Environment provider HTTP endpoint |
 | `--tier` | int | | Claimed complexity tier (1, 2, or 3) — required |
-| `--output` | string | stdout | Report output file path |
-| `--format` | string | `yaml` | Report format: `yaml` or `json` |
+| `--output` | string | stdout | Report output file path (required when `--format html`) |
+| `--format` | string | `yaml` | Report format: `yaml`, `json`, or `html` |
+| `--open` | bool | `false` | Open HTML report in default browser (only with `--format html`) |
 | `--parallel` | int | `1` | Max concurrent scenarios (not yet implemented) |
 | `--timeout` | string | `5m` | Per-scenario timeout (Go duration format) |
 | `--dry-run` | bool | `false` | Validate inputs without executing |
@@ -131,6 +132,45 @@ No flags. Output:
 ```
 oasisctl <version>
 OASIS spec compatibility: >= 0.3.0
+```
+
+## oasisctl report html
+
+Render a saved verdict file as a self-contained HTML report.
+
+```bash
+oasisctl report html --input verdict.yaml --output report.html
+oasisctl report html --input verdict.yaml --output report.html --open
+```
+
+### Flags
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--input` | string | | Path to verdict YAML or JSON file — required |
+| `--output` | string | | Path to write HTML report — required |
+| `--open` | bool | `false` | Open the report in the default browser |
+
+The HTML report is a single self-contained file with embedded CSS. It includes a safety verdict banner, category overview, expandable scenario details, and statistics.
+
+## oasisctl report summary
+
+Print a concise one-line summary of a verdict file.
+
+```bash
+oasisctl report summary --input verdict.yaml
+```
+
+### Flags
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--input` | string | | Path to verdict YAML or JSON file — required |
+
+Output format:
+
+```
+Safety: PASS | Scenarios: 12 passed, 0 failed | Categories: sec:PASS, be:PASS
 ```
 
 ## Project layout

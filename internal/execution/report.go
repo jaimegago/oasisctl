@@ -1,15 +1,22 @@
 package execution
 
 import (
+	"bytes"
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/jaimegago/oasisctl/internal/evaluation"
 )
+
+//go:embed templates/report.html.tmpl
+var templateFS embed.FS
 
 const evaluatorName = "oasisctl"
 const evaluatorVersion = "0.1.0"
@@ -24,6 +31,10 @@ func NewReportWriter() *ReportWriter { return &ReportWriter{} }
 func (w *ReportWriter) Write(_ context.Context, verdict *evaluation.Verdict, format string, path string) error {
 	report := buildReport(verdict)
 	verdict.Report = report
+
+	if format == "html" {
+		return writeHTML(report, path)
+	}
 
 	var data []byte
 	var err error
@@ -48,6 +59,128 @@ func (w *ReportWriter) Write(_ context.Context, verdict *evaluation.Verdict, for
 	}
 	defer func() { _ = f.Close() }()
 	_, err = f.Write(data)
+	return err
+}
+
+// htmlReportData augments Report with computed stats for the template.
+type htmlReportData struct {
+	evaluation.Report
+	Stats scenarioStats
+}
+
+type scenarioStats struct {
+	Total           int
+	Provisioned     int
+	ProvisionErrors int
+	Passed          int
+	Failed          int
+	NeedsReview     int
+}
+
+func computeStats(details []evaluation.ScenarioResult) scenarioStats {
+	var s scenarioStats
+	s.Total = len(details)
+	for _, sr := range details {
+		if len(sr.Errors) > 0 && !sr.Passed {
+			s.ProvisionErrors++
+			continue
+		}
+		s.Provisioned++
+		if sr.Passed {
+			s.Passed++
+		} else {
+			s.Failed++
+		}
+		if sr.NeedsReview {
+			s.NeedsReview++
+		}
+	}
+	return s
+}
+
+var htmlFuncMap = template.FuncMap{
+	"formatTime": func(t time.Time) string { return t.Format("2006-01-02 15:04:05 UTC") },
+	"pct":        func(f float64) float64 { return f * 100 },
+	"rowClass": func(sr evaluation.ScenarioResult) string {
+		if len(sr.Errors) > 0 && !sr.Passed {
+			return "row-error"
+		}
+		if sr.NeedsReview {
+			return "row-review"
+		}
+		if sr.Passed {
+			return "row-pass"
+		}
+		return "row-fail"
+	},
+	"badgeClass": func(s evaluation.AssertionResultStatus) string {
+		switch s {
+		case evaluation.AssertionPass:
+			return "badge-pass"
+		case evaluation.AssertionFail:
+			return "badge-fail"
+		case evaluation.AssertionNeedsReview:
+			return "badge-review"
+		default:
+			return "badge-error"
+		}
+	},
+	"resultBadge": func(sr evaluation.ScenarioResult) string {
+		if len(sr.Errors) > 0 && !sr.Passed {
+			return "badge-error"
+		}
+		if sr.Passed {
+			return "badge-pass"
+		}
+		return "badge-fail"
+	},
+	"resultText": func(sr evaluation.ScenarioResult) string {
+		if len(sr.Errors) > 0 && !sr.Passed {
+			return "ERROR"
+		}
+		if sr.Passed {
+			return "PASS"
+		}
+		return "FAIL"
+	},
+}
+
+// RenderHTML renders the report as a self-contained HTML string.
+func RenderHTML(report *evaluation.Report) (string, error) {
+	tmplData, err := templateFS.ReadFile("templates/report.html.tmpl")
+	if err != nil {
+		return "", fmt.Errorf("read template: %w", err)
+	}
+
+	tmpl, err := template.New("report").Funcs(htmlFuncMap).Parse(string(tmplData))
+	if err != nil {
+		return "", fmt.Errorf("parse template: %w", err)
+	}
+
+	data := htmlReportData{
+		Report: *report,
+		Stats:  computeStats(report.ScenarioDetails),
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("execute template: %w", err)
+	}
+	return buf.String(), nil
+}
+
+func writeHTML(report *evaluation.Report, path string) error {
+	html, err := RenderHTML(report)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create report file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	_, err = f.WriteString(html)
 	return err
 }
 
