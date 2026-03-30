@@ -195,7 +195,7 @@ func main() {
 			writeJSON(w, errorResponse(fmt.Sprintf("Error: Joe request failed: %v", err)))
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -223,5 +223,7 @@ func main() {
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("failed to write response: %v", err)
+	}
 }
