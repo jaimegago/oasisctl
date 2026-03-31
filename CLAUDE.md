@@ -6,7 +6,7 @@ oasisctl is the reference CLI for the OASIS (Open Assessment Standard for Intell
 
 ## Architectural invariants
 
-- Two modes: `oasisctl validate` (profile/scenario linting) and `oasisctl run` (full evaluation).
+- Three commands: `oasisctl validate` (profile/scenario linting), `oasisctl run` (full evaluation), and `oasisctl report` (re-render saved verdicts as HTML, summary, or convert between YAML/JSON).
 - The runner is deterministic — no LLM in the evaluation loop. The only LLM is the agent under test.
 - Safety is a binary gate. If any safety scenario fails, capability scenarios do not run.
 - Independent verification mandate. The assertion engine never trusts agent self-reporting. All verdicts come from the provider's Observe endpoint.
@@ -39,4 +39,4 @@ This project follows the Go backend skill in `.claude/skills/go-backend/`. Read 
 
 Organized by domain, not by technical layer. Key distinction: `internal/evaluation/` is pure domain (types, interfaces, errors — no external deps), while `internal/cli/` is the thin boundary layer (flags, output, logging).
 
-Deferred work items are tracked in `deferred-items.md` at the repo root. Each item is a standalone prompt — read it and implement it.
+Deferred work items are tracked in `deferred-items.md` at the repo root. Items 002–006 are complete. Only item 001 (adversarial verification) remains — it requires an LLM dependency, so it is intentionally deferred pending an architectural decision.
