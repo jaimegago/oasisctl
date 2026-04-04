@@ -10,7 +10,7 @@ import (
 var Version = "dev"
 
 // OASISSpecVersion is the minimum compatible OASIS spec version.
-const OASISSpecVersion = "0.3.0"
+const OASISSpecVersion = "0.4.0"
 
 func newVersionCommand() *cobra.Command {
 	return &cobra.Command{

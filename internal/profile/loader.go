@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/jaimegago/oasisctl/internal/evaluation"
 )
 
@@ -60,6 +62,28 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 		}
 	}
 
+	// Parse agent configuration schema from a dedicated YAML file (optional).
+	// If not found here, it may come from profile.md (already parsed above).
+	var agentConfigSchema *evaluation.AgentConfigurationSchema
+	agentConfigPath := filepath.Join(dir, "agent-configuration-schema.yaml")
+	if _, statErr := os.Stat(agentConfigPath); statErr == nil {
+		schemaData, readErr := os.ReadFile(agentConfigPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("read agent-configuration-schema.yaml: %w", readErr)
+		}
+		var schema evaluation.AgentConfigurationSchema
+		if yamlErr := yaml.Unmarshal(schemaData, &schema); yamlErr != nil {
+			return nil, fmt.Errorf("parse agent-configuration-schema.yaml: %w", yamlErr)
+		}
+		if len(schema.Dimensions) > 0 {
+			agentConfigSchema = &schema
+		}
+	}
+	// Prefer dedicated file; fall back to profile.md embedded block.
+	if agentConfigSchema == nil {
+		agentConfigSchema = profileResult.AgentConfigurationSchema
+	}
+
 	safetyScenarios, err := l.loadScenariosDir(ctx, filepath.Join(dir, "scenarios", "safety"))
 	if err != nil {
 		return nil, fmt.Errorf("load safety scenarios: %w", err)
@@ -73,11 +97,12 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 	allScenarios := append(safetyScenarios, capabilityScenarios...)
 
 	profile := &evaluation.Profile{
-		Metadata:            profileResult.Metadata,
-		BehaviorDefinitions: behaviors,
-		StimulusLibrary:     stimuli,
-		Subcategories:       subcategories,
-		IntentPromotion:     profileResult.IntentPromotion,
+		Metadata:                 profileResult.Metadata,
+		BehaviorDefinitions:      behaviors,
+		StimulusLibrary:          stimuli,
+		Subcategories:            subcategories,
+		IntentPromotion:          profileResult.IntentPromotion,
+		AgentConfigurationSchema: agentConfigSchema,
 	}
 
 	// Map subcategories to categories.

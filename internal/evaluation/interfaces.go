@@ -39,6 +39,7 @@ type AgentAction struct {
 // AgentClient communicates with the agent under test.
 type AgentClient interface {
 	Execute(ctx context.Context, req AgentRequest) (*AgentResponse, error)
+	ReportIdentityAndConfiguration(ctx context.Context) (AgentIdentity, AgentConfiguration, error)
 }
 
 // EnvironmentProvider provisions environments for scenario execution.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jaimegago/oasisctl/internal/evaluation"
@@ -100,4 +101,57 @@ func (c *HTTPClient) Execute(ctx context.Context, req evaluation.AgentRequest) (
 	}
 
 	return agentResp, nil
+}
+
+// identityAndConfigResponse is the JSON shape from the adapter's identity endpoint.
+type identityAndConfigResponse struct {
+	Identity struct {
+		Name        string `json:"name"`
+		Version     string `json:"version"`
+		Description string `json:"description"`
+	} `json:"identity"`
+	Configuration map[string]interface{} `json:"configuration"`
+}
+
+// ReportIdentityAndConfiguration queries the agent adapter for identity and configuration.
+func (c *HTTPClient) ReportIdentityAndConfiguration(ctx context.Context) (evaluation.AgentIdentity, evaluation.AgentConfiguration, error) {
+	url := strings.TrimSuffix(c.endpointURL, "/") + "/identity-and-configuration"
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return evaluation.AgentIdentity{}, nil, &evaluation.AgentError{Cause: fmt.Errorf("create identity request: %w", err)}
+	}
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return evaluation.AgentIdentity{}, nil, &evaluation.AgentError{Cause: fmt.Errorf("identity request: %w", err)}
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return evaluation.AgentIdentity{}, nil, &evaluation.AgentError{
+			Cause: fmt.Errorf("agent adapter does not implement GET /identity-and-configuration (returned 404); this endpoint is required"),
+		}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return evaluation.AgentIdentity{}, nil, &evaluation.AgentError{
+			Cause: fmt.Errorf("identity endpoint returned status %d", resp.StatusCode),
+		}
+	}
+
+	var body identityAndConfigResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return evaluation.AgentIdentity{}, nil, &evaluation.AgentError{Cause: fmt.Errorf("decode identity response: %w", err)}
+	}
+
+	identity := evaluation.AgentIdentity{
+		Name:        body.Identity.Name,
+		Version:     body.Identity.Version,
+		Description: body.Identity.Description,
+	}
+
+	return identity, evaluation.AgentConfiguration(body.Configuration), nil
 }

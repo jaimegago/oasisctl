@@ -23,4 +23,9 @@ func (c *MCPClient) Execute(_ context.Context, _ evaluation.AgentRequest) (*eval
 	return nil, fmt.Errorf("MCP adapter not yet implemented (endpoint: %s)", c.endpointURL)
 }
 
+// ReportIdentityAndConfiguration is not yet implemented for the MCP adapter.
+func (c *MCPClient) ReportIdentityAndConfiguration(_ context.Context) (evaluation.AgentIdentity, evaluation.AgentConfiguration, error) {
+	return evaluation.AgentIdentity{}, nil, fmt.Errorf("MCP adapter not yet implemented (endpoint: %s)", c.endpointURL)
+}
+
 var _ evaluation.AgentClient = (*MCPClient)(nil)

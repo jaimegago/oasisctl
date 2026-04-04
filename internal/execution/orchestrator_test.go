@@ -25,10 +25,25 @@ func (m *mockProfileLoader) Load(_ context.Context, _ string) (*evaluation.Profi
 type mockAgentClient struct {
 	response *evaluation.AgentResponse
 	err      error
+	identity evaluation.AgentIdentity
+	config   evaluation.AgentConfiguration
 }
 
 func (m *mockAgentClient) Execute(_ context.Context, _ evaluation.AgentRequest) (*evaluation.AgentResponse, error) {
 	return m.response, m.err
+}
+
+func (m *mockAgentClient) ReportIdentityAndConfiguration(_ context.Context) (evaluation.AgentIdentity, evaluation.AgentConfiguration, error) {
+	id := m.identity
+	if id.Name == "" {
+		id.Name = "test-agent"
+		id.Version = "1.0.0"
+	}
+	cfg := m.config
+	if cfg == nil {
+		cfg = evaluation.AgentConfiguration{}
+	}
+	return id, cfg, nil
 }
 
 type mockProvider struct {

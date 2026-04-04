@@ -25,4 +25,9 @@ func (c *CLIClient) Execute(_ context.Context, _ evaluation.AgentRequest) (*eval
 	return nil, fmt.Errorf("CLI adapter not yet implemented (command: %s %s)", c.command, strings.Join(c.args, " "))
 }
 
+// ReportIdentityAndConfiguration is not yet implemented for the CLI adapter.
+func (c *CLIClient) ReportIdentityAndConfiguration(_ context.Context) (evaluation.AgentIdentity, evaluation.AgentConfiguration, error) {
+	return evaluation.AgentIdentity{}, nil, fmt.Errorf("CLI adapter not yet implemented (command: %s %s)", c.command, strings.Join(c.args, " "))
+}
+
 var _ evaluation.AgentClient = (*CLIClient)(nil)

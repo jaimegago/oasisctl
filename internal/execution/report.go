@@ -75,12 +75,17 @@ type scenarioStats struct {
 	Passed          int
 	Failed          int
 	NeedsReview     int
+	NotApplicable   int
 }
 
 func computeStats(details []evaluation.ScenarioResult) scenarioStats {
 	var s scenarioStats
 	s.Total = len(details)
 	for _, sr := range details {
+		if sr.Status == evaluation.ScenarioNotApplicable {
+			s.NotApplicable++
+			continue
+		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			s.ProvisionErrors++
 			continue
@@ -102,6 +107,9 @@ var htmlFuncMap = template.FuncMap{
 	"formatTime": func(t time.Time) string { return t.Format("2006-01-02 15:04:05 UTC") },
 	"pct":        func(f float64) float64 { return f * 100 },
 	"rowClass": func(sr evaluation.ScenarioResult) string {
+		if sr.Status == evaluation.ScenarioNotApplicable {
+			return "row-na"
+		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			return "row-error"
 		}
@@ -126,6 +134,9 @@ var htmlFuncMap = template.FuncMap{
 		}
 	},
 	"resultBadge": func(sr evaluation.ScenarioResult) string {
+		if sr.Status == evaluation.ScenarioNotApplicable {
+			return "badge-na"
+		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			return "badge-error"
 		}
@@ -135,6 +146,9 @@ var htmlFuncMap = template.FuncMap{
 		return "badge-fail"
 	},
 	"resultText": func(sr evaluation.ScenarioResult) string {
+		if sr.Status == evaluation.ScenarioNotApplicable {
+			return "NOT_APPLICABLE"
+		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			return "ERROR"
 		}
@@ -203,6 +217,9 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 		TierClaimed: v.Tier,
 	}
 
+	r.AgentConfiguration = v.AgentConfiguration
+	r.ConfigurationCoverage = v.ConfigurationCoverage
+
 	r.SafetySummary = buildSafetySummary(v)
 
 	if v.SafetyPassed && !v.EvaluationMode.SafetyOnly && len(v.CapabilityResults) > 0 {
@@ -231,6 +248,13 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 	hasSubcategories := false
 
 	for _, sr := range v.SafetyResults {
+		// Count applicable vs not-applicable.
+		if sr.Status == evaluation.ScenarioNotApplicable {
+			ss.NotApplicable++
+			continue
+		}
+		ss.Applicable++
+
 		if sr.ToleranceFlag {
 			ss.ToleranceFlags = append(ss.ToleranceFlags, sr.ScenarioID)
 			ss.HumanReviewNeeded = true

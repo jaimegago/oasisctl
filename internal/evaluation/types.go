@@ -4,23 +4,25 @@ import "time"
 
 // Scenario represents a single OASIS evaluation scenario as defined in spec 02-scenarios.md.
 type Scenario struct {
-	ID             string          `yaml:"id"`
-	Name           string          `yaml:"name"`
-	Version        string          `yaml:"version"`
-	Classification Classification  `yaml:"classification"`
-	Category       string          `yaml:"category"`
-	Archetype      string          `yaml:"archetype"`
-	Tier           int             `yaml:"tier"`
-	Subcategory    string          `yaml:"subcategory,omitempty" json:"subcategory,omitempty"`
-	Intent         string          `yaml:"intent,omitempty" json:"intent,omitempty"`
-	Description    string          `yaml:"description"`
-	Quality        QualityMetadata `yaml:"quality,omitempty"`
-	Preconditions  Preconditions   `yaml:"preconditions"`
-	Stimuli        []Stimulus      `yaml:"stimuli"`
-	Assertions     Assertions      `yaml:"assertions"`
-	Verification   Verification    `yaml:"verification"`
-	Scoring        Scoring         `yaml:"scoring"`
-	Observability  []string        `yaml:"observability_requirements"`
+	ID             string                 `yaml:"id"`
+	Name           string                 `yaml:"name"`
+	Version        string                 `yaml:"version"`
+	Classification Classification         `yaml:"classification"`
+	Category       string                 `yaml:"category"`
+	Archetype      string                 `yaml:"archetype"`
+	Tier           int                    `yaml:"tier"`
+	Subcategory    string                 `yaml:"subcategory,omitempty" json:"subcategory,omitempty"`
+	Intent         string                 `yaml:"intent,omitempty" json:"intent,omitempty"`
+	Description    string                 `yaml:"description"`
+	Quality        QualityMetadata        `yaml:"quality,omitempty"`
+	Preconditions  Preconditions          `yaml:"preconditions"`
+	Stimuli        []Stimulus             `yaml:"stimuli"`
+	Applicability  map[string]interface{} `yaml:"applicability,omitempty" json:"applicability,omitempty"`
+	Assertions     Assertions             `yaml:"assertions"`
+	Conditional    []ConditionalAssertion `yaml:"conditional,omitempty" json:"conditional,omitempty"`
+	Verification   Verification           `yaml:"verification"`
+	Scoring        Scoring                `yaml:"scoring"`
+	Observability  []string               `yaml:"observability_requirements"`
 }
 
 // QualityMetadata holds safety scenario quality fields.
@@ -130,17 +132,18 @@ type Suite struct {
 
 // Profile is the full in-memory representation of a loaded domain profile.
 type Profile struct {
-	Metadata             ProfileMetadata
-	Vocabulary           []VocabularyEntry
-	BehaviorDefinitions  map[string]BehaviorDefinition
-	InterfaceTypes       []string
-	StimulusLibrary      map[string]Stimulus
-	SafetyCategories     []Category
-	CapabilityCategories []Category
-	ScoringModel         ScoringModel
-	TierRequirements     map[int]TierRequirement
-	Subcategories        []SubcategoryDefinition
-	IntentPromotion      IntentPromotionConfig
+	Metadata                 ProfileMetadata
+	Vocabulary               []VocabularyEntry
+	BehaviorDefinitions      map[string]BehaviorDefinition
+	InterfaceTypes           []string
+	StimulusLibrary          map[string]Stimulus
+	SafetyCategories         []Category
+	CapabilityCategories     []Category
+	ScoringModel             ScoringModel
+	TierRequirements         map[int]TierRequirement
+	Subcategories            []SubcategoryDefinition
+	IntentPromotion          IntentPromotionConfig
+	AgentConfigurationSchema *AgentConfigurationSchema
 }
 
 // SubcategoryDefinition describes a subcategory that groups scenarios by safety property.
@@ -328,17 +331,18 @@ const (
 
 // ScenarioResult holds the outcome of a single scenario.
 type ScenarioResult struct {
-	ScenarioID       string            `json:"scenario_id" yaml:"scenario_id"`
-	Category         string            `json:"category" yaml:"category"`
-	Subcategory      string            `json:"subcategory,omitempty" yaml:"subcategory,omitempty"`
-	Archetype        string            `json:"archetype,omitempty" yaml:"archetype,omitempty"`
-	Passed           bool              `json:"passed" yaml:"passed"`
-	NeedsReview      bool              `json:"needs_review" yaml:"needs_review"`
-	ToleranceFlag    bool              `json:"tolerance_flag" yaml:"tolerance_flag"`
-	Score            float64           `json:"score" yaml:"score"`
-	AssertionResults []AssertionResult `json:"assertion_results,omitempty" yaml:"assertion_results,omitempty"`
-	Evidence         []string          `json:"evidence,omitempty" yaml:"evidence,omitempty"`
-	Errors           []string          `json:"errors,omitempty" yaml:"errors,omitempty"`
+	ScenarioID       string               `json:"scenario_id" yaml:"scenario_id"`
+	Category         string               `json:"category" yaml:"category"`
+	Subcategory      string               `json:"subcategory,omitempty" yaml:"subcategory,omitempty"`
+	Archetype        string               `json:"archetype,omitempty" yaml:"archetype,omitempty"`
+	Status           ScenarioResultStatus `json:"status,omitempty" yaml:"status,omitempty"`
+	Passed           bool                 `json:"passed" yaml:"passed"`
+	NeedsReview      bool                 `json:"needs_review" yaml:"needs_review"`
+	ToleranceFlag    bool                 `json:"tolerance_flag" yaml:"tolerance_flag"`
+	Score            float64              `json:"score" yaml:"score"`
+	AssertionResults []AssertionResult    `json:"assertion_results,omitempty" yaml:"assertion_results,omitempty"`
+	Evidence         []string             `json:"evidence,omitempty" yaml:"evidence,omitempty"`
+	Errors           []string             `json:"errors,omitempty" yaml:"errors,omitempty"`
 }
 
 // EvaluationMode describes which filters were active during an evaluation.
@@ -351,33 +355,37 @@ type EvaluationMode struct {
 
 // Verdict is the full evaluation result as per spec 05-reporting.md.
 type Verdict struct {
-	AgentID           string
-	AgentVersion      string
-	ProfileID         string
-	ProfileVersion    string
-	ProviderInfo      string
-	Tier              int
-	Date              time.Time
-	EvaluationMode    EvaluationMode
-	SafetyPassed      bool
-	SafetyGateSkipped bool
-	SafetyResults     []ScenarioResult
-	CapabilityScore   float64
-	CapabilityResults []ScenarioResult
-	DimensionScores   map[string]float64
-	CategoryScores    map[string]float64
-	ArchetypeScores   map[string]float64
-	Report            *Report
+	AgentID               string
+	AgentVersion          string
+	ProfileID             string
+	ProfileVersion        string
+	ProviderInfo          string
+	Tier                  int
+	Date                  time.Time
+	EvaluationMode        EvaluationMode
+	AgentConfiguration    AgentConfiguration
+	ConfigurationCoverage *ConfigurationCoverage
+	SafetyPassed          bool
+	SafetyGateSkipped     bool
+	SafetyResults         []ScenarioResult
+	CapabilityScore       float64
+	CapabilityResults     []ScenarioResult
+	DimensionScores       map[string]float64
+	CategoryScores        map[string]float64
+	ArchetypeScores       map[string]float64
+	Report                *Report
 }
 
 // Report is the full evaluation report.
 type Report struct {
-	Metadata          ReportMetadata      `json:"metadata" yaml:"metadata"`
-	Environment       ReportEnvironment   `json:"environment" yaml:"environment"`
-	SafetySummary     SafetySummary       `json:"safety_summary" yaml:"safety_summary"`
-	CapabilitySummary *CapabilitySummary  `json:"capability_summary,omitempty" yaml:"capability_summary,omitempty"`
-	CoverageMatrix    map[string][]string `json:"coverage_matrix,omitempty" yaml:"coverage_matrix,omitempty"`
-	ScenarioDetails   []ScenarioResult    `json:"scenario_details" yaml:"scenario_details"`
+	Metadata              ReportMetadata         `json:"metadata" yaml:"metadata"`
+	Environment           ReportEnvironment      `json:"environment" yaml:"environment"`
+	AgentConfiguration    AgentConfiguration     `json:"agent_configuration,omitempty" yaml:"agent_configuration,omitempty"`
+	ConfigurationCoverage *ConfigurationCoverage `json:"configuration_coverage,omitempty" yaml:"configuration_coverage,omitempty"`
+	SafetySummary         SafetySummary          `json:"safety_summary" yaml:"safety_summary"`
+	CapabilitySummary     *CapabilitySummary     `json:"capability_summary,omitempty" yaml:"capability_summary,omitempty"`
+	CoverageMatrix        map[string][]string    `json:"coverage_matrix,omitempty" yaml:"coverage_matrix,omitempty"`
+	ScenarioDetails       []ScenarioResult       `json:"scenario_details" yaml:"scenario_details"`
 }
 
 // ReportMetadata holds report header information.
@@ -403,6 +411,8 @@ type ReportEnvironment struct {
 // SafetySummary holds the safety gate outcome.
 type SafetySummary struct {
 	Passed             bool                         `json:"passed" yaml:"passed"`
+	Applicable         int                          `json:"applicable" yaml:"applicable"`
+	NotApplicable      int                          `json:"not_applicable" yaml:"not_applicable"`
 	CategoryResults    map[string]bool              `json:"category_results" yaml:"category_results"`
 	SubcategoryResults map[string]SubcategoryResult `json:"subcategory_results,omitempty" yaml:"subcategory_results,omitempty"`
 	ToleranceFlags     []string                     `json:"tolerance_flags,omitempty" yaml:"tolerance_flags,omitempty"`

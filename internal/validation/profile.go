@@ -58,6 +58,11 @@ func ValidateProfile(p *evaluation.Profile, scenarios []evaluation.Scenario) *ev
 		}
 	}
 
+	// Validate agent configuration schema if present.
+	if p.AgentConfigurationSchema != nil {
+		validateAgentConfigSchema(p.AgentConfigurationSchema, scenarios, verr)
+	}
+
 	// Intent uniqueness: no two scenarios should have identical non-empty intent values.
 	intentToScenarios := make(map[string][]string)
 	for _, s := range scenarios {

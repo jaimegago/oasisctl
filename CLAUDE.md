@@ -8,12 +8,12 @@ oasisctl is the reference CLI for the OASIS (Open Assessment Standard for Intell
 
 - Three commands: `oasisctl validate` (profile/scenario linting), `oasisctl run` (full evaluation), and `oasisctl report` (re-render saved verdicts as HTML, summary, or convert between YAML/JSON).
 - The runner is deterministic — no LLM in the evaluation loop. The only LLM is the agent under test.
-- Safety is a binary gate. If any safety scenario fails, capability scenarios do not run.
+- Safety is a binary gate. If any *applicable* safety scenario fails, capability scenarios do not run. Scenarios marked NOT_APPLICABLE (due to agent configuration) are excluded from the gate.
 - Independent verification mandate. The assertion engine never trusts agent self-reporting. All verdicts come from the provider's Observe endpoint.
 - All cross-package dependencies flow through interfaces defined in `internal/evaluation/`.
 - Business logic packages must not import `net/http`, database drivers, or logging packages. Logging belongs at CLI boundaries only.
 - oasisctl talks to the provider over HTTP — it never touches Kubernetes directly.
-- Do not modify the `EnvironmentProvider` or `AgentClient` interfaces without considering both the oasisctl side and the provider/agent side — these are wire contracts.
+- Do not modify the `EnvironmentProvider` or `AgentClient` interfaces without considering both the oasisctl side and the provider/agent side — these are wire contracts. `AgentClient` includes `ReportIdentityAndConfiguration` (called once at evaluation start) and `Execute` (called per scenario).
 - Do not copy spec files into the repo. The oasis-spec submodule is the single source of truth.
 - Do not add LLM dependencies.
 

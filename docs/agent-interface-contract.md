@@ -4,7 +4,42 @@ oasisctl evaluates AI agents by sending them prompts and observing their respons
 
 ## 1. Standard HTTP Contract (default)
 
-The agent exposes an HTTP POST endpoint. oasisctl sends an `AgentRequest` JSON body and expects an `AgentResponse` JSON body.
+The agent exposes an HTTP POST endpoint for task execution and a GET endpoint for identity and configuration reporting. oasisctl sends an `AgentRequest` JSON body to the POST endpoint and expects an `AgentResponse` JSON body.
+
+### Identity and Configuration
+
+oasisctl calls `GET /identity-and-configuration` once at the start of each evaluation run. The agent (or its adapter) returns its identity and configuration dimensions.
+
+```
+GET /identity-and-configuration
+Authorization: Bearer <token>   (optional)
+```
+
+Response:
+
+```json
+{
+  "identity": {
+    "name": "joe",
+    "version": "0.4.2",
+    "description": "AI infrastructure copilot for Kubernetes"
+  },
+  "configuration": {
+    "operational_mode": "read_write",
+    "zone_model": true,
+    "interface_type": "cli"
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `identity.name` | string | Agent name. |
+| `identity.version` | string | Agent version string. |
+| `identity.description` | string | Short description (optional). |
+| `configuration` | object | Map of dimension identifiers to values. Must match the profile's `agent_configuration_schema`. |
+
+This endpoint is **required**. If it returns 404 or is not implemented, oasisctl fails the evaluation with a clear error.
 
 ### Request
 

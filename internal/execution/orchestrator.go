@@ -164,6 +164,28 @@ func (o *Orchestrator) Run(
 		}, nil
 	}
 
+	// 3b. Query agent for identity and configuration.
+	identity, rawConfig, err := o.agent.ReportIdentityAndConfiguration(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("agent identity and configuration: %w", err)
+	}
+	o.logger.Info("agent identified", "name", identity.Name, "version", identity.Version)
+
+	// 3c. Resolve configuration against profile schema.
+	var effectiveConfig evaluation.AgentConfiguration
+	if profile.AgentConfigurationSchema != nil {
+		effectiveConfig, err = ResolveConfiguration(rawConfig, profile.AgentConfigurationSchema)
+		if err != nil {
+			return nil, fmt.Errorf("resolve agent configuration: %w", err)
+		}
+	} else {
+		effectiveConfig = rawConfig
+	}
+
+	// Use agent identity for verdict metadata.
+	agentID = identity.Name
+	agentVersion := identity.Version
+
 	// 4. Split into safety / capability lists.
 	var safetyScenarios, capabilityScenarios []evaluation.Scenario
 	for _, s := range filtered {
@@ -175,29 +197,36 @@ func (o *Orchestrator) Run(
 	}
 
 	verdict := &evaluation.Verdict{
-		AgentID:        agentID,
-		ProfileID:      profile.Metadata.Name,
-		ProfileVersion: profile.Metadata.Version,
-		ProviderInfo:   providerInfo,
-		Tier:           o.cfg.Tier,
-		Date:           time.Now().UTC(),
-		EvaluationMode: evalMode,
+		AgentID:            agentID,
+		AgentVersion:       agentVersion,
+		ProfileID:          profile.Metadata.Name,
+		ProfileVersion:     profile.Metadata.Version,
+		ProviderInfo:       providerInfo,
+		Tier:               o.cfg.Tier,
+		Date:               time.Now().UTC(),
+		EvaluationMode:     evalMode,
+		AgentConfiguration: effectiveConfig,
 	}
 
 	// 5. Phase 1 — Safety gate.
-	verdict.SafetyResults = o.runScenariosParallel(ctx, safetyScenarios, profile, evaluation.ClassificationSafety)
+	verdict.SafetyResults = o.runScenariosParallel(ctx, safetyScenarios, profile, evaluation.ClassificationSafety, effectiveConfig)
 	safetyGateFailed := false
 	for _, r := range verdict.SafetyResults {
+		// NOT_APPLICABLE scenarios are excluded from pass/fail.
+		if r.Status == evaluation.ScenarioNotApplicable {
+			continue
+		}
 		if !r.Passed {
 			safetyGateFailed = true
 		}
 	}
 
-	// 6. Compute safety verdict.
+	// 6. Compute safety verdict — "all applicable scenarios must pass".
 	verdict.SafetyPassed = !safetyGateFailed
 
 	// 6b. Safety-only mode: skip capability phase entirely.
 	if o.cfg.SafetyOnly {
+		verdict.ConfigurationCoverage = ComputeConfigurationCoverage(verdict.SafetyResults)
 		if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
 			return verdict, fmt.Errorf("write report: %w", err)
 		}
@@ -205,6 +234,7 @@ func (o *Orchestrator) Run(
 	}
 
 	if safetyGateFailed {
+		verdict.ConfigurationCoverage = ComputeConfigurationCoverage(verdict.SafetyResults)
 		if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
 			return verdict, fmt.Errorf("write report: %w", err)
 		}
@@ -212,7 +242,7 @@ func (o *Orchestrator) Run(
 	}
 
 	// 7. Phase 2 — Capability scoring.
-	verdict.CapabilityResults = o.runScenariosParallel(ctx, capabilityScenarios, profile, evaluation.ClassificationCapability)
+	verdict.CapabilityResults = o.runScenariosParallel(ctx, capabilityScenarios, profile, evaluation.ClassificationCapability, effectiveConfig)
 
 	// 8. Aggregate scores.
 	archetypeScores := AggregateArchetype(verdict.CapabilityResults, capabilityScenarios)
@@ -232,7 +262,11 @@ func (o *Orchestrator) Run(
 		verdict.CapabilityScore = total / float64(len(dimensionScores))
 	}
 
-	// 9. Build and emit report.
+	// 9. Compute configuration coverage across all results.
+	allResults := append(verdict.SafetyResults, verdict.CapabilityResults...)
+	verdict.ConfigurationCoverage = ComputeConfigurationCoverage(allResults)
+
+	// 10. Build and emit report.
 	if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
 		return verdict, fmt.Errorf("write report: %w", err)
 	}
@@ -247,6 +281,7 @@ func (o *Orchestrator) runScenariosParallel(
 	scenarios []evaluation.Scenario,
 	profile *evaluation.Profile,
 	classification evaluation.Classification,
+	agentConfig evaluation.AgentConfiguration,
 ) []evaluation.ScenarioResult {
 	if len(scenarios) == 0 {
 		return nil
@@ -257,7 +292,7 @@ func (o *Orchestrator) runScenariosParallel(
 	if workers <= 1 {
 		// Sequential fallback.
 		for i, s := range scenarios {
-			results[i] = o.runScenario(ctx, s, profile, classification)
+			results[i] = o.runScenario(ctx, s, profile, classification, agentConfig)
 		}
 		return results
 	}
@@ -271,7 +306,7 @@ func (o *Orchestrator) runScenariosParallel(
 			defer wg.Done()
 			sem <- struct{}{}        // acquire
 			defer func() { <-sem }() // release
-			results[idx] = o.runScenario(ctx, sc, profile, classification)
+			results[idx] = o.runScenario(ctx, sc, profile, classification, agentConfig)
 		}(i, s)
 	}
 
@@ -285,12 +320,37 @@ func (o *Orchestrator) runScenario(
 	s evaluation.Scenario,
 	profile *evaluation.Profile,
 	classification evaluation.Classification,
+	agentConfig evaluation.AgentConfiguration,
 ) evaluation.ScenarioResult {
 	scenarioCtx, cancel := context.WithTimeout(ctx, o.cfg.Timeout)
 	defer cancel()
 
 	if o.cfg.Verbose {
 		o.logger.Info("running scenario", "id", s.ID, "classification", string(classification))
+	}
+
+	// Check applicability before provisioning.
+	if !IsApplicable(&s, agentConfig) {
+		if o.cfg.Verbose {
+			o.logger.Info("scenario not applicable", "id", s.ID)
+		}
+		return evaluation.ScenarioResult{
+			ScenarioID:  s.ID,
+			Category:    s.Category,
+			Subcategory: s.Subcategory,
+			Archetype:   s.Archetype,
+			Status:      evaluation.ScenarioNotApplicable,
+			Passed:      true, // NOT_APPLICABLE is not a failure
+		}
+	}
+
+	// Merge conditional assertions based on agent configuration.
+	if len(s.Conditional) > 0 {
+		merged, mergeErr := MergeConditionalAssertions(s.Assertions, s.Conditional, agentConfig)
+		if mergeErr != nil {
+			return errorResult(s.ID, fmt.Sprintf("merge conditional assertions: %v", mergeErr))
+		}
+		s.Assertions = merged
 	}
 
 	// a. Provision environment.
@@ -351,6 +411,11 @@ func (o *Orchestrator) runScenario(
 	result.Category = s.Category
 	result.Subcategory = s.Subcategory
 	result.Archetype = s.Archetype
+	if result.Passed {
+		result.Status = evaluation.ScenarioPass
+	} else {
+		result.Status = evaluation.ScenarioFail
+	}
 
 	_ = profile
 	return *result

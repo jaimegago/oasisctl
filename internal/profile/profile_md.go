@@ -13,8 +13,9 @@ import (
 
 // profileMDResult holds everything parsed from profile.md.
 type profileMDResult struct {
-	Metadata        evaluation.ProfileMetadata
-	IntentPromotion evaluation.IntentPromotionConfig
+	Metadata                 evaluation.ProfileMetadata
+	IntentPromotion          evaluation.IntentPromotionConfig
+	AgentConfigurationSchema *evaluation.AgentConfigurationSchema
 }
 
 // parseProfileMD parses the profile.md file for metadata and intent promotion config.
@@ -45,6 +46,11 @@ func parseProfileMD(path string) (profileMDResult, error) {
 			cfg, err := parseIntentPromotionYAML(yamlLines)
 			if err == nil && (len(cfg.RequiredFor) > 0 || len(cfg.RecommendedFor) > 0) {
 				result.IntentPromotion = cfg
+			}
+			// Try to parse as agent configuration schema.
+			schema, err := parseAgentConfigSchemaYAML(yamlLines)
+			if err == nil && schema != nil && len(schema.Dimensions) > 0 {
+				result.AgentConfigurationSchema = schema
 			}
 			continue
 		}
@@ -107,4 +113,19 @@ func parseIntentPromotionYAML(lines []string) (evaluation.IntentPromotionConfig,
 		return evaluation.IntentPromotionConfig{}, err
 	}
 	return wrapper.ProfileValidation.Intent, nil
+}
+
+// agentConfigSchemaWrapper is the YAML structure wrapping the agent configuration schema.
+type agentConfigSchemaWrapper struct {
+	AgentConfigurationSchema *evaluation.AgentConfigurationSchema `yaml:"agent_configuration_schema"`
+}
+
+// parseAgentConfigSchemaYAML parses the agent configuration schema from a YAML block in profile.md.
+func parseAgentConfigSchemaYAML(lines []string) (*evaluation.AgentConfigurationSchema, error) {
+	raw := strings.Join(lines, "\n")
+	var wrapper agentConfigSchemaWrapper
+	if err := yaml.Unmarshal([]byte(raw), &wrapper); err != nil {
+		return nil, err
+	}
+	return wrapper.AgentConfigurationSchema, nil
 }

@@ -36,8 +36,18 @@ oasisctl run \
 | `--safety-only` | bool | `false` | Run only safety scenarios, skip capability scoring |
 | `--category` | string slice | | Filter scenarios by category (repeatable) |
 | `--subcategory` | string slice | | Filter scenarios by subcategory (repeatable) |
+| `--scenario` | string slice | | Filter scenarios by ID glob pattern (repeatable) |
 
 CLI flags override values from `--config`. See [run-config.yaml](examples/run-config.yaml) for the config file format.
+
+### Agent configuration schema
+
+If the profile defines an `agent_configuration_schema`, oasisctl queries the agent adapter's `GET /identity-and-configuration` endpoint at evaluation start. The reported configuration is used to:
+
+- **Filter scenarios** — scenarios with `applicability` conditions that don't match the agent's configuration are marked `NOT_APPLICABLE` (not PASS, not FAIL).
+- **Merge conditional assertions** — scenarios with `conditional` assertion blocks are merged based on the agent's configuration.
+- **Populate the verdict** — the agent's name, version, and configuration appear in the report metadata.
+- **Emit coverage warnings** — if more than 50% of scenarios in a safety category are `NOT_APPLICABLE`, the report includes a warning.
 
 ### Filtering modes
 
@@ -61,6 +71,13 @@ Run only specific subcategories:
 ```bash
 oasisctl run --profile ./profiles/sw-infra --provider-url http://provider:9090 \
   --agent-url http://agent:8080 --tier 1 --subcategory permission-boundary
+```
+
+Run only specific scenarios by ID pattern:
+
+```bash
+oasisctl run --profile ./profiles/sw-infra --provider-url http://provider:9090 \
+  --agent-url http://agent:8080 --tier 1 --scenario "safety.sec.*"
 ```
 
 Flags combine: `--safety-only --category X` runs only safety scenarios in category X. When any filter is active the report is labeled as incomplete (except `--safety-only` alone, which is a conformant safety assessment).
@@ -131,7 +148,7 @@ No flags. Output:
 
 ```
 oasisctl <version>
-OASIS spec compatibility: >= 0.3.0
+OASIS spec compatibility: >= 0.4.0
 ```
 
 ## oasisctl report html

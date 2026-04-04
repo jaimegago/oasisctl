@@ -41,6 +41,19 @@ type AgentAction struct {
 	Result    string                 `json:"result"`
 }
 
+// Identity and configuration types.
+
+type IdentityAndConfigResponse struct {
+	Identity      AgentIdentityResponse  `json:"identity"`
+	Configuration map[string]interface{} `json:"configuration"`
+}
+
+type AgentIdentityResponse struct {
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Description string `json:"description"`
+}
+
 // Joe request/response types.
 
 type JoeRequest struct {
@@ -76,6 +89,17 @@ type JoeToolCall struct {
 type JoeToolResult struct {
 	Tool   string `json:"tool"`
 	Result string `json:"result"`
+}
+
+// adapterConfig holds CLI flags for the adapter.
+type adapterConfig struct {
+	listen          string
+	joeURL          string
+	joeToken        string
+	timeout         time.Duration
+	operationalMode string
+	zoneModel       bool
+	joeVersion      string
 }
 
 func modeToSafetyTier(mode string) string {
@@ -137,20 +161,39 @@ func errorResponse(msg string) *AgentResponse {
 }
 
 func main() {
-	listen := flag.String("listen", ":8091", "address to listen on")
-	joeURL := flag.String("joe-url", "", "Joe's HTTP API base URL (required)")
-	joeToken := flag.String("joe-token", "", "bearer token for Joe's API")
-	timeout := flag.Duration("timeout", 3*time.Minute, "per-request timeout")
-	flag.Parse()
+	cfg := parseFlags()
 
-	if *joeURL == "" {
-		log.Fatal("--joe-url is required")
-	}
+	joeEndpoint := strings.TrimRight(cfg.joeURL, "/") + "/api/v1/tasks"
+	client := &http.Client{Timeout: cfg.timeout}
 
-	joeEndpoint := strings.TrimRight(*joeURL, "/") + "/api/v1/tasks"
-	client := &http.Client{Timeout: *timeout}
+	mux := http.NewServeMux()
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	// GET /identity-and-configuration — returns agent identity and configuration.
+	mux.HandleFunc("/identity-and-configuration", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		resp := IdentityAndConfigResponse{
+			Identity: AgentIdentityResponse{
+				Name:        "joe",
+				Version:     cfg.joeVersion,
+				Description: "AI infrastructure copilot for Kubernetes",
+			},
+			Configuration: map[string]interface{}{
+				"operational_mode": cfg.operationalMode,
+				"zone_model":       cfg.zoneModel,
+				"interface_type":   "cli",
+			},
+		}
+
+		writeJSON(w, resp)
+	})
+
+	// POST / — agent execution requests.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -177,7 +220,7 @@ func main() {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(r.Context(), *timeout)
+		ctx, cancel := context.WithTimeout(r.Context(), cfg.timeout)
 		defer cancel()
 
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, joeEndpoint, bytes.NewReader(body))
@@ -186,8 +229,8 @@ func main() {
 			return
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		if *joeToken != "" {
-			httpReq.Header.Set("Authorization", "Bearer "+*joeToken)
+		if cfg.joeToken != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+cfg.joeToken)
 		}
 
 		resp, err := client.Do(httpReq)
@@ -217,8 +260,32 @@ func main() {
 		writeJSON(w, translateResponse(&joeResp))
 	})
 
-	log.Printf("joe-adapter listening on %s, forwarding to %s", *listen, joeEndpoint)
-	log.Fatal(http.ListenAndServe(*listen, nil))
+	log.Printf("joe-adapter listening on %s, forwarding to %s", cfg.listen, joeEndpoint)
+	log.Fatal(http.ListenAndServe(cfg.listen, mux))
+}
+
+func parseFlags() adapterConfig {
+	var cfg adapterConfig
+	flag.StringVar(&cfg.listen, "listen", ":8091", "address to listen on")
+	flag.StringVar(&cfg.joeURL, "joe-url", "", "Joe's HTTP API base URL (required)")
+	flag.StringVar(&cfg.joeToken, "joe-token", "", "bearer token for Joe's API")
+	flag.DurationVar(&cfg.timeout, "timeout", 3*time.Minute, "per-request timeout")
+	flag.StringVar(&cfg.operationalMode, "operational-mode", "", "Joe's operational mode: read_only or read_write (required)")
+	flag.BoolVar(&cfg.zoneModel, "zone-model", true, "whether Joe has security zones enabled")
+	flag.StringVar(&cfg.joeVersion, "joe-version", "unknown", "Joe's version string")
+	flag.Parse()
+
+	if cfg.joeURL == "" {
+		log.Fatal("--joe-url is required")
+	}
+	if cfg.operationalMode == "" {
+		log.Fatal("--operational-mode is required (must be read_only or read_write)")
+	}
+	if cfg.operationalMode != "read_only" && cfg.operationalMode != "read_write" {
+		log.Fatalf("--operational-mode must be read_only or read_write, got %q", cfg.operationalMode)
+	}
+
+	return cfg
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

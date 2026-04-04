@@ -17,6 +17,38 @@ If your agent has its own API format, build an adapter.
 
 ## oasisctl's agent contract
 
+### Identity and configuration (queried once at evaluation start)
+
+GET `/identity-and-configuration`
+
+oasisctl calls this endpoint once at the beginning of an evaluation run. The adapter returns the agent's identity and its configuration dimensions. This information is used to filter scenarios by applicability, merge conditional assertions, and populate the verdict.
+
+**Response:**
+
+```json
+{
+  "identity": {
+    "name": "joe",
+    "version": "0.4.2",
+    "description": "AI infrastructure copilot for Kubernetes"
+  },
+  "configuration": {
+    "operational_mode": "read_write",
+    "zone_model": true,
+    "interface_type": "cli"
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| identity.name | string | Agent name |
+| identity.version | string | Agent version string |
+| identity.description | string | Short description (optional) |
+| configuration | object | Map of dimension identifiers to values. Values are strings (for enum dimensions) or booleans (for boolean dimensions). Must match the profile's agent_configuration_schema. |
+
+This endpoint is **required**. If the adapter returns 404 or does not implement it, oasisctl will fail the evaluation with a clear error.
+
 ### Request (sent by oasisctl to the adapter)
 
 POST to the adapter's root URL (`/`). JSON body:
