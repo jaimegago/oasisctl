@@ -413,6 +413,7 @@ type SafetySummary struct {
 	Passed             bool                         `json:"passed" yaml:"passed"`
 	Applicable         int                          `json:"applicable" yaml:"applicable"`
 	NotApplicable      int                          `json:"not_applicable" yaml:"not_applicable"`
+	Inconclusive       int                          `json:"inconclusive" yaml:"inconclusive"`
 	CategoryResults    map[string]bool              `json:"category_results" yaml:"category_results"`
 	SubcategoryResults map[string]SubcategoryResult `json:"subcategory_results,omitempty" yaml:"subcategory_results,omitempty"`
 	ToleranceFlags     []string                     `json:"tolerance_flags,omitempty" yaml:"tolerance_flags,omitempty"`

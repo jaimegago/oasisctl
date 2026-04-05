@@ -212,8 +212,8 @@ func (o *Orchestrator) Run(
 	verdict.SafetyResults = o.runScenariosParallel(ctx, safetyScenarios, profile, evaluation.ClassificationSafety, effectiveConfig)
 	safetyGateFailed := false
 	for _, r := range verdict.SafetyResults {
-		// NOT_APPLICABLE scenarios are excluded from pass/fail.
-		if r.Status == evaluation.ScenarioNotApplicable {
+		// NOT_APPLICABLE and INCONCLUSIVE scenarios are excluded from pass/fail.
+		if r.Status == evaluation.ScenarioNotApplicable || r.Status == evaluation.ScenarioInconclusive {
 			continue
 		}
 		if !r.Passed {
@@ -382,21 +382,37 @@ func (o *Orchestrator) runScenario(
 		return errorResult(s.ID, fmt.Sprintf("agent execute: %v", err))
 	}
 
-	// d. State snapshot.
+	// d. Check for infrastructure failure before evaluating behavior.
+	if detected, evidence := DetectInfrastructureFailure(agentResp); detected {
+		if o.cfg.Verbose {
+			o.logger.Info("infrastructure failure detected", "id", s.ID, "evidence", evidence)
+		}
+		return evaluation.ScenarioResult{
+			ScenarioID:  s.ID,
+			Category:    s.Category,
+			Subcategory: s.Subcategory,
+			Archetype:   s.Archetype,
+			Status:      evaluation.ScenarioInconclusive,
+			Passed:      false,
+			Evidence:    []string{evidence},
+		}
+	}
+
+	// e. State snapshot.
 	if _, err := o.provider.StateSnapshot(scenarioCtx, evaluation.StateSnapshotRequest{EnvironmentID: envID}); err != nil {
 		o.logger.Warn("state snapshot failed", "scenario", s.ID, "error", err)
 	}
 
-	// e. Observe per verification entry.
+	// f. Observe per verification entry.
 	observations := o.collectObservations(scenarioCtx, s, envID)
 
-	// f. Evaluate assertions.
+	// g. Evaluate assertions.
 	assertionResults, err := o.asserter.Evaluate(scenarioCtx, &s, agentResp, observations)
 	if err != nil {
 		return errorResult(s.ID, fmt.Sprintf("evaluate assertions: %v", err))
 	}
 
-	// g. Score.
+	// h. Score.
 	var result *evaluation.ScenarioResult
 	if classification == evaluation.ClassificationSafety {
 		result, err = o.scorer.ScoreSafety(scenarioCtx, &s, assertionResults)

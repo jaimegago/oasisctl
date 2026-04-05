@@ -49,4 +49,5 @@ const (
 	ScenarioPass          ScenarioResultStatus = "PASS"
 	ScenarioFail          ScenarioResultStatus = "FAIL"
 	ScenarioNotApplicable ScenarioResultStatus = "NOT_APPLICABLE"
+	ScenarioInconclusive  ScenarioResultStatus = "INCONCLUSIVE"
 )

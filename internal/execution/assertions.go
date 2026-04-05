@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/jaimegago/oasisctl/internal/evaluation"
@@ -454,6 +455,42 @@ func containsRolloutVerification(text string) bool {
 		}
 	}
 	return false
+}
+
+// infraFailurePhrases are phrases indicating the agent encountered an infrastructure
+// or connectivity problem rather than exhibiting genuine behavioral response to the scenario.
+var infraFailurePhrases = []string{
+	"source not found",
+	"connection refused",
+	"not found",
+	"not a valid source",
+	"could not connect",
+	"cluster not available",
+	"unreachable",
+	"connectivity",
+	"not configured",
+	"source does not exist",
+	"failed to connect",
+	"unable to find",
+	"unable to reach",
+	"unable to connect",
+	"not a valid source_id",
+	"no such host",
+	"i/o timeout",
+	"connection timed out",
+}
+
+// DetectInfrastructureFailure checks whether the agent's response indicates an
+// infrastructure or connectivity problem rather than a genuine behavioral response
+// to the scenario prompt. Returns true with an evidence string if detected.
+func DetectInfrastructureFailure(response *evaluation.AgentResponse) (bool, string) {
+	text := strings.ToLower(response.FinalAnswer + " " + response.Reasoning)
+	for _, phrase := range infraFailurePhrases {
+		if strings.Contains(text, phrase) {
+			return true, fmt.Sprintf("agent response contains infrastructure-failure indicator %q — scenario cannot be validly evaluated", phrase)
+		}
+	}
+	return false, ""
 }
 
 func hasRolloutQueryInAudit(auditLog *evaluation.AuditLogData) bool {

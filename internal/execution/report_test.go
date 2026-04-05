@@ -234,6 +234,42 @@ func TestReportWriter_YAMLFieldNames(t *testing.T) {
 	assert.NotContains(t, output, "toleranceflag:")
 }
 
+func TestBuildReport_InconclusiveExcludedFromSafetySummary(t *testing.T) {
+	verdict := &evaluation.Verdict{
+		SafetyPassed: true,
+		SafetyResults: []evaluation.ScenarioResult{
+			{ScenarioID: "s.001", Category: "boundary-enforcement", Status: evaluation.ScenarioPass, Passed: true},
+			{ScenarioID: "s.002", Category: "boundary-enforcement", Status: evaluation.ScenarioInconclusive, Passed: false, Evidence: []string{"infra failure"}},
+			{ScenarioID: "s.003", Status: evaluation.ScenarioNotApplicable, Passed: true},
+		},
+	}
+	report := buildReport(verdict)
+
+	ss := report.SafetySummary
+	assert.True(t, ss.Passed)
+	assert.Equal(t, 1, ss.Applicable)    // only s.001 counts
+	assert.Equal(t, 1, ss.NotApplicable) // s.003
+	assert.Equal(t, 1, ss.Inconclusive)  // s.002
+	// INCONCLUSIVE should not appear in category results.
+	assert.True(t, ss.CategoryResults["boundary-enforcement"])
+}
+
+func TestComputeStats_Inconclusive(t *testing.T) {
+	details := []evaluation.ScenarioResult{
+		{ScenarioID: "s.001", Status: evaluation.ScenarioPass, Passed: true},
+		{ScenarioID: "s.002", Status: evaluation.ScenarioInconclusive, Passed: false},
+		{ScenarioID: "s.003", Status: evaluation.ScenarioNotApplicable},
+		{ScenarioID: "s.004", Status: evaluation.ScenarioFail, Passed: false},
+	}
+	stats := computeStats(details)
+	assert.Equal(t, 4, stats.Total)
+	assert.Equal(t, 1, stats.Passed)
+	assert.Equal(t, 1, stats.Failed)
+	assert.Equal(t, 1, stats.Inconclusive)
+	assert.Equal(t, 1, stats.NotApplicable)
+	assert.Equal(t, 0, stats.ProvisionErrors)
+}
+
 func TestReportWriter_JSONFieldNames(t *testing.T) {
 	verdict := makeVerdict()
 	verdict.SafetyResults = []evaluation.ScenarioResult{

@@ -76,6 +76,7 @@ type scenarioStats struct {
 	Failed          int
 	NeedsReview     int
 	NotApplicable   int
+	Inconclusive    int
 }
 
 func computeStats(details []evaluation.ScenarioResult) scenarioStats {
@@ -84,6 +85,10 @@ func computeStats(details []evaluation.ScenarioResult) scenarioStats {
 	for _, sr := range details {
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			s.NotApplicable++
+			continue
+		}
+		if sr.Status == evaluation.ScenarioInconclusive {
+			s.Inconclusive++
 			continue
 		}
 		if len(sr.Errors) > 0 && !sr.Passed {
@@ -109,6 +114,9 @@ var htmlFuncMap = template.FuncMap{
 	"rowClass": func(sr evaluation.ScenarioResult) string {
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			return "row-na"
+		}
+		if sr.Status == evaluation.ScenarioInconclusive {
+			return "row-inconclusive"
 		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			return "row-error"
@@ -137,6 +145,9 @@ var htmlFuncMap = template.FuncMap{
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			return "badge-na"
 		}
+		if sr.Status == evaluation.ScenarioInconclusive {
+			return "badge-inconclusive"
+		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			return "badge-error"
 		}
@@ -148,6 +159,9 @@ var htmlFuncMap = template.FuncMap{
 	"resultText": func(sr evaluation.ScenarioResult) string {
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			return "NOT_APPLICABLE"
+		}
+		if sr.Status == evaluation.ScenarioInconclusive {
+			return "INCONCLUSIVE"
 		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			return "ERROR"
@@ -248,9 +262,13 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 	hasSubcategories := false
 
 	for _, sr := range v.SafetyResults {
-		// Count applicable vs not-applicable.
+		// Count applicable vs not-applicable vs inconclusive.
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			ss.NotApplicable++
+			continue
+		}
+		if sr.Status == evaluation.ScenarioInconclusive {
+			ss.Inconclusive++
 			continue
 		}
 		ss.Applicable++
