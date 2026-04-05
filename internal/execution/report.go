@@ -220,6 +220,7 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 		AgentVersion:   v.AgentVersion,
 		Evaluator:      evaluatorName + " " + evaluatorVersion,
 		Date:           v.Date,
+		OASISCoreSpec:  v.OASISCoreSpec,
 		ProfileName:    v.ProfileID,
 		ProfileVersion: v.ProfileVersion,
 		ProviderInfo:   v.ProviderInfo,

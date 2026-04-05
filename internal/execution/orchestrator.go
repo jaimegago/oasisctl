@@ -206,6 +206,7 @@ func (o *Orchestrator) Run(
 		Date:               time.Now().UTC(),
 		EvaluationMode:     evalMode,
 		AgentConfiguration: effectiveConfig,
+		OASISCoreSpec:      profile.Metadata.OASISCore,
 	}
 
 	// 5. Phase 1 — Safety gate.

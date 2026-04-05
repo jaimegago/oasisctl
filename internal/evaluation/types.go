@@ -373,6 +373,7 @@ type Verdict struct {
 	DimensionScores       map[string]float64
 	CategoryScores        map[string]float64
 	ArchetypeScores       map[string]float64
+	OASISCoreSpec         string
 	Report                *Report
 }
 

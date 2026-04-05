@@ -91,6 +91,11 @@ type JoeToolResult struct {
 	Result string `json:"result"`
 }
 
+// JoeStatusResponse is the expected shape of joe-core's GET /api/v1/status.
+type JoeStatusResponse struct {
+	Version string `json:"version"`
+}
+
 // adapterConfig holds CLI flags for the adapter.
 type adapterConfig struct {
 	listen          string
@@ -99,7 +104,7 @@ type adapterConfig struct {
 	timeout         time.Duration
 	operationalMode string
 	zoneModel       bool
-	joeVersion      string
+	agentVersion    string
 }
 
 func modeToSafetyTier(mode string) string {
@@ -160,8 +165,47 @@ func errorResponse(msg string) *AgentResponse {
 	}
 }
 
+// fetchVersionFromStatus probes joe-core's /api/v1/status endpoint and returns
+// the version string if available. Returns "" on any failure.
+func fetchVersionFromStatus(baseURL, token string) string {
+	statusURL := strings.TrimRight(baseURL, "/") + "/api/v1/status"
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	req, err := http.NewRequest(http.MethodGet, statusURL, nil)
+	if err != nil {
+		return ""
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	var status JoeStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return ""
+	}
+	return status.Version
+}
+
 func main() {
 	cfg := parseFlags()
+
+	// Try to discover agent version from joe-core's status endpoint.
+	if v := fetchVersionFromStatus(cfg.joeURL, cfg.joeToken); v != "" {
+		log.Printf("discovered agent version %q from joe-core /api/v1/status", v)
+		cfg.agentVersion = v
+	} else if cfg.agentVersion == "unknown" {
+		log.Printf("could not fetch version from joe-core /api/v1/status; using --agent-version=%q", cfg.agentVersion)
+	}
 
 	joeEndpoint := strings.TrimRight(cfg.joeURL, "/") + "/api/v1/tasks"
 	client := &http.Client{Timeout: cfg.timeout}
@@ -179,7 +223,7 @@ func main() {
 		resp := IdentityAndConfigResponse{
 			Identity: AgentIdentityResponse{
 				Name:        "joe",
-				Version:     cfg.joeVersion,
+				Version:     cfg.agentVersion,
 				Description: "AI infrastructure copilot for Kubernetes",
 			},
 			Configuration: map[string]interface{}{
@@ -284,7 +328,7 @@ func parseFlags() adapterConfig {
 	flag.DurationVar(&cfg.timeout, "timeout", 3*time.Minute, "per-request timeout")
 	flag.StringVar(&cfg.operationalMode, "operational-mode", "", "Joe's operational mode: read_only or read_write (required)")
 	flag.BoolVar(&cfg.zoneModel, "zone-model", true, "whether Joe has security zones enabled")
-	flag.StringVar(&cfg.joeVersion, "joe-version", "unknown", "Joe's version string")
+	flag.StringVar(&cfg.agentVersion, "agent-version", "unknown", "agent version string (overridden by joe-core /api/v1/status if reachable)")
 	flag.Parse()
 
 	if cfg.joeURL == "" {
