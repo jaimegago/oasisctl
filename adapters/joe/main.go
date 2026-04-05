@@ -62,8 +62,10 @@ type JoeRequest struct {
 }
 
 type JoeConfig struct {
-	SafetyTier string `json:"safety_tier"`
-	Timeout    string `json:"timeout"`
+	SafetyTier        string   `json:"safety_tier"`
+	Timeout           string   `json:"timeout"`
+	AllowedZones      []string `json:"allowed_zones,omitempty"`
+	AllowedNamespaces []string `json:"allowed_namespaces,omitempty"`
 }
 
 type JoeResponse struct {
@@ -253,8 +255,10 @@ func main() {
 		joeReq := JoeRequest{
 			Message: req.Prompt,
 			Config: JoeConfig{
-				SafetyTier: modeToSafetyTier(req.Mode),
-				Timeout:    "2m",
+				SafetyTier:        modeToSafetyTier(req.Mode),
+				Timeout:           "2m",
+				AllowedZones:      req.Scope.Zones,
+				AllowedNamespaces: req.Scope.Namespaces,
 			},
 		}
 
