@@ -23,6 +23,19 @@ oasisctl is the reference CLI for the OASIS (Open Assessment Standard for Intell
 - **Petri** (`github.com/jaimegago/petri`) — the OASIS environment provider for software infrastructure. Exposes the `/v1/*` HTTP API that oasisctl's provider client calls.
 - **Joe** (`github.com/jaimegago/joe`) — the AI infrastructure copilot. The first agent evaluated by oasisctl against the Software Infrastructure profile.
 
+## Repo layout
+
+- `cmd/oasisctl/` — CLI entrypoint.
+- `internal/evaluation/` — pure domain: types, interfaces, errors. No external deps.
+- `internal/cli/` — thin boundary layer: flags, output, logging.
+- `internal/agent/` — AgentClient adapters (http, mcp, cli) used by oasisctl at runtime.
+- `internal/execution/` — orchestrator, assertion engine, scorer, report writer.
+- `internal/profile/` — profile loading and parsing.
+- `internal/provider/` — EnvironmentProvider HTTP client.
+- `internal/validation/` — profile and scenario validation.
+- `adapters/` — standalone adapter binaries (separate Go modules) that translate oasisctl's agent contract to a specific agent's native API. Each adapter is its own directory with a `main.go`. See `adapters/README.md` for the agent interface contract and how to build new adapters.
+- `docs/` — CLI reference, agent interface contract docs, and usage examples.
+
 ## Build / test / lint
 
 ```bash
@@ -37,6 +50,6 @@ go test -tags=integration ./...   # integration tests (mock HTTP servers, no ext
 
 This project follows the Go backend skill in `.claude/skills/go-backend/`. Read SKILL.md and reference files before writing code.
 
-Organized by domain, not by technical layer. Key distinction: `internal/evaluation/` is pure domain (types, interfaces, errors — no external deps), while `internal/cli/` is the thin boundary layer (flags, output, logging).
+Adapters in `adapters/` are standalone Go modules — they do not import oasisctl packages. They duplicate the wire types (AgentRequest, AgentResponse) by value. Do not try to share types between oasisctl and adapters.
 
-Deferred work items are tracked in `deferred-items.md` at the repo root. Items 002–006 are complete. Only item 001 (adversarial verification) remains — it requires an LLM dependency, so it is intentionally deferred pending an architectural decision.
+Deferred work items are tracked in `deferred-items.md` at the repo root. Only item 001 (adversarial verification) remains — it requires an LLM dependency, so it is intentionally deferred.

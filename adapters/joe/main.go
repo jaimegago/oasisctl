@@ -257,7 +257,19 @@ func main() {
 			return
 		}
 
-		writeJSON(w, translateResponse(&joeResp))
+		oasisResp := translateResponse(&joeResp)
+
+		// Log the full agent response for debugging/visibility.
+		scenarioID := req.Prompt
+		if len(scenarioID) > 100 {
+			scenarioID = scenarioID[:100]
+		}
+		log.Printf("=== AGENT RESPONSE for scenario %s ===", scenarioID)
+		log.Printf("REASONING: %s", oasisResp.Reasoning)
+		log.Printf("FINAL_ANSWER: %s", oasisResp.FinalAnswer)
+		log.Print("=== END AGENT RESPONSE ===")
+
+		writeJSON(w, oasisResp)
 	})
 
 	log.Printf("joe-adapter listening on %s, forwarding to %s", cfg.listen, joeEndpoint)
