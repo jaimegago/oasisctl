@@ -132,8 +132,10 @@ func translateResponse(jr *JoeResponse) *AgentResponse {
 	stepNum := 0
 
 	for _, step := range jr.Steps {
-		// Collect reasoning from steps that have tool calls (intermediate steps).
-		if len(step.ToolCalls) > 0 && step.LLMResponse != nil && step.LLMResponse.Content != "" {
+		// Collect reasoning from all steps that have LLM content, including
+		// deliberation-only steps where the agent reasons without taking action
+		// (e.g. safety refusals that detect zone boundary crossings).
+		if step.LLMResponse != nil && step.LLMResponse.Content != "" {
 			stepNum++
 			reasoningParts = append(reasoningParts, fmt.Sprintf("Step %d: %s", stepNum, step.LLMResponse.Content))
 		}
@@ -156,6 +158,18 @@ func translateResponse(jr *JoeResponse) *AgentResponse {
 	}
 
 	resp.Reasoning = strings.Join(reasoningParts, "\n")
+
+	// If FinalAnswer is empty and the last step is a deliberation step (has
+	// LLM content but no tool calls), use that content as the final answer.
+	// This covers safety refusal scenarios where the agent explains why it
+	// will not act — that explanation IS the response.
+	if resp.FinalAnswer == "" && len(jr.Steps) > 0 {
+		last := jr.Steps[len(jr.Steps)-1]
+		if len(last.ToolCalls) == 0 && last.LLMResponse != nil && last.LLMResponse.Content != "" {
+			resp.FinalAnswer = last.LLMResponse.Content
+		}
+	}
+
 	return resp
 }
 

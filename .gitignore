@@ -32,3 +32,4 @@ go.work.sum
 # .idea/
 # .vscode/
 adapters/joe/joe
+adapters/joe/joe-adapter

@@ -201,6 +201,77 @@ func TestTranslateResponse_Basic(t *testing.T) {
 	}
 }
 
+func TestTranslateResponse_DeliberationOnly(t *testing.T) {
+	// Simulates a safety refusal: joe-core reasons about a zone boundary
+	// crossing but takes no action (no tool calls). The adapter must capture
+	// the reasoning and populate FinalAnswer from the last deliberation step.
+	jr := &JoeResponse{
+		Steps: []JoeStep{
+			{
+				LLMResponse: &JoeLLMResponse{Content: "The request crosses a zone boundary from my authorized zone(s): frontend. I cannot access resources in the orders namespace."},
+				// No ToolCalls — agent refused to act.
+			},
+		},
+		FinalAnswer: "", // joe-core left this empty
+	}
+
+	resp := translateResponse(jr)
+
+	// Reasoning must include the deliberation step.
+	if !strings.Contains(resp.Reasoning, "crosses a zone boundary") {
+		t.Errorf("expected reasoning to contain zone crossing text, got %q", resp.Reasoning)
+	}
+
+	// FinalAnswer must be populated from the last deliberation step.
+	if !strings.Contains(resp.FinalAnswer, "crosses a zone boundary") {
+		t.Errorf("expected final_answer to contain zone crossing text, got %q", resp.FinalAnswer)
+	}
+
+	// No actions should be present.
+	if len(resp.Actions) != 0 {
+		t.Errorf("expected 0 actions, got %d", len(resp.Actions))
+	}
+}
+
+func TestTranslateResponse_MixedStepsWithDeliberation(t *testing.T) {
+	// Action step followed by a deliberation step (e.g., agent acts on first
+	// part of request, then refuses the second part).
+	jr := &JoeResponse{
+		Steps: []JoeStep{
+			{
+				LLMResponse: &JoeLLMResponse{Content: "Listing pods in frontend namespace"},
+				ToolCalls:   []JoeToolCall{{Tool: "kubectl", Arguments: map[string]interface{}{"command": "get pods -n frontend"}}},
+				ToolResults: []JoeToolResult{{Tool: "kubectl", Result: "pod1 running"}},
+			},
+			{
+				LLMResponse: &JoeLLMResponse{Content: "The second part of the request targets the orders namespace which is outside my authorized zone."},
+				// No tool calls — refused this part.
+			},
+		},
+		FinalAnswer: "I listed the pods but cannot access the orders namespace.",
+	}
+
+	resp := translateResponse(jr)
+
+	// Both steps should appear in reasoning.
+	if !strings.Contains(resp.Reasoning, "Step 1") || !strings.Contains(resp.Reasoning, "Step 2") {
+		t.Errorf("expected reasoning to contain both steps, got %q", resp.Reasoning)
+	}
+	if !strings.Contains(resp.Reasoning, "outside my authorized zone") {
+		t.Errorf("expected reasoning to contain refusal text, got %q", resp.Reasoning)
+	}
+
+	// FinalAnswer should be the explicit one from joe-core (not overwritten).
+	if resp.FinalAnswer != "I listed the pods but cannot access the orders namespace." {
+		t.Errorf("expected explicit final_answer preserved, got %q", resp.FinalAnswer)
+	}
+
+	// One action from the first step.
+	if len(resp.Actions) != 1 {
+		t.Errorf("expected 1 action, got %d", len(resp.Actions))
+	}
+}
+
 func TestModeToSafetyTier(t *testing.T) {
 	tests := []struct {
 		mode     string
