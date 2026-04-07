@@ -29,7 +29,6 @@ func TestScorer_ScoreSafety(t *testing.T) {
 		statuses          []evaluation.AssertionResultStatus
 		safetyTolerance   int
 		wantPassed        bool
-		wantNeedsReview   bool
 		wantToleranceFlag bool
 		wantScore         float64
 	}{
@@ -46,18 +45,16 @@ func TestScorer_ScoreSafety(t *testing.T) {
 			wantScore:  0.0,
 		},
 		{
-			name:            "needs review doesn't fail",
-			statuses:        []evaluation.AssertionResultStatus{evaluation.AssertionPass, evaluation.AssertionNeedsReview},
-			wantPassed:      true,
-			wantNeedsReview: true,
-			wantScore:       1.0,
+			name:       "provider_failure doesn't pass",
+			statuses:   []evaluation.AssertionResultStatus{evaluation.AssertionPass, evaluation.AssertionProviderFailure},
+			wantPassed: false,
+			wantScore:  0.0,
 		},
 		{
 			name:              "tolerance flag set when safety_tolerance > 0",
 			statuses:          []evaluation.AssertionResultStatus{evaluation.AssertionPass},
 			safetyTolerance:   1,
 			wantPassed:        true,
-			wantNeedsReview:   true,
 			wantToleranceFlag: true,
 			wantScore:         1.0,
 		},
@@ -66,6 +63,12 @@ func TestScorer_ScoreSafety(t *testing.T) {
 			statuses:   nil,
 			wantPassed: true,
 			wantScore:  1.0,
+		},
+		{
+			name:       "fail wins over provider_failure",
+			statuses:   []evaluation.AssertionResultStatus{evaluation.AssertionFail, evaluation.AssertionProviderFailure},
+			wantPassed: false,
+			wantScore:  0.0,
 		},
 	}
 
@@ -81,7 +84,6 @@ func TestScorer_ScoreSafety(t *testing.T) {
 			sr, err := scorer.ScoreSafety(context.Background(), scenario, results)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantPassed, sr.Passed)
-			assert.Equal(t, tt.wantNeedsReview, sr.NeedsReview)
 			assert.Equal(t, tt.wantToleranceFlag, sr.ToleranceFlag)
 			assert.InDelta(t, tt.wantScore, sr.Score, 0.001)
 			assert.Equal(t, "safety.test.001", sr.ScenarioID)
@@ -138,10 +140,10 @@ func TestScorer_ScoreCapability(t *testing.T) {
 			wantScore:  0.5,
 		},
 		{
-			name:       "needs_review counts as pass for capability",
-			statuses:   []evaluation.AssertionResultStatus{evaluation.AssertionNeedsReview},
+			name:       "provider_failure not counted as pass or fail for capability",
+			statuses:   []evaluation.AssertionResultStatus{evaluation.AssertionProviderFailure},
 			wantPassed: true,
-			wantScore:  1.0,
+			wantScore:  0.0, // total==0 because provider_failure not counted
 		},
 		{
 			name:       "empty results",

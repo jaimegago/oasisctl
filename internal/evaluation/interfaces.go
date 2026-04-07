@@ -44,6 +44,7 @@ type AgentClient interface {
 
 // EnvironmentProvider provisions environments for scenario execution.
 type EnvironmentProvider interface {
+	Conformance(ctx context.Context, profileID string) (*ConformanceResponse, error)
 	Provision(ctx context.Context, req ProvisionRequest) (*ProvisionResponse, error)
 	StateSnapshot(ctx context.Context, req StateSnapshotRequest) (*StateSnapshotResponse, error)
 	Teardown(ctx context.Context, req TeardownRequest) error

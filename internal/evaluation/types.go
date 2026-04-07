@@ -132,18 +132,19 @@ type Suite struct {
 
 // Profile is the full in-memory representation of a loaded domain profile.
 type Profile struct {
-	Metadata                 ProfileMetadata
-	Vocabulary               []VocabularyEntry
-	BehaviorDefinitions      map[string]BehaviorDefinition
-	InterfaceTypes           []string
-	StimulusLibrary          map[string]Stimulus
-	SafetyCategories         []Category
-	CapabilityCategories     []Category
-	ScoringModel             ScoringModel
-	TierRequirements         map[int]TierRequirement
-	Subcategories            []SubcategoryDefinition
-	IntentPromotion          IntentPromotionConfig
-	AgentConfigurationSchema *AgentConfigurationSchema
+	Metadata                        ProfileMetadata
+	Vocabulary                      []VocabularyEntry
+	BehaviorDefinitions             map[string]BehaviorDefinition
+	InterfaceTypes                  []string
+	StimulusLibrary                 map[string]Stimulus
+	SafetyCategories                []Category
+	CapabilityCategories            []Category
+	ScoringModel                    ScoringModel
+	TierRequirements                map[int]TierRequirement
+	Subcategories                   []SubcategoryDefinition
+	IntentPromotion                 IntentPromotionConfig
+	AgentConfigurationSchema        *AgentConfigurationSchema
+	ProviderConformanceRequirements *ProviderConformanceRequirements
 }
 
 // SubcategoryDefinition describes a subcategory that groups scenarios by safety property.
@@ -276,10 +277,18 @@ type ObserveRequest struct {
 
 // ObserveResponse is the response from /v1/observe.
 type ObserveResponse struct {
-	EnvironmentID   string      `json:"environment_id"`
-	Timestamp       time.Time   `json:"timestamp"`
-	ObservationType string      `json:"observation_type"`
-	Data            interface{} `json:"data"`
+	EnvironmentID   string          `json:"environment_id"`
+	Timestamp       time.Time       `json:"timestamp"`
+	ObservationType string          `json:"observation_type"`
+	Data            interface{}     `json:"data"`
+	EvidenceSource  *EvidenceSource `json:"evidence_source,omitempty"`
+}
+
+// EvidenceSource describes the provenance and availability of observation evidence
+// per spec/01-core.md §3.7.
+type EvidenceSource struct {
+	Type   string `json:"type"`   // e.g. "audit_log", "resource_state"
+	Status string `json:"status"` // "available", "unreachable", "degraded"
 }
 
 // AuditEntry is a single entry in an audit log.
@@ -324,9 +333,9 @@ type ResponseContentData struct {
 type AssertionResultStatus string
 
 const (
-	AssertionPass        AssertionResultStatus = "PASS"
-	AssertionFail        AssertionResultStatus = "FAIL"
-	AssertionNeedsReview AssertionResultStatus = "NEEDS_REVIEW"
+	AssertionPass            AssertionResultStatus = "PASS"
+	AssertionFail            AssertionResultStatus = "FAIL"
+	AssertionProviderFailure AssertionResultStatus = "PROVIDER_FAILURE"
 )
 
 // ScenarioResult holds the outcome of a single scenario.
@@ -337,7 +346,6 @@ type ScenarioResult struct {
 	Archetype        string               `json:"archetype,omitempty" yaml:"archetype,omitempty"`
 	Status           ScenarioResultStatus `json:"status,omitempty" yaml:"status,omitempty"`
 	Passed           bool                 `json:"passed" yaml:"passed"`
-	NeedsReview      bool                 `json:"needs_review" yaml:"needs_review"`
 	ToleranceFlag    bool                 `json:"tolerance_flag" yaml:"tolerance_flag"`
 	Score            float64              `json:"score" yaml:"score"`
 	AssertionResults []AssertionResult    `json:"assertion_results,omitempty" yaml:"assertion_results,omitempty"`
@@ -353,6 +361,15 @@ type EvaluationMode struct {
 	Complete      bool     `json:"complete" yaml:"complete"`
 }
 
+// SafetyVerdict represents the top-level safety outcome per spec/01-core.md §3.6.
+type SafetyVerdict string
+
+const (
+	SafetyVerdictPass            SafetyVerdict = "PASS"
+	SafetyVerdictFail            SafetyVerdict = "FAIL"
+	SafetyVerdictProviderFailure SafetyVerdict = "PROVIDER_FAILURE"
+)
+
 // Verdict is the full evaluation result as per spec 05-reporting.md.
 type Verdict struct {
 	AgentID               string
@@ -365,6 +382,7 @@ type Verdict struct {
 	EvaluationMode        EvaluationMode
 	AgentConfiguration    AgentConfiguration
 	ConfigurationCoverage *ConfigurationCoverage
+	Safety                SafetyVerdict
 	SafetyPassed          bool
 	SafetyGateSkipped     bool
 	SafetyResults         []ScenarioResult
@@ -375,6 +393,8 @@ type Verdict struct {
 	ArchetypeScores       map[string]float64
 	OASISCoreSpec         string
 	Report                *Report
+	Aborted               bool
+	AbortReason           string
 }
 
 // Report is the full evaluation report.
@@ -401,6 +421,8 @@ type ReportMetadata struct {
 	ProviderInfo   string         `json:"provider_info" yaml:"provider_info"`
 	EvaluationMode EvaluationMode `json:"evaluation_mode" yaml:"evaluation_mode"`
 	EvaluationNote string         `json:"evaluation_note,omitempty" yaml:"evaluation_note,omitempty"`
+	Aborted        bool           `json:"aborted,omitempty" yaml:"aborted,omitempty"`
+	AbortReason    string         `json:"abort_reason,omitempty" yaml:"abort_reason,omitempty"`
 }
 
 // ReportEnvironment captures environment details for the report.
@@ -411,12 +433,17 @@ type ReportEnvironment struct {
 
 // SafetySummary holds the safety gate outcome.
 type SafetySummary struct {
+	Safety             SafetyVerdict                `json:"safety" yaml:"safety"`
 	Passed             bool                         `json:"passed" yaml:"passed"`
 	Applicable         int                          `json:"applicable" yaml:"applicable"`
 	NotApplicable      int                          `json:"not_applicable" yaml:"not_applicable"`
-	Inconclusive       int                          `json:"inconclusive" yaml:"inconclusive"`
+	ProviderFailures   int                          `json:"provider_failures" yaml:"provider_failures"`
+	Failed             int                          `json:"failed" yaml:"failed"`
+	PassedCount        int                          `json:"passed_count" yaml:"passed_count"`
 	CategoryResults    map[string]bool              `json:"category_results" yaml:"category_results"`
 	SubcategoryResults map[string]SubcategoryResult `json:"subcategory_results,omitempty" yaml:"subcategory_results,omitempty"`
+	ProviderFailureIDs []string                     `json:"provider_failure_ids,omitempty" yaml:"provider_failure_ids,omitempty"`
+	FailureIDs         []string                     `json:"failure_ids,omitempty" yaml:"failure_ids,omitempty"`
 	ToleranceFlags     []string                     `json:"tolerance_flags,omitempty" yaml:"tolerance_flags,omitempty"`
 	HumanReviewNeeded  bool                         `json:"human_review_needed" yaml:"human_review_needed"`
 }
@@ -435,4 +462,43 @@ type CapabilitySummary struct {
 	DimensionScores map[string]float64 `json:"dimension_scores" yaml:"dimension_scores"`
 	TierLabel       string             `json:"tier_label" yaml:"tier_label"`
 	Disclaimer      string             `json:"disclaimer" yaml:"disclaimer"`
+}
+
+// ProviderConformanceRequirements defines what a profile requires from the
+// environment provider, per spec/08-provider-conformance.md §3.8.
+type ProviderConformanceRequirements struct {
+	EnvironmentType         string   `yaml:"environment_type" json:"environment_type"`
+	MinComplexityTier       int      `yaml:"min_complexity_tier" json:"min_complexity_tier"`
+	EvidenceSourcesRequired []string `yaml:"evidence_sources_required" json:"evidence_sources_required"`
+	StateInjectionRequired  []string `yaml:"state_injection_required" json:"state_injection_required"`
+	OASISCoreSpecVersion    string   `yaml:"oasis_core_spec_version" json:"oasis_core_spec_version"`
+}
+
+// ConformanceRequest is the query sent to GET /v1/conformance.
+type ConformanceRequest struct {
+	ProfileID string `json:"profile"`
+}
+
+// ConformanceResponse is the response from GET /v1/conformance per spec §3.8.2.
+type ConformanceResponse struct {
+	ProviderName             string             `json:"provider_name"`
+	ProviderVersion          string             `json:"provider_version"`
+	EnvironmentType          string             `json:"environment_type"`
+	ComplexityTierSupported  int                `json:"complexity_tier_supported"`
+	OASISCoreSpecVersion     string             `json:"oasis_core_spec_version"`
+	EvidenceSourcesAvailable []string           `json:"evidence_sources_available"`
+	StateInjectionSupported  map[string]bool    `json:"state_injection_supported"`
+	UnmetRequirements        []UnmetRequirement `json:"unmet_requirements,omitempty"`
+}
+
+// UnmetRequirement describes a single requirement the provider cannot satisfy.
+type UnmetRequirement struct {
+	Requirement string `json:"requirement"`
+	Reason      string `json:"reason"`
+}
+
+// ReportMetadataAbort holds abort information in the report metadata.
+type ReportMetadataAbort struct {
+	Aborted     bool   `json:"aborted" yaml:"aborted"`
+	AbortReason string `json:"abort_reason,omitempty" yaml:"abort_reason,omitempty"`
 }

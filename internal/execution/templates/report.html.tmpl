@@ -19,6 +19,7 @@
   }
   .banner-pass { background: #22c55e; color: #166534; }
   .banner-fail { background: #ef4444; color: #fff; }
+  .banner-provider-failure { background: #f59e0b; color: #78350f; }
 
   .eval-note { background: #fef3c7; color: #92400e; padding: 0.5rem 1rem; border-radius: 0.375rem; margin-bottom: 1.5rem; font-size: 0.875rem; }
 
@@ -39,6 +40,7 @@
   .row-fail  { background: #fef2f2; }
   .row-error { background: #f3f4f6; }
   .row-review { background: #fffbeb; }
+  .row-provider-failure { background: #fef3c7; }
 
   .badge {
     display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.25rem;
@@ -47,7 +49,7 @@
   .badge-pass   { background: #22c55e; color: #166534; }
   .badge-fail   { background: #ef4444; color: #991b1b; }
   .badge-error  { background: #9ca3af; color: #374151; }
-  .badge-review { background: #fbbf24; color: #92400e; }
+  .badge-provider-failure { background: #f59e0b; color: #78350f; }
 
   details { margin-bottom: 0.25rem; }
   details summary { cursor: pointer; }
@@ -74,8 +76,10 @@
 <h1>OASIS Evaluation Report</h1>
 
 {{- /* Safety banner */ -}}
-{{if .SafetySummary.Passed}}
+{{if eq .SafetySummary.Safety "PASS"}}
 <div class="banner banner-pass">Safety Gate: PASS</div>
+{{else if eq .SafetySummary.Safety "PROVIDER_FAILURE"}}
+<div class="banner banner-provider-failure">Safety Gate: PROVIDER_FAILURE</div>
 {{else}}
 <div class="banner banner-fail">Safety Gate: FAIL</div>
 {{end}}
@@ -83,6 +87,11 @@
 {{- /* Evaluation mode note */ -}}
 {{if .Metadata.EvaluationNote}}
 <div class="eval-note">{{.Metadata.EvaluationNote}}</div>
+{{end}}
+
+{{- /* Abort notice */ -}}
+{{if .Metadata.Aborted}}
+<div class="eval-note" style="background:#fee2e2;color:#991b1b;">Run aborted: {{.Metadata.AbortReason}}</div>
 {{end}}
 
 {{- /* Metadata table */ -}}
@@ -144,14 +153,14 @@
   <div class="stat-card"><div class="num">{{.Stats.ProvisionErrors}}</div><div class="label">Provision Errors</div></div>
   <div class="stat-card"><div class="num">{{.Stats.Passed}}</div><div class="label">Passed</div></div>
   <div class="stat-card"><div class="num">{{.Stats.Failed}}</div><div class="label">Failed</div></div>
-  <div class="stat-card"><div class="num">{{.Stats.NeedsReview}}</div><div class="label">Needs Review</div></div>
+  <div class="stat-card"><div class="num">{{.Stats.ProviderFailures}}</div><div class="label">Provider Failures</div></div>
 </div>
 
 {{- /* Scenario details */ -}}
 <h2>Scenario Results</h2>
 <table>
   <thead>
-    <tr><th>Scenario</th><th>Category</th><th>Subcategory</th><th>Result</th><th>Review</th></tr>
+    <tr><th>Scenario</th><th>Category</th><th>Subcategory</th><th>Result</th><th>Tolerance</th></tr>
   </thead>
   <tbody>
   {{range .ScenarioDetails}}
@@ -185,7 +194,7 @@
       <td>{{.Category}}</td>
       <td>{{.Subcategory}}</td>
       <td><span class="badge {{resultBadge .}}">{{resultText .}}</span></td>
-      <td>{{if .NeedsReview}}<span class="badge badge-review">REVIEW</span>{{end}}</td>
+      <td>{{if .ToleranceFlag}}<span class="badge badge-provider-failure">TOLERANCE</span>{{end}}</td>
     </tr>
   {{end}}
   </tbody>

@@ -69,14 +69,13 @@ type htmlReportData struct {
 }
 
 type scenarioStats struct {
-	Total           int
-	Provisioned     int
-	ProvisionErrors int
-	Passed          int
-	Failed          int
-	NeedsReview     int
-	NotApplicable   int
-	Inconclusive    int
+	Total            int
+	Provisioned      int
+	ProvisionErrors  int
+	Passed           int
+	Failed           int
+	ProviderFailures int
+	NotApplicable    int
 }
 
 func computeStats(details []evaluation.ScenarioResult) scenarioStats {
@@ -87,8 +86,8 @@ func computeStats(details []evaluation.ScenarioResult) scenarioStats {
 			s.NotApplicable++
 			continue
 		}
-		if sr.Status == evaluation.ScenarioInconclusive {
-			s.Inconclusive++
+		if sr.Status == evaluation.ScenarioProviderFailure {
+			s.ProviderFailures++
 			continue
 		}
 		if len(sr.Errors) > 0 && !sr.Passed {
@@ -101,9 +100,6 @@ func computeStats(details []evaluation.ScenarioResult) scenarioStats {
 		} else {
 			s.Failed++
 		}
-		if sr.NeedsReview {
-			s.NeedsReview++
-		}
 	}
 	return s
 }
@@ -115,13 +111,13 @@ var htmlFuncMap = template.FuncMap{
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			return "row-na"
 		}
-		if sr.Status == evaluation.ScenarioInconclusive {
-			return "row-inconclusive"
+		if sr.Status == evaluation.ScenarioProviderFailure {
+			return "row-provider-failure"
 		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			return "row-error"
 		}
-		if sr.NeedsReview {
+		if sr.ToleranceFlag {
 			return "row-review"
 		}
 		if sr.Passed {
@@ -135,8 +131,8 @@ var htmlFuncMap = template.FuncMap{
 			return "badge-pass"
 		case evaluation.AssertionFail:
 			return "badge-fail"
-		case evaluation.AssertionNeedsReview:
-			return "badge-review"
+		case evaluation.AssertionProviderFailure:
+			return "badge-provider-failure"
 		default:
 			return "badge-error"
 		}
@@ -145,8 +141,8 @@ var htmlFuncMap = template.FuncMap{
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			return "badge-na"
 		}
-		if sr.Status == evaluation.ScenarioInconclusive {
-			return "badge-inconclusive"
+		if sr.Status == evaluation.ScenarioProviderFailure {
+			return "badge-provider-failure"
 		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			return "badge-error"
@@ -160,8 +156,8 @@ var htmlFuncMap = template.FuncMap{
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			return "NOT_APPLICABLE"
 		}
-		if sr.Status == evaluation.ScenarioInconclusive {
-			return "INCONCLUSIVE"
+		if sr.Status == evaluation.ScenarioProviderFailure {
+			return "PROVIDER_FAILURE"
 		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			return "ERROR"
@@ -226,6 +222,8 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 		ProviderInfo:   v.ProviderInfo,
 		EvaluationMode: v.EvaluationMode,
 		EvaluationNote: evaluationNote(v.EvaluationMode),
+		Aborted:        v.Aborted,
+		AbortReason:    v.AbortReason,
 	}
 
 	r.Environment = evaluation.ReportEnvironment{
@@ -254,6 +252,7 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 
 func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 	ss := evaluation.SafetySummary{
+		Safety:          v.Safety,
 		Passed:          v.SafetyPassed,
 		CategoryResults: make(map[string]bool),
 	}
@@ -263,13 +262,14 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 	hasSubcategories := false
 
 	for _, sr := range v.SafetyResults {
-		// Count applicable vs not-applicable vs inconclusive.
+		// Count applicable vs not-applicable vs provider_failure.
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			ss.NotApplicable++
 			continue
 		}
-		if sr.Status == evaluation.ScenarioInconclusive {
-			ss.Inconclusive++
+		if sr.Status == evaluation.ScenarioProviderFailure {
+			ss.ProviderFailures++
+			ss.ProviderFailureIDs = append(ss.ProviderFailureIDs, sr.ScenarioID)
 			continue
 		}
 		ss.Applicable++
@@ -288,6 +288,13 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 			categoryPass[cat] = existing && sr.Passed
 		} else {
 			categoryPass[cat] = sr.Passed
+		}
+
+		if sr.Passed {
+			ss.PassedCount++
+		} else {
+			ss.Failed++
+			ss.FailureIDs = append(ss.FailureIDs, sr.ScenarioID)
 		}
 
 		// Subcategory results.

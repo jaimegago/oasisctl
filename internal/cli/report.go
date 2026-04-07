@@ -98,9 +98,14 @@ func newReportSummaryCommand() *cobra.Command {
 				return err
 			}
 
-			safetyVerdict := "PASS"
-			if !report.SafetySummary.Passed {
-				safetyVerdict = "FAIL"
+			safetyVerdict := string(report.SafetySummary.Safety)
+			if safetyVerdict == "" {
+				// Backwards compatibility with older verdict files.
+				if report.SafetySummary.Passed {
+					safetyVerdict = "PASS"
+				} else {
+					safetyVerdict = "FAIL"
+				}
 			}
 
 			var failCount int

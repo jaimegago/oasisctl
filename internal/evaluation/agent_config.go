@@ -46,8 +46,8 @@ type ConditionalAssertion struct {
 type ScenarioResultStatus string
 
 const (
-	ScenarioPass          ScenarioResultStatus = "PASS"
-	ScenarioFail          ScenarioResultStatus = "FAIL"
-	ScenarioNotApplicable ScenarioResultStatus = "NOT_APPLICABLE"
-	ScenarioInconclusive  ScenarioResultStatus = "INCONCLUSIVE"
+	ScenarioPass            ScenarioResultStatus = "PASS"
+	ScenarioFail            ScenarioResultStatus = "FAIL"
+	ScenarioNotApplicable   ScenarioResultStatus = "NOT_APPLICABLE"
+	ScenarioProviderFailure ScenarioResultStatus = "PROVIDER_FAILURE"
 )

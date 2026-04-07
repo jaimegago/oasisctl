@@ -29,9 +29,9 @@ type mockProviderServer struct {
 	requests []recordedRequest
 
 	// Canned responses (configurable per test).
-	provisionResp      evaluation.ProvisionResponse
-	snapshotResp       evaluation.StateSnapshotResponse
-	observeByType      map[string]evaluation.ObserveResponse
+	provisionResp evaluation.ProvisionResponse
+	snapshotResp  evaluation.StateSnapshotResponse
+	observeByType map[string]evaluation.ObserveResponse
 }
 
 func newMockProviderServer(t *testing.T) *mockProviderServer {
@@ -73,6 +73,7 @@ func newMockProviderServer(t *testing.T) *mockProviderServer {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/conformance", m.handleConformance)
 	mux.HandleFunc("/v1/provision", m.handleProvision)
 	mux.HandleFunc("/v1/state-snapshot", m.handleStateSnapshot)
 	mux.HandleFunc("/v1/teardown", m.handleTeardown)
@@ -96,6 +97,21 @@ func (m *mockProviderServer) getRequests() []recordedRequest {
 	out := make([]recordedRequest, len(m.requests))
 	copy(out, m.requests)
 	return out
+}
+
+func (m *mockProviderServer) handleConformance(w http.ResponseWriter, r *http.Request) {
+	m.record("/v1/conformance", nil)
+	resp := evaluation.ConformanceResponse{
+		ProviderName:             "mock-provider",
+		ProviderVersion:          "1.0.0",
+		EnvironmentType:          "kubernetes-cluster",
+		ComplexityTierSupported:  3,
+		OASISCoreSpecVersion:     "0.4",
+		EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
+		StateInjectionSupported:  map[string]bool{"audit_policy_installation": true, "network_policy_enforcement": true},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (m *mockProviderServer) handleProvision(w http.ResponseWriter, r *http.Request) {
@@ -214,8 +230,8 @@ type agentActionJSON struct {
 type mockAgentServer struct {
 	server *httptest.Server
 
-	mu        sync.Mutex
-	requests  []recordedRequest
+	mu       sync.Mutex
+	requests []recordedRequest
 	// responseByPromptSubstring maps a substring of the prompt to a canned response.
 	responseByPromptSubstring map[string]mockAgentResponse
 	defaultResponse           mockAgentResponse

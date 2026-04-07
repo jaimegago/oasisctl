@@ -24,6 +24,7 @@ func makeVerdict() *evaluation.Verdict {
 		ProviderInfo:   "local",
 		Tier:           2,
 		Date:           time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Safety:         evaluation.SafetyVerdictPass,
 		SafetyPassed:   true,
 		SafetyResults: []evaluation.ScenarioResult{
 			{ScenarioID: "safety.sec.001", Passed: true, Score: 1.0},
@@ -201,7 +202,6 @@ func TestReportWriter_YAMLFieldNames(t *testing.T) {
 			ScenarioID:    "safety.sec.001",
 			Category:      "security",
 			Passed:        true,
-			NeedsReview:   true,
 			ToleranceFlag: true,
 			Score:         1.0,
 			AssertionResults: []evaluation.AssertionResult{
@@ -221,7 +221,6 @@ func TestReportWriter_YAMLFieldNames(t *testing.T) {
 
 	// Verify snake_case field names from struct tags are used.
 	assert.Contains(t, output, "scenario_id:")
-	assert.Contains(t, output, "needs_review:")
 	assert.Contains(t, output, "tolerance_flag:")
 	assert.Contains(t, output, "safety_summary:")
 	assert.Contains(t, output, "scenario_details:")
@@ -230,34 +229,36 @@ func TestReportWriter_YAMLFieldNames(t *testing.T) {
 
 	// Verify old Go-default lowercase field names are NOT used.
 	assert.NotContains(t, output, "scenarioid:")
-	assert.NotContains(t, output, "needsreview:")
 	assert.NotContains(t, output, "toleranceflag:")
 }
 
-func TestBuildReport_InconclusiveExcludedFromSafetySummary(t *testing.T) {
+func TestBuildReport_ProviderFailureExcludedFromSafetySummary(t *testing.T) {
 	verdict := &evaluation.Verdict{
-		SafetyPassed: true,
+		Safety:       evaluation.SafetyVerdictProviderFailure,
+		SafetyPassed: false,
 		SafetyResults: []evaluation.ScenarioResult{
 			{ScenarioID: "s.001", Category: "boundary-enforcement", Status: evaluation.ScenarioPass, Passed: true},
-			{ScenarioID: "s.002", Category: "boundary-enforcement", Status: evaluation.ScenarioInconclusive, Passed: false, Evidence: []string{"infra failure"}},
+			{ScenarioID: "s.002", Category: "boundary-enforcement", Status: evaluation.ScenarioProviderFailure, Passed: false, Evidence: []string{"infra failure"}},
 			{ScenarioID: "s.003", Status: evaluation.ScenarioNotApplicable, Passed: true},
 		},
 	}
 	report := buildReport(verdict)
 
 	ss := report.SafetySummary
-	assert.True(t, ss.Passed)
-	assert.Equal(t, 1, ss.Applicable)    // only s.001 counts
-	assert.Equal(t, 1, ss.NotApplicable) // s.003
-	assert.Equal(t, 1, ss.Inconclusive)  // s.002
-	// INCONCLUSIVE should not appear in category results.
+	assert.False(t, ss.Passed)
+	assert.Equal(t, evaluation.SafetyVerdictProviderFailure, ss.Safety)
+	assert.Equal(t, 1, ss.Applicable)       // only s.001 counts
+	assert.Equal(t, 1, ss.NotApplicable)    // s.003
+	assert.Equal(t, 1, ss.ProviderFailures) // s.002
+	// PROVIDER_FAILURE should not appear in category results.
 	assert.True(t, ss.CategoryResults["boundary-enforcement"])
+	assert.Contains(t, ss.ProviderFailureIDs, "s.002")
 }
 
-func TestComputeStats_Inconclusive(t *testing.T) {
+func TestComputeStats_ProviderFailure(t *testing.T) {
 	details := []evaluation.ScenarioResult{
 		{ScenarioID: "s.001", Status: evaluation.ScenarioPass, Passed: true},
-		{ScenarioID: "s.002", Status: evaluation.ScenarioInconclusive, Passed: false},
+		{ScenarioID: "s.002", Status: evaluation.ScenarioProviderFailure, Passed: false},
 		{ScenarioID: "s.003", Status: evaluation.ScenarioNotApplicable},
 		{ScenarioID: "s.004", Status: evaluation.ScenarioFail, Passed: false},
 	}
@@ -265,7 +266,7 @@ func TestComputeStats_Inconclusive(t *testing.T) {
 	assert.Equal(t, 4, stats.Total)
 	assert.Equal(t, 1, stats.Passed)
 	assert.Equal(t, 1, stats.Failed)
-	assert.Equal(t, 1, stats.Inconclusive)
+	assert.Equal(t, 1, stats.ProviderFailures)
 	assert.Equal(t, 1, stats.NotApplicable)
 	assert.Equal(t, 0, stats.ProvisionErrors)
 }
@@ -275,7 +276,6 @@ func TestReportWriter_JSONFieldNames(t *testing.T) {
 	verdict.SafetyResults = []evaluation.ScenarioResult{
 		{
 			ScenarioID:    "safety.sec.001",
-			NeedsReview:   true,
 			ToleranceFlag: true,
 		},
 	}
@@ -286,10 +286,8 @@ func TestReportWriter_JSONFieldNames(t *testing.T) {
 	output := string(data)
 
 	assert.Contains(t, output, "\"scenario_id\"")
-	assert.Contains(t, output, "\"needs_review\"")
 	assert.Contains(t, output, "\"tolerance_flag\"")
 	assert.Contains(t, output, "\"safety_summary\"")
 	assert.Contains(t, output, "\"scenario_details\"")
 	assert.NotContains(t, output, "\"ScenarioID\"")
-	assert.NotContains(t, output, "\"NeedsReview\"")
 }

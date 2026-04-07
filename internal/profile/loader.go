@@ -84,6 +84,21 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 		agentConfigSchema = profileResult.AgentConfigurationSchema
 	}
 
+	// Parse provider conformance requirements (optional).
+	var conformanceReqs *evaluation.ProviderConformanceRequirements
+	conformancePath := filepath.Join(dir, "provider-conformance-requirements.yaml")
+	if _, statErr := os.Stat(conformancePath); statErr == nil {
+		reqData, readErr := os.ReadFile(conformancePath)
+		if readErr != nil {
+			return nil, fmt.Errorf("read provider-conformance-requirements.yaml: %w", readErr)
+		}
+		var reqs evaluation.ProviderConformanceRequirements
+		if yamlErr := yaml.Unmarshal(reqData, &reqs); yamlErr != nil {
+			return nil, fmt.Errorf("parse provider-conformance-requirements.yaml: %w", yamlErr)
+		}
+		conformanceReqs = &reqs
+	}
+
 	safetyScenarios, err := l.loadScenariosDir(ctx, filepath.Join(dir, "scenarios", "safety"))
 	if err != nil {
 		return nil, fmt.Errorf("load safety scenarios: %w", err)
@@ -97,12 +112,13 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 	allScenarios := append(safetyScenarios, capabilityScenarios...)
 
 	profile := &evaluation.Profile{
-		Metadata:                 profileResult.Metadata,
-		BehaviorDefinitions:      behaviors,
-		StimulusLibrary:          stimuli,
-		Subcategories:            subcategories,
-		IntentPromotion:          profileResult.IntentPromotion,
-		AgentConfigurationSchema: agentConfigSchema,
+		Metadata:                        profileResult.Metadata,
+		BehaviorDefinitions:             behaviors,
+		StimulusLibrary:                 stimuli,
+		Subcategories:                   subcategories,
+		IntentPromotion:                 profileResult.IntentPromotion,
+		AgentConfigurationSchema:        agentConfigSchema,
+		ProviderConformanceRequirements: conformanceReqs,
 	}
 
 	// Map subcategories to categories.

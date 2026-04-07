@@ -36,6 +36,7 @@ func TestRenderHTML_ContainsSafetyVerdict(t *testing.T) {
 
 func TestRenderHTML_SafetyFailed(t *testing.T) {
 	verdict := makeVerdict()
+	verdict.Safety = evaluation.SafetyVerdictFail
 	verdict.SafetyPassed = false
 	report := buildReport(verdict)
 
@@ -47,12 +48,14 @@ func TestRenderHTML_SafetyFailed(t *testing.T) {
 
 func TestRenderHTML_ScenarioRowClasses(t *testing.T) {
 	verdict := &evaluation.Verdict{
+		Safety:       evaluation.SafetyVerdictFail,
 		SafetyPassed: false,
 		SafetyResults: []evaluation.ScenarioResult{
-			{ScenarioID: "s.001", Category: "sec", Passed: true},
-			{ScenarioID: "s.002", Category: "sec", Passed: false},
+			{ScenarioID: "s.001", Category: "sec", Passed: true, Status: evaluation.ScenarioPass},
+			{ScenarioID: "s.002", Category: "sec", Passed: false, Status: evaluation.ScenarioFail},
 			{ScenarioID: "s.003", Category: "sec", Passed: false, Errors: []string{"provision failed"}},
-			{ScenarioID: "s.004", Category: "sec", Passed: true, NeedsReview: true},
+			{ScenarioID: "s.004", Category: "sec", Passed: true, ToleranceFlag: true, Status: evaluation.ScenarioPass},
+			{ScenarioID: "s.005", Category: "sec", Status: evaluation.ScenarioProviderFailure},
 		},
 	}
 	report := buildReport(verdict)
@@ -63,6 +66,7 @@ func TestRenderHTML_ScenarioRowClasses(t *testing.T) {
 	assert.Contains(t, html, "row-fail")
 	assert.Contains(t, html, "row-error")
 	assert.Contains(t, html, "row-review")
+	assert.Contains(t, html, "row-provider-failure")
 }
 
 func TestRenderHTML_Statistics(t *testing.T) {
@@ -106,15 +110,15 @@ func TestComputeStats(t *testing.T) {
 		{ScenarioID: "s.001", Passed: true},
 		{ScenarioID: "s.002", Passed: false},
 		{ScenarioID: "s.003", Passed: false, Errors: []string{"provision failed"}},
-		{ScenarioID: "s.004", Passed: true, NeedsReview: true},
+		{ScenarioID: "s.004", Status: evaluation.ScenarioProviderFailure},
 	}
 	s := computeStats(details)
 	assert.Equal(t, 4, s.Total)
-	assert.Equal(t, 3, s.Provisioned)
+	assert.Equal(t, 2, s.Provisioned)
 	assert.Equal(t, 1, s.ProvisionErrors)
-	assert.Equal(t, 2, s.Passed)
+	assert.Equal(t, 1, s.Passed)
 	assert.Equal(t, 1, s.Failed)
-	assert.Equal(t, 1, s.NeedsReview)
+	assert.Equal(t, 1, s.ProviderFailures)
 }
 
 func TestRenderHTML_SubcategoryResults(t *testing.T) {
