@@ -479,16 +479,22 @@ type ConformanceRequest struct {
 	ProfileID string `json:"profile"`
 }
 
+// ConformanceRequirements holds the nested requirements object within
+// a conformance response, per spec §3.8.2.
+type ConformanceRequirements struct {
+	EnvironmentType          string          `json:"environment_type"`
+	ComplexityTierSupported  int             `json:"complexity_tier_supported"`
+	OASISCoreSpecVersion     string          `json:"oasis_core_spec_version"`
+	EvidenceSourcesAvailable []string        `json:"evidence_sources_available"`
+	StateInjectionSupported  map[string]bool `json:"state_injection_supported"`
+}
+
 // ConformanceResponse is the response from GET /v1/conformance per spec §3.8.2.
 type ConformanceResponse struct {
-	ProviderName             string             `json:"provider_name"`
-	ProviderVersion          string             `json:"provider_version"`
-	EnvironmentType          string             `json:"environment_type"`
-	ComplexityTierSupported  int                `json:"complexity_tier_supported"`
-	OASISCoreSpecVersion     string             `json:"oasis_core_spec_version"`
-	EvidenceSourcesAvailable []string           `json:"evidence_sources_available"`
-	StateInjectionSupported  map[string]bool    `json:"state_injection_supported"`
-	UnmetRequirements        []UnmetRequirement `json:"unmet_requirements,omitempty"`
+	ProviderName      string                  `json:"provider_name"`
+	ProviderVersion   string                  `json:"provider_version"`
+	Requirements      ConformanceRequirements `json:"requirements"`
+	UnmetRequirements []UnmetRequirement      `json:"unmet_requirements,omitempty"`
 }
 
 // UnmetRequirement describes a single requirement the provider cannot satisfy.

@@ -69,10 +69,12 @@ func (m *mockProvider) Conformance(_ context.Context, _ string) (*evaluation.Con
 		return m.conformanceResp, nil
 	}
 	return &evaluation.ConformanceResponse{
-		EnvironmentType:          "kubernetes-cluster",
-		ComplexityTierSupported:  3,
-		EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
-		StateInjectionSupported:  map[string]bool{"audit_policy_installation": true, "network_policy_enforcement": true},
+		Requirements: evaluation.ConformanceRequirements{
+			EnvironmentType:          "kubernetes-cluster",
+			ComplexityTierSupported:  3,
+			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
+			StateInjectionSupported:  map[string]bool{"audit_policy_installation": true, "network_policy_enforcement": true},
+		},
 	}, nil
 }
 
@@ -996,10 +998,12 @@ func TestOrchestrator_PreflightConformanceFailure(t *testing.T) {
 	prov := &mockProvider{
 		provisionResp: defaultProvision(),
 		conformanceResp: &evaluation.ConformanceResponse{
-			EnvironmentType:          "kubernetes-cluster",
-			ComplexityTierSupported:  3,
-			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
-			StateInjectionSupported:  map[string]bool{"audit_policy_installation": true, "network_policy_enforcement": true},
+			Requirements: evaluation.ConformanceRequirements{
+				EnvironmentType:          "kubernetes-cluster",
+				ComplexityTierSupported:  3,
+				EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
+				StateInjectionSupported:  map[string]bool{"audit_policy_installation": true, "network_policy_enforcement": true},
+			},
 			UnmetRequirements: []evaluation.UnmetRequirement{
 				{Requirement: "audit_log_retention", Reason: "audit logs not retained for required duration"},
 			},

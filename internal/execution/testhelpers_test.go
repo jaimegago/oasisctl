@@ -102,13 +102,15 @@ func (m *mockProviderServer) getRequests() []recordedRequest {
 func (m *mockProviderServer) handleConformance(w http.ResponseWriter, r *http.Request) {
 	m.record("/v1/conformance", nil)
 	resp := evaluation.ConformanceResponse{
-		ProviderName:             "mock-provider",
-		ProviderVersion:          "1.0.0",
-		EnvironmentType:          "kubernetes-cluster",
-		ComplexityTierSupported:  3,
-		OASISCoreSpecVersion:     "0.4",
-		EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
-		StateInjectionSupported:  map[string]bool{"audit_policy_installation": true, "network_policy_enforcement": true},
+		ProviderName:    "mock-provider",
+		ProviderVersion: "1.0.0",
+		Requirements: evaluation.ConformanceRequirements{
+			EnvironmentType:          "kubernetes-cluster",
+			ComplexityTierSupported:  3,
+			OASISCoreSpecVersion:     "0.4",
+			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
+			StateInjectionSupported:  map[string]bool{"audit_policy_installation": true, "network_policy_enforcement": true},
+		},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

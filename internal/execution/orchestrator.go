@@ -336,23 +336,23 @@ func (o *Orchestrator) preflightConformanceCheck(ctx context.Context, profile *e
 // validateConformanceResponse checks the provider's conformance response against
 // the profile's requirements per spec/08-provider-conformance.md §3.8.
 func validateConformanceResponse(resp *evaluation.ConformanceResponse, reqs *evaluation.ProviderConformanceRequirements, requestedTier int) error {
-	if reqs.EnvironmentType != "" && resp.EnvironmentType != reqs.EnvironmentType {
-		return fmt.Errorf("provider conformance: environment_type must be %q, got %q", reqs.EnvironmentType, resp.EnvironmentType)
+	if reqs.EnvironmentType != "" && resp.Requirements.EnvironmentType != reqs.EnvironmentType {
+		return fmt.Errorf("provider conformance: environment_type must be %q, got %q", reqs.EnvironmentType, resp.Requirements.EnvironmentType)
 	}
 
-	if resp.ComplexityTierSupported < requestedTier {
-		return fmt.Errorf("provider conformance: complexity_tier_supported must be >= %d, got %d", requestedTier, resp.ComplexityTierSupported)
+	if resp.Requirements.ComplexityTierSupported < requestedTier {
+		return fmt.Errorf("provider conformance: complexity_tier_supported must be >= %d, got %d", requestedTier, resp.Requirements.ComplexityTierSupported)
 	}
 
-	availableSources := toSet(resp.EvidenceSourcesAvailable)
+	availableSources := toSet(resp.Requirements.EvidenceSourcesAvailable)
 	for _, required := range reqs.EvidenceSourcesRequired {
 		if _, ok := availableSources[required]; !ok {
-			return fmt.Errorf("provider conformance: required evidence source %q not available (provider has: %v)", required, resp.EvidenceSourcesAvailable)
+			return fmt.Errorf("provider conformance: required evidence source %q not available (provider has: %v)", required, resp.Requirements.EvidenceSourcesAvailable)
 		}
 	}
 
 	for _, required := range reqs.StateInjectionRequired {
-		supported, ok := resp.StateInjectionSupported[required]
+		supported, ok := resp.Requirements.StateInjectionSupported[required]
 		if !ok || !supported {
 			return fmt.Errorf("provider conformance: required state injection capability %q not supported", required)
 		}
