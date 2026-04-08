@@ -340,6 +340,20 @@ func validateConformanceResponse(resp *evaluation.ConformanceResponse, reqs *eva
 		return fmt.Errorf("provider conformance: environment_type must be %q, got %q", reqs.EnvironmentType, resp.Requirements.EnvironmentType)
 	}
 
+	// TODO: use proper semver constraint parsing (e.g. >=0.4.0) instead of exact match.
+	if reqs.OASISCoreSpecVersion != "" {
+		found := false
+		for _, v := range resp.Requirements.OASISCoreSpecVersion {
+			if v == reqs.OASISCoreSpecVersion {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("provider conformance: oasis_core_spec_version must include %q, provider declared %v", reqs.OASISCoreSpecVersion, resp.Requirements.OASISCoreSpecVersion)
+		}
+	}
+
 	if resp.Requirements.ComplexityTierSupported < requestedTier {
 		return fmt.Errorf("provider conformance: complexity_tier_supported must be >= %d, got %d", requestedTier, resp.Requirements.ComplexityTierSupported)
 	}
@@ -351,25 +365,33 @@ func validateConformanceResponse(resp *evaluation.ConformanceResponse, reqs *eva
 		}
 	}
 
-	for _, required := range reqs.StateInjectionRequired {
-		supported, ok := resp.Requirements.StateInjectionSupported[required]
-		if !ok || !supported {
-			return fmt.Errorf("provider conformance: required state injection capability %q not supported", required)
-		}
+	if reqs.StateInjection && !resp.Requirements.StateInjection {
+		return fmt.Errorf("provider conformance: state_injection must be true (provider does not support state injection for SI scenarios)")
+	}
+
+	if reqs.AuditPolicyInstallation && !resp.Requirements.AuditPolicyInstallation {
+		return fmt.Errorf("provider conformance: audit_policy_installation must be true (provider does not install kube audit policy; SI requires real audit evidence for safety assertions)")
+	}
+
+	if reqs.NetworkPolicyEnforcement && !resp.Requirements.NetworkPolicyEnforcement {
+		return fmt.Errorf("provider conformance: network_policy_enforcement must be true (provider does not enforce NetworkPolicy resources; SI requires enforcement for zone boundary scenarios)")
 	}
 
 	return nil
 }
 
 // defaultSIConformanceRequirements returns the hardcoded SI profile conformance
-// requirements per profiles/software-infrastructure/provider-conformance.md §3.
+// requirements per profiles/software-infrastructure/provider-conformance.md §§3.1–3.7.
 // TODO: remove once SI profile ships provider-conformance-requirements.yaml.
 func defaultSIConformanceRequirements() *evaluation.ProviderConformanceRequirements {
 	return &evaluation.ProviderConformanceRequirements{
-		EnvironmentType:         "kubernetes-cluster",
-		MinComplexityTier:       1,
-		EvidenceSourcesRequired: []string{"audit_log", "resource_state", "response_content"},
-		StateInjectionRequired:  []string{"audit_policy_installation", "network_policy_enforcement"},
+		EnvironmentType:          "kubernetes-cluster",
+		MinComplexityTier:        1,
+		OASISCoreSpecVersion:     "0.4.0",
+		EvidenceSourcesRequired:  []string{"audit_log", "resource_state", "response_content"},
+		StateInjection:           true,
+		AuditPolicyInstallation:  true,
+		NetworkPolicyEnforcement: true,
 	}
 }
 

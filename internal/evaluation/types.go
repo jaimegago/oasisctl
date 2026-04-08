@@ -467,11 +467,13 @@ type CapabilitySummary struct {
 // ProviderConformanceRequirements defines what a profile requires from the
 // environment provider, per spec/08-provider-conformance.md §3.8.
 type ProviderConformanceRequirements struct {
-	EnvironmentType         string   `yaml:"environment_type" json:"environment_type"`
-	MinComplexityTier       int      `yaml:"min_complexity_tier" json:"min_complexity_tier"`
-	EvidenceSourcesRequired []string `yaml:"evidence_sources_required" json:"evidence_sources_required"`
-	StateInjectionRequired  []string `yaml:"state_injection_required" json:"state_injection_required"`
-	OASISCoreSpecVersion    string   `yaml:"oasis_core_spec_version" json:"oasis_core_spec_version"`
+	EnvironmentType          string   `yaml:"environment_type" json:"environment_type"`
+	MinComplexityTier        int      `yaml:"min_complexity_tier" json:"min_complexity_tier"`
+	OASISCoreSpecVersion     string   `yaml:"oasis_core_spec_version" json:"oasis_core_spec_version"`
+	EvidenceSourcesRequired  []string `yaml:"evidence_sources_required" json:"evidence_sources_required"`
+	StateInjection           bool     `yaml:"state_injection" json:"state_injection"`
+	AuditPolicyInstallation  bool     `yaml:"audit_policy_installation" json:"audit_policy_installation"`
+	NetworkPolicyEnforcement bool     `yaml:"network_policy_enforcement" json:"network_policy_enforcement"`
 }
 
 // ConformanceRequest is the query sent to GET /v1/conformance.
@@ -482,19 +484,25 @@ type ConformanceRequest struct {
 // ConformanceRequirements holds the nested requirements object within
 // a conformance response, per spec §3.8.2.
 type ConformanceRequirements struct {
-	EnvironmentType          string          `json:"environment_type"`
-	ComplexityTierSupported  int             `json:"complexity_tier_supported"`
-	OASISCoreSpecVersion     string          `json:"oasis_core_spec_version"`
-	EvidenceSourcesAvailable []string        `json:"evidence_sources_available"`
-	StateInjectionSupported  map[string]bool `json:"state_injection_supported"`
+	EnvironmentType          string   `json:"environment_type"`
+	ComplexityTierSupported  int      `json:"complexity_tier_supported"`
+	OASISCoreSpecVersion     []string `json:"oasis_core_spec_version"`
+	EvidenceSourcesAvailable []string `json:"evidence_sources_available"`
+	StateInjection           bool     `json:"state_injection"`
+	AuditPolicyInstallation  bool     `json:"audit_policy_installation"`
+	NetworkPolicyEnforcement bool     `json:"network_policy_enforcement"`
 }
 
 // ConformanceResponse is the response from GET /v1/conformance per spec §3.8.2.
 type ConformanceResponse struct {
-	ProviderName      string                  `json:"provider_name"`
-	ProviderVersion   string                  `json:"provider_version"`
-	Requirements      ConformanceRequirements `json:"requirements"`
-	UnmetRequirements []UnmetRequirement      `json:"unmet_requirements,omitempty"`
+	Provider              string                  `json:"provider"`
+	ProviderVersion       string                  `json:"provider_version"`
+	OASISCoreSpecVersions []string                `json:"oasis_core_spec_versions"`
+	Profile               string                  `json:"profile"`
+	ProfileVersion        string                  `json:"profile_version"`
+	Supported             bool                    `json:"supported"`
+	Requirements          ConformanceRequirements `json:"requirements"`
+	UnmetRequirements     []UnmetRequirement      `json:"unmet_requirements,omitempty"`
 }
 
 // UnmetRequirement describes a single requirement the provider cannot satisfy.

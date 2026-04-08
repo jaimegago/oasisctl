@@ -69,11 +69,17 @@ func (m *mockProvider) Conformance(_ context.Context, _ string) (*evaluation.Con
 		return m.conformanceResp, nil
 	}
 	return &evaluation.ConformanceResponse{
+		Provider:        "mock-provider",
+		ProviderVersion: "1.0.0",
+		Supported:       true,
 		Requirements: evaluation.ConformanceRequirements{
 			EnvironmentType:          "kubernetes-cluster",
 			ComplexityTierSupported:  3,
+			OASISCoreSpecVersion:     []string{"0.4.0"},
 			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
-			StateInjectionSupported:  map[string]bool{"audit_policy_installation": true, "network_policy_enforcement": true},
+			StateInjection:           true,
+			AuditPolicyInstallation:  true,
+			NetworkPolicyEnforcement: true,
 		},
 	}, nil
 }
@@ -998,11 +1004,17 @@ func TestOrchestrator_PreflightConformanceFailure(t *testing.T) {
 	prov := &mockProvider{
 		provisionResp: defaultProvision(),
 		conformanceResp: &evaluation.ConformanceResponse{
+			Provider:        "mock-provider",
+			ProviderVersion: "1.0.0",
+			Supported:       true,
 			Requirements: evaluation.ConformanceRequirements{
 				EnvironmentType:          "kubernetes-cluster",
 				ComplexityTierSupported:  3,
+				OASISCoreSpecVersion:     []string{"0.4.0"},
 				EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
-				StateInjectionSupported:  map[string]bool{"audit_policy_installation": true, "network_policy_enforcement": true},
+				StateInjection:           true,
+				AuditPolicyInstallation:  true,
+				NetworkPolicyEnforcement: true,
 			},
 			UnmetRequirements: []evaluation.UnmetRequirement{
 				{Requirement: "audit_log_retention", Reason: "audit logs not retained for required duration"},
@@ -1021,6 +1033,95 @@ func TestOrchestrator_PreflightConformanceFailure(t *testing.T) {
 	assert.Nil(t, verdict)
 	assert.Contains(t, err.Error(), "provider does not satisfy profile requirements")
 	assert.False(t, reporter.called, "no verdict file should be produced on conformance failure")
+}
+
+func TestValidateConformanceResponse_StateInjectionFalse(t *testing.T) {
+	resp := &evaluation.ConformanceResponse{
+		Requirements: evaluation.ConformanceRequirements{
+			EnvironmentType:          "kubernetes-cluster",
+			ComplexityTierSupported:  1,
+			OASISCoreSpecVersion:     []string{"0.4.0"},
+			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
+			StateInjection:           false,
+			AuditPolicyInstallation:  true,
+			NetworkPolicyEnforcement: true,
+		},
+	}
+	reqs := defaultSIConformanceRequirements()
+	err := validateConformanceResponse(resp, reqs, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "state_injection must be true")
+}
+
+func TestValidateConformanceResponse_AuditPolicyInstallationFalse(t *testing.T) {
+	resp := &evaluation.ConformanceResponse{
+		Requirements: evaluation.ConformanceRequirements{
+			EnvironmentType:          "kubernetes-cluster",
+			ComplexityTierSupported:  1,
+			OASISCoreSpecVersion:     []string{"0.4.0"},
+			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
+			StateInjection:           true,
+			AuditPolicyInstallation:  false,
+			NetworkPolicyEnforcement: true,
+		},
+	}
+	reqs := defaultSIConformanceRequirements()
+	err := validateConformanceResponse(resp, reqs, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "audit_policy_installation must be true")
+}
+
+func TestValidateConformanceResponse_NetworkPolicyEnforcementFalse(t *testing.T) {
+	resp := &evaluation.ConformanceResponse{
+		Requirements: evaluation.ConformanceRequirements{
+			EnvironmentType:          "kubernetes-cluster",
+			ComplexityTierSupported:  1,
+			OASISCoreSpecVersion:     []string{"0.4.0"},
+			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
+			StateInjection:           true,
+			AuditPolicyInstallation:  true,
+			NetworkPolicyEnforcement: false,
+		},
+	}
+	reqs := defaultSIConformanceRequirements()
+	err := validateConformanceResponse(resp, reqs, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "network_policy_enforcement must be true")
+}
+
+func TestValidateConformanceResponse_OASISCoreSpecVersionMissing(t *testing.T) {
+	resp := &evaluation.ConformanceResponse{
+		Requirements: evaluation.ConformanceRequirements{
+			EnvironmentType:          "kubernetes-cluster",
+			ComplexityTierSupported:  1,
+			OASISCoreSpecVersion:     []string{"0.3.0"},
+			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
+			StateInjection:           true,
+			AuditPolicyInstallation:  true,
+			NetworkPolicyEnforcement: true,
+		},
+	}
+	reqs := defaultSIConformanceRequirements()
+	err := validateConformanceResponse(resp, reqs, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "oasis_core_spec_version must include")
+}
+
+func TestValidateConformanceResponse_AllPass(t *testing.T) {
+	resp := &evaluation.ConformanceResponse{
+		Requirements: evaluation.ConformanceRequirements{
+			EnvironmentType:          "kubernetes-cluster",
+			ComplexityTierSupported:  1,
+			OASISCoreSpecVersion:     []string{"0.4.0"},
+			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
+			StateInjection:           true,
+			AuditPolicyInstallation:  true,
+			NetworkPolicyEnforcement: true,
+		},
+	}
+	reqs := defaultSIConformanceRequirements()
+	err := validateConformanceResponse(resp, reqs, 1)
+	require.NoError(t, err)
 }
 
 // --- Evidence source abort tests ---
