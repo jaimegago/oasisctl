@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -340,22 +342,16 @@ func validateConformanceResponse(resp *evaluation.ConformanceResponse, reqs *eva
 		return fmt.Errorf("provider conformance: environment_type must be %q, got %q", reqs.EnvironmentType, resp.Requirements.EnvironmentType)
 	}
 
-	// TODO(semver): current implementation does exact-string equality on the
-	// OASIS core spec version. This will incorrectly reject providers declaring
-	// a compatible patch or minor version (e.g. provider declares "0.4.1" against
-	// oasisctl expecting "0.4.0"). Replace with semver constraint parsing using
-	// a library such as github.com/Masterminds/semver/v3 or golang.org/x/mod/semver.
-	// Tracked separately from the v0.4 conformance work.
 	if reqs.OASISCoreSpecVersion != "" {
 		found := false
 		for _, v := range resp.Requirements.OASISCoreSpecVersion {
-			if v == reqs.OASISCoreSpecVersion {
+			if semverCompatible(v, reqs.OASISCoreSpecVersion) {
 				found = true
 				break
 			}
 		}
 		if !found {
-			return fmt.Errorf("provider conformance: oasis_core_spec_version must include %q, provider declared %v", reqs.OASISCoreSpecVersion, resp.Requirements.OASISCoreSpecVersion)
+			return fmt.Errorf("provider conformance: oasis_core_spec_version must include a version compatible with %q, provider declared %v", reqs.OASISCoreSpecVersion, resp.Requirements.OASISCoreSpecVersion)
 		}
 	}
 
@@ -728,4 +724,55 @@ func errorResult(scenarioID, errMsg string) evaluation.ScenarioResult {
 		Passed:     false,
 		Errors:     []string{errMsg},
 	}
+}
+
+// semverCompatible checks if providerVersion is compatible with requiredVersion.
+// Compatible means same major.minor with provider patch >= required patch.
+// For pre-1.0 versions (major == 0), both major and minor must match.
+// Versions are parsed as "major.minor.patch" or "major.minor" (patch defaults to 0).
+// Falls back to exact string equality if either version cannot be parsed.
+func semverCompatible(providerVersion, requiredVersion string) bool {
+	pMajor, pMinor, pPatch, pOK := parseSemver(providerVersion)
+	rMajor, rMinor, rPatch, rOK := parseSemver(requiredVersion)
+
+	if !pOK || !rOK {
+		return providerVersion == requiredVersion
+	}
+
+	if pMajor != rMajor {
+		return false
+	}
+	if pMinor != rMinor {
+		return false
+	}
+	return pPatch >= rPatch
+}
+
+// parseSemver parses a version string "major.minor[.patch]" into components.
+// Returns (major, minor, patch, ok). Patch defaults to 0 if omitted.
+func parseSemver(v string) (int, int, int, bool) {
+	v = strings.TrimPrefix(v, "v")
+	parts := strings.SplitN(v, ".", 3)
+	if len(parts) < 2 {
+		return 0, 0, 0, false
+	}
+
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, 0, false
+	}
+
+	patch := 0
+	if len(parts) == 3 {
+		patch, err = strconv.Atoi(parts[2])
+		if err != nil {
+			return 0, 0, 0, false
+		}
+	}
+
+	return major, minor, patch, true
 }
