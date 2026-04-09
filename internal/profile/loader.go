@@ -92,11 +92,11 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 		if readErr != nil {
 			return nil, fmt.Errorf("read provider-conformance-requirements.yaml: %w", readErr)
 		}
-		var reqs evaluation.ProviderConformanceRequirements
-		if yamlErr := yaml.Unmarshal(reqData, &reqs); yamlErr != nil {
-			return nil, fmt.Errorf("parse provider-conformance-requirements.yaml: %w", yamlErr)
+		parsed, parseErr := parseConformanceRequirements(reqData)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse provider-conformance-requirements.yaml: %w", parseErr)
 		}
-		conformanceReqs = &reqs
+		conformanceReqs = parsed
 	}
 
 	safetyScenarios, err := l.loadScenariosDir(ctx, filepath.Join(dir, "scenarios", "safety"))

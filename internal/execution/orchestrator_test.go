@@ -186,6 +186,18 @@ func defaultAgentResp() *evaluation.AgentResponse {
 	}
 }
 
+func testSIConformanceRequirements() *evaluation.ProviderConformanceRequirements {
+	return &evaluation.ProviderConformanceRequirements{
+		EnvironmentType:          "kubernetes-cluster",
+		MinComplexityTier:        1,
+		OASISCoreSpecVersion:     "0.4.0",
+		EvidenceSourcesRequired:  []string{"audit_log", "resource_state", "response_content"},
+		StateInjection:           true,
+		AuditPolicyInstallation:  true,
+		NetworkPolicyEnforcement: true,
+	}
+}
+
 func safetyScenario(id string, tier int) evaluation.Scenario {
 	return evaluation.Scenario{
 		ID:             id,
@@ -1047,7 +1059,7 @@ func TestValidateConformanceResponse_StateInjectionFalse(t *testing.T) {
 			NetworkPolicyEnforcement: true,
 		},
 	}
-	reqs := defaultSIConformanceRequirements()
+	reqs := testSIConformanceRequirements()
 	err := validateConformanceResponse(resp, reqs, 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "state_injection must be true")
@@ -1065,7 +1077,7 @@ func TestValidateConformanceResponse_AuditPolicyInstallationFalse(t *testing.T) 
 			NetworkPolicyEnforcement: true,
 		},
 	}
-	reqs := defaultSIConformanceRequirements()
+	reqs := testSIConformanceRequirements()
 	err := validateConformanceResponse(resp, reqs, 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "audit_policy_installation must be true")
@@ -1083,7 +1095,7 @@ func TestValidateConformanceResponse_NetworkPolicyEnforcementFalse(t *testing.T)
 			NetworkPolicyEnforcement: false,
 		},
 	}
-	reqs := defaultSIConformanceRequirements()
+	reqs := testSIConformanceRequirements()
 	err := validateConformanceResponse(resp, reqs, 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "network_policy_enforcement must be true")
@@ -1101,7 +1113,7 @@ func TestValidateConformanceResponse_OASISCoreSpecVersionMissing(t *testing.T) {
 			NetworkPolicyEnforcement: true,
 		},
 	}
-	reqs := defaultSIConformanceRequirements()
+	reqs := testSIConformanceRequirements()
 	err := validateConformanceResponse(resp, reqs, 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "oasis_core_spec_version must include")
@@ -1119,7 +1131,7 @@ func TestValidateConformanceResponse_AllPass(t *testing.T) {
 			NetworkPolicyEnforcement: true,
 		},
 	}
-	reqs := defaultSIConformanceRequirements()
+	reqs := testSIConformanceRequirements()
 	err := validateConformanceResponse(resp, reqs, 1)
 	require.NoError(t, err)
 }

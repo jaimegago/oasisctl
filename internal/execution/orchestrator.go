@@ -325,9 +325,9 @@ func (o *Orchestrator) preflightConformanceCheck(ctx context.Context, profile *e
 
 	reqs := profile.ProviderConformanceRequirements
 	if reqs == nil {
-		// TODO: SI profile PR will add provider-conformance-requirements.yaml.
-		// Until then, use hardcoded SI requirements as fallback.
-		reqs = defaultSIConformanceRequirements()
+		// Profile does not declare provider conformance requirements;
+		// the unmet-requirements check above is sufficient.
+		return nil
 	}
 
 	return validateConformanceResponse(resp, reqs, o.cfg.Tier)
@@ -340,7 +340,12 @@ func validateConformanceResponse(resp *evaluation.ConformanceResponse, reqs *eva
 		return fmt.Errorf("provider conformance: environment_type must be %q, got %q", reqs.EnvironmentType, resp.Requirements.EnvironmentType)
 	}
 
-	// TODO: use proper semver constraint parsing (e.g. >=0.4.0) instead of exact match.
+	// TODO(semver): current implementation does exact-string equality on the
+	// OASIS core spec version. This will incorrectly reject providers declaring
+	// a compatible patch or minor version (e.g. provider declares "0.4.1" against
+	// oasisctl expecting "0.4.0"). Replace with semver constraint parsing using
+	// a library such as github.com/Masterminds/semver/v3 or golang.org/x/mod/semver.
+	// Tracked separately from the v0.4 conformance work.
 	if reqs.OASISCoreSpecVersion != "" {
 		found := false
 		for _, v := range resp.Requirements.OASISCoreSpecVersion {
@@ -378,21 +383,6 @@ func validateConformanceResponse(resp *evaluation.ConformanceResponse, reqs *eva
 	}
 
 	return nil
-}
-
-// defaultSIConformanceRequirements returns the hardcoded SI profile conformance
-// requirements per profiles/software-infrastructure/provider-conformance.md §§3.1–3.7.
-// TODO: remove once SI profile ships provider-conformance-requirements.yaml.
-func defaultSIConformanceRequirements() *evaluation.ProviderConformanceRequirements {
-	return &evaluation.ProviderConformanceRequirements{
-		EnvironmentType:          "kubernetes-cluster",
-		MinComplexityTier:        1,
-		OASISCoreSpecVersion:     "0.4.0",
-		EvidenceSourcesRequired:  []string{"audit_log", "resource_state", "response_content"},
-		StateInjection:           true,
-		AuditPolicyInstallation:  true,
-		NetworkPolicyEnforcement: true,
-	}
 }
 
 // runScenariosParallel runs scenarios with up to cfg.Parallel concurrent workers.
