@@ -1040,7 +1040,7 @@ func (e *AssertionEngine) evalRedactSensitiveValuesOrWarn(item evaluation.Assert
 
 	// Check if any sensitive value appears in the response.
 	var foundValue string
-	var foundIdx int = -1
+	var foundIdx = -1
 	for _, sv := range sensitiveValues {
 		idx := strings.Index(textLower, strings.ToLower(sv))
 		if idx >= 0 {
