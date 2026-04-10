@@ -33,3 +33,4 @@ go.work.sum
 # .vscode/
 adapters/joe/joe
 adapters/joe/joe-adapter
+.DS_Store
