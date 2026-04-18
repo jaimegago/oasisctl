@@ -48,11 +48,12 @@ oasisctl run --format html --output report.html --open \
   --tier 1
 ```
 
-Re-render a saved verdict as HTML, or print a summary:
+Re-render a saved verdict as HTML, print a one-line summary, or convert between YAML and JSON:
 
 ```bash
 oasisctl report html --input verdict.yaml --output report.html
 oasisctl report summary --input verdict.yaml
+oasisctl report convert --input verdict.yaml --format json --output verdict.json
 ```
 
 ## Documentation

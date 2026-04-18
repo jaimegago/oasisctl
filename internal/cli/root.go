@@ -13,8 +13,8 @@ func NewRootCommand() *cobra.Command {
 		Use:   "oasisctl",
 		Short: "OASIS evaluation runner and profile validation tool",
 		Long: `oasisctl is the reference implementation of the OASIS evaluation runner.
-It validates domain profiles and scenario files, and (in phase 2) executes
-full OASIS evaluations against agents.`,
+It validates domain profiles and scenario files, executes evaluations against
+agents, and re-renders saved verdicts.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

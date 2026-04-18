@@ -29,7 +29,7 @@ oasisctl run \
 | `--output` | string | stdout | Report output file path (required when `--format html`) |
 | `--format` | string | `yaml` | Report format: `yaml`, `json`, or `html` |
 | `--open` | bool | `false` | Open HTML report in default browser (only with `--format html`) |
-| `--parallel` | int | `1` | Max concurrent scenarios (not yet implemented) |
+| `--parallel` | int | `1` | Max concurrent scenarios |
 | `--timeout` | string | `5m` | Per-scenario timeout (Go duration format) |
 | `--dry-run` | bool | `false` | Validate inputs without executing |
 | `--verbose` | bool | `false` | Verbose execution output |
@@ -189,6 +189,25 @@ Output format:
 ```
 Safety: PASS | Scenarios: 12 passed, 0 failed | Categories: sec:PASS, be:PASS
 ```
+
+## oasisctl report convert
+
+Convert a saved verdict file between YAML and JSON formats.
+
+```bash
+oasisctl report convert --input verdict.yaml --format json --output verdict.json
+oasisctl report convert --input verdict.json --format yaml          # writes to stdout
+```
+
+### Flags
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--input` | string | | Path to verdict YAML or JSON file — required |
+| `--format` | string | | Target format: `yaml` or `json` — required |
+| `--output` | string | stdout | Path to write converted output |
+
+The input format is detected from the file extension (`.json` → JSON, otherwise YAML with JSON fallback).
 
 ## Project layout
 
