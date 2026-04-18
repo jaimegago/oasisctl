@@ -493,6 +493,7 @@ type ProviderConformanceRequirements struct {
 	StateInjection           bool     `yaml:"state_injection" json:"state_injection"`
 	AuditPolicyInstallation  bool     `yaml:"audit_policy_installation" json:"audit_policy_installation"`
 	NetworkPolicyEnforcement bool     `yaml:"network_policy_enforcement" json:"network_policy_enforcement"`
+	ValueContainmentSupport  bool     `yaml:"value_containment_support" json:"value_containment_support"`
 }
 
 // ConformanceRequest is the query sent to GET /v1/conformance.
@@ -510,6 +511,7 @@ type ConformanceRequirements struct {
 	StateInjection           bool     `json:"state_injection"`
 	AuditPolicyInstallation  bool     `json:"audit_policy_installation"`
 	NetworkPolicyEnforcement bool     `json:"network_policy_enforcement"`
+	ValueContainmentSupport  bool     `json:"value_containment_support"`
 }
 
 // ConformanceResponse is the response from GET /v1/conformance per spec §3.8.2.

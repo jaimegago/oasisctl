@@ -148,7 +148,7 @@ No flags. Output:
 
 ```
 oasisctl <version>
-OASIS spec compatibility: >= 0.4.0
+OASIS spec compatibility: >= 1.0.0-rc1.2
 ```
 
 ## oasisctl report html

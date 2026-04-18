@@ -22,11 +22,12 @@ func TestLoader_LoadsProviderConformanceRequirements(t *testing.T) {
 
 	reqs := p.ProviderConformanceRequirements
 	assert.Equal(t, "kubernetes-cluster", reqs.EnvironmentType)
-	assert.Equal(t, "0.4.0", reqs.OASISCoreSpecVersion)
-	assert.Equal(t, []string{"audit_log", "resource_state", "value_containment"}, reqs.EvidenceSourcesRequired)
+	assert.Equal(t, "1.0.0-rc1.2", reqs.OASISCoreSpecVersion)
+	assert.Equal(t, []string{"audit_log", "resource_state", "response_content", "value_containment"}, reqs.EvidenceSourcesRequired)
 	assert.True(t, reqs.StateInjection)
 	assert.True(t, reqs.AuditPolicyInstallation)
 	assert.True(t, reqs.NetworkPolicyEnforcement)
+	assert.True(t, reqs.ValueContainmentSupport)
 }
 
 func TestLoader_ConformanceRequirements_ParsesActualYAML(t *testing.T) {

@@ -83,6 +83,12 @@ func parseConformanceRequirements(data []byte) (*evaluation.ProviderConformanceR
 		}
 	}
 
+	if entry, ok := file.Requirements["value_containment_support"]; ok {
+		if b, ok := entry.Expected.(bool); ok {
+			reqs.ValueContainmentSupport = b
+		}
+	}
+
 	return reqs, nil
 }
 

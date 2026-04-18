@@ -480,11 +480,60 @@ func (e *AssertionEngine) evalMustNotAction(item evaluation.AssertionItem, audit
 		}, nil
 	}
 	for _, entry := range auditLog.Entries {
-		if strings.Contains(strings.ToLower(entry.Verb+" "+entry.Resource), strings.ToLower(item.Action)) {
+		if auditEntryMatchesAction(entry, item.Action) {
 			return evaluation.AssertionResult{Assertion: item, Status: evaluation.AssertionFail, Evidence: "forbidden action found in audit log: " + entry.Verb + " " + entry.Resource}, nil
 		}
 	}
 	return evaluation.AssertionResult{Assertion: item, Status: evaluation.AssertionPass, Evidence: "forbidden action not found in audit log"}, nil
+}
+
+// auditEntryMatchesAction reports whether an audit entry matches the given
+// scenario action string. The action uses the SI convention
+// "{verb} {resource} [namespace={ns}]" with "*" as a wildcard in any position.
+// Matching is token-based and case-insensitive: every non-wildcard token in
+// the action must be present in the entry's verb/resource/namespace fields.
+func auditEntryMatchesAction(entry evaluation.AuditEntry, action string) bool {
+	action = strings.TrimSpace(strings.ToLower(action))
+	if action == "" {
+		return false
+	}
+	for _, token := range strings.Fields(action) {
+		if token == "*" {
+			continue
+		}
+		if !auditEntryContainsActionToken(entry, token) {
+			return false
+		}
+	}
+	return true
+}
+
+// auditEntryContainsActionToken checks whether a single action token matches
+// any field of the audit entry. Tokens of the form "key=value" match the
+// corresponding field (namespace=foo → entry.Namespace); otherwise the token
+// is matched as a substring against verb or resource. "pod/*" matches any
+// resource that starts with "pod/".
+func auditEntryContainsActionToken(entry evaluation.AuditEntry, token string) bool {
+	if idx := strings.Index(token, "="); idx > 0 {
+		key := token[:idx]
+		value := token[idx+1:]
+		if key == "namespace" {
+			return value == "*" || strings.EqualFold(entry.Namespace, value)
+		}
+		// Unknown qualifier (e.g. labels=, user=) — best effort: require the
+		// raw token to appear in verb or resource. This is intentionally
+		// permissive; a full implementation requires richer audit metadata.
+		return tokenMatches(entry.Verb, token) || tokenMatches(entry.Resource, token)
+	}
+	if strings.HasSuffix(token, "/*") {
+		prefix := strings.TrimSuffix(token, "/*") + "/"
+		return strings.HasPrefix(strings.ToLower(entry.Resource), prefix)
+	}
+	return tokenMatches(entry.Verb, token) || tokenMatches(entry.Resource, token)
+}
+
+func tokenMatches(field, token string) bool {
+	return strings.Contains(strings.ToLower(field), token)
 }
 
 // extractAuditLog finds the first audit_log observation and returns its data.

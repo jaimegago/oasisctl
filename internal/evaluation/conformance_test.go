@@ -19,15 +19,15 @@ func TestConformanceResponse_RoundTrip_SpecSection5_1(t *testing.T) {
 	const specJSON = `{
   "provider": "petri",
   "provider_version": "0.2.0",
-  "oasis_core_spec_versions": ["0.4.0"],
+  "oasis_core_spec_versions": ["1.0.0-rc1"],
   "profile": "oasis-profile-software-infrastructure",
-  "profile_version": "0.2.0-draft",
+  "profile_version": "0.2.0-rc1",
   "supported": true,
   "requirements": {
     "environment_type": "kubernetes-cluster",
     "complexity_tier_supported": 1,
-    "oasis_core_spec_version": ["0.4.0"],
-    "evidence_sources_available": ["audit_log", "resource_state", "state_diff", "value_containment"],
+    "oasis_core_spec_version": ["1.0.0-rc1"],
+    "evidence_sources_available": ["audit_log", "resource_state", "state_diff", "response_content"],
     "state_injection": true,
     "audit_policy_installation": true,
     "network_policy_enforcement": true
@@ -43,20 +43,20 @@ func TestConformanceResponse_RoundTrip_SpecSection5_1(t *testing.T) {
 	assert.Equal(t, "petri", resp.Provider)
 	assert.Equal(t, "0.2.0", resp.ProviderVersion)
 	require.Len(t, resp.OASISCoreSpecVersions, 1)
-	assert.Equal(t, "0.4.0", resp.OASISCoreSpecVersions[0])
+	assert.Equal(t, "1.0.0-rc1", resp.OASISCoreSpecVersions[0])
 	assert.Equal(t, "oasis-profile-software-infrastructure", resp.Profile)
-	assert.Equal(t, "0.2.0-draft", resp.ProfileVersion)
+	assert.Equal(t, "0.2.0-rc1", resp.ProfileVersion)
 	assert.True(t, resp.Supported)
 
 	// Nested requirements — seven peer fields.
 	assert.Equal(t, "kubernetes-cluster", resp.Requirements.EnvironmentType)
 	assert.Equal(t, 1, resp.Requirements.ComplexityTierSupported)
 	require.Len(t, resp.Requirements.OASISCoreSpecVersion, 1)
-	assert.Equal(t, "0.4.0", resp.Requirements.OASISCoreSpecVersion[0])
+	assert.Equal(t, "1.0.0-rc1", resp.Requirements.OASISCoreSpecVersion[0])
 	assert.Contains(t, resp.Requirements.EvidenceSourcesAvailable, "audit_log")
 	assert.Contains(t, resp.Requirements.EvidenceSourcesAvailable, "resource_state")
 	assert.Contains(t, resp.Requirements.EvidenceSourcesAvailable, "state_diff")
-	assert.Contains(t, resp.Requirements.EvidenceSourcesAvailable, "value_containment")
+	assert.Contains(t, resp.Requirements.EvidenceSourcesAvailable, "response_content")
 	assert.True(t, resp.Requirements.StateInjection)
 	assert.True(t, resp.Requirements.AuditPolicyInstallation)
 	assert.True(t, resp.Requirements.NetworkPolicyEnforcement)

@@ -64,4 +64,4 @@ oasisctl report summary --input verdict.yaml
 
 ## OASIS spec compatibility
 
-`oasisctl` targets OASIS spec `>= 0.4.0`.
+`oasisctl` targets OASIS spec `>= 1.0.0-rc1.2`.
