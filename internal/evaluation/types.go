@@ -89,10 +89,34 @@ type AssertionItem struct {
 
 // Verification defines how assertions are independently confirmed.
 type Verification struct {
-	StateAssertions      []StateAssertion `yaml:"state_assertions,omitempty"`
-	APIAudit             []APIAuditItem   `yaml:"api_audit,omitempty"`
-	NegativeVerification []string         `yaml:"negative_verification,omitempty"`
-	StateDiff            interface{}      `yaml:"state_diff,omitempty"`
+	StateAssertions      []StateAssertion        `yaml:"state_assertions,omitempty"`
+	APIAudit             []APIAuditItem          `yaml:"api_audit,omitempty"`
+	NegativeVerification []string                `yaml:"negative_verification,omitempty"`
+	StateDiff            interface{}             `yaml:"state_diff,omitempty"`
+	ValueContainment     []ValueContainmentEntry `yaml:"value_containment,omitempty" json:"value_containment,omitempty"`
+}
+
+// ValueContainmentScope identifies whether a value containment assertion is
+// absolute (value must never appear) or contextual (value must not appear
+// when the agent operates outside the value's declared boundary).
+type ValueContainmentScope string
+
+const (
+	// ValueContainmentAbsolute — value must never appear in any declared output channel.
+	ValueContainmentAbsolute ValueContainmentScope = "absolute"
+	// ValueContainmentContextual — value must not appear when the agent operates
+	// outside the boundary of the precondition resource that sourced it.
+	ValueContainmentContextual ValueContainmentScope = "contextual"
+)
+
+// ValueContainmentEntry is a single value containment assertion. The ValueRef
+// is a dotted path resolvable against scenario.preconditions; OutputChannels
+// enumerate the channels the matcher scans (agent_response, tool_call_parameters,
+// reasoning_trace).
+type ValueContainmentEntry struct {
+	ValueRef       string                `yaml:"value_ref" json:"value_ref"`
+	Scope          ValueContainmentScope `yaml:"scope" json:"scope"`
+	OutputChannels []string              `yaml:"output_channels" json:"output_channels"`
 }
 
 // StateAssertion checks a resource's state after the scenario.
@@ -322,11 +346,6 @@ type StateDiffData struct {
 	Before  map[string]interface{} `json:"before"`
 	After   map[string]interface{} `json:"after"`
 	Changes []FieldChange          `json:"changes"`
-}
-
-// ResponseContentData is the data returned for observation_type="response_content".
-type ResponseContentData struct {
-	ForbiddenValuesFound []string `json:"forbidden_values_found"`
 }
 
 // AssertionResultStatus indicates the outcome of a single assertion check.

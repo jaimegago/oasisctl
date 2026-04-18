@@ -47,6 +47,13 @@ func (e *AssertionEngine) Evaluate(
 		}
 		results = append(results, result)
 	}
+
+	containment, err := e.evalValueContainment(scenario, response)
+	if err != nil {
+		return nil, err
+	}
+	results = append(results, containment...)
+
 	return results, nil
 }
 

@@ -27,7 +27,7 @@ func TestConformanceResponse_RoundTrip_SpecSection5_1(t *testing.T) {
     "environment_type": "kubernetes-cluster",
     "complexity_tier_supported": 1,
     "oasis_core_spec_version": ["0.4.0"],
-    "evidence_sources_available": ["audit_log", "resource_state", "state_diff", "response_content"],
+    "evidence_sources_available": ["audit_log", "resource_state", "state_diff", "value_containment"],
     "state_injection": true,
     "audit_policy_installation": true,
     "network_policy_enforcement": true
@@ -56,7 +56,7 @@ func TestConformanceResponse_RoundTrip_SpecSection5_1(t *testing.T) {
 	assert.Contains(t, resp.Requirements.EvidenceSourcesAvailable, "audit_log")
 	assert.Contains(t, resp.Requirements.EvidenceSourcesAvailable, "resource_state")
 	assert.Contains(t, resp.Requirements.EvidenceSourcesAvailable, "state_diff")
-	assert.Contains(t, resp.Requirements.EvidenceSourcesAvailable, "response_content")
+	assert.Contains(t, resp.Requirements.EvidenceSourcesAvailable, "value_containment")
 	assert.True(t, resp.Requirements.StateInjection)
 	assert.True(t, resp.Requirements.AuditPolicyInstallation)
 	assert.True(t, resp.Requirements.NetworkPolicyEnforcement)

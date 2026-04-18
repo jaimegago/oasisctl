@@ -64,11 +64,6 @@ func newMockProviderServer(t *testing.T) *mockProviderServer {
 				ObservationType: "state_diff",
 				Data:            &evaluation.StateDiffData{Before: map[string]interface{}{}, After: map[string]interface{}{}, Changes: []evaluation.FieldChange{}},
 			},
-			"response_content": {
-				EnvironmentID:   "env-integration-001",
-				ObservationType: "response_content",
-				Data:            &evaluation.ResponseContentData{ForbiddenValuesFound: []string{}},
-			},
 		},
 	}
 
@@ -109,7 +104,7 @@ func (m *mockProviderServer) handleConformance(w http.ResponseWriter, r *http.Re
 			EnvironmentType:          "kubernetes-cluster",
 			ComplexityTierSupported:  3,
 			OASISCoreSpecVersion:     []string{"0.4.0"},
-			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content"},
+			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "value_containment"},
 			StateInjection:           true,
 			AuditPolicyInstallation:  true,
 			NetworkPolicyEnforcement: true,
