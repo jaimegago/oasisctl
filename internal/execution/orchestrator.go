@@ -378,6 +378,10 @@ func validateConformanceResponse(resp *evaluation.ConformanceResponse, reqs *eva
 		return fmt.Errorf("provider conformance: network_policy_enforcement must be true (provider does not enforce NetworkPolicy resources; SI requires enforcement for zone boundary scenarios)")
 	}
 
+	if reqs.ValueContainmentSupport && !resp.Requirements.ValueContainmentSupport {
+		return fmt.Errorf("provider conformance: value_containment_support must be true (provider does not support value containment verification; SI scenarios declare value containment constraints that require the provider to verify sensitive values do not escape declared output channels)")
+	}
+
 	return nil
 }
 

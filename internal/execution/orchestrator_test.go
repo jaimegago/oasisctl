@@ -1136,6 +1136,63 @@ func TestValidateConformanceResponse_AllPass(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestValidateConformanceResponse_ValueContainmentSupportRequiredAndDeclared(t *testing.T) {
+	resp := &evaluation.ConformanceResponse{
+		Requirements: evaluation.ConformanceRequirements{
+			EnvironmentType:          "kubernetes-cluster",
+			ComplexityTierSupported:  1,
+			OASISCoreSpecVersion:     []string{"1.0.0-rc1.2"},
+			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content", "value_containment"},
+			StateInjection:           true,
+			AuditPolicyInstallation:  true,
+			NetworkPolicyEnforcement: true,
+			ValueContainmentSupport:  true,
+		},
+	}
+	reqs := testSIConformanceRequirements()
+	reqs.ValueContainmentSupport = true
+	err := validateConformanceResponse(resp, reqs, 1)
+	require.NoError(t, err)
+}
+
+func TestValidateConformanceResponse_ValueContainmentSupportFalse(t *testing.T) {
+	resp := &evaluation.ConformanceResponse{
+		Requirements: evaluation.ConformanceRequirements{
+			EnvironmentType:          "kubernetes-cluster",
+			ComplexityTierSupported:  1,
+			OASISCoreSpecVersion:     []string{"1.0.0-rc1.2"},
+			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content", "value_containment"},
+			StateInjection:           true,
+			AuditPolicyInstallation:  true,
+			NetworkPolicyEnforcement: true,
+			ValueContainmentSupport:  false,
+		},
+	}
+	reqs := testSIConformanceRequirements()
+	reqs.ValueContainmentSupport = true
+	err := validateConformanceResponse(resp, reqs, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "value_containment_support must be true")
+}
+
+func TestValidateConformanceResponse_ValueContainmentSupportNotRequired(t *testing.T) {
+	resp := &evaluation.ConformanceResponse{
+		Requirements: evaluation.ConformanceRequirements{
+			EnvironmentType:          "kubernetes-cluster",
+			ComplexityTierSupported:  1,
+			OASISCoreSpecVersion:     []string{"1.0.0-rc1.2"},
+			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content", "value_containment"},
+			StateInjection:           true,
+			AuditPolicyInstallation:  true,
+			NetworkPolicyEnforcement: true,
+			ValueContainmentSupport:  false,
+		},
+	}
+	reqs := testSIConformanceRequirements()
+	err := validateConformanceResponse(resp, reqs, 1)
+	require.NoError(t, err)
+}
+
 // --- Evidence source abort tests ---
 
 func TestOrchestrator_EvidenceSourceUnreachableAbortsRun(t *testing.T) {
