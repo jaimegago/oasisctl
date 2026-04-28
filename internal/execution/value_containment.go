@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -18,11 +17,6 @@ const (
 	channelToolCallParameters = "tool_call_parameters"
 )
 
-// valueRefPathRegex matches the common prefix of all supported value_ref paths:
-//
-//	preconditions.environment.state[?resource=="<kind>/<name>"].<suffix>
-var valueRefPathRegex = regexp.MustCompile(`^preconditions\.environment\.state\[\?resource=="([^"]+)"\]\.(.+)$`)
-
 // resolvedValueSet is the pure-function output of ResolveValueRef: the literal
 // strings to scan for, plus metadata about the resource the value was sourced
 // from so contextual scope checks can reason about boundaries.
@@ -34,34 +28,112 @@ type resolvedValueSet struct {
 	Namespace string
 }
 
-// ResolveValueRef resolves a value_ref dotted path against scenario.preconditions
-// and returns the literal string values to scan for. Each resolved literal is
+// valueRefPath is the parsed form of a value_ref path. The grammar is:
+//
+//	<kind>/<name>.<field>[.<key>]
+//
+// kind ∈ {secret, pod, deployment}; name has no slashes and no dots; field is
+// data (for secret) or env (for pod/deployment). key is the trailing
+// component: optional only when kind=secret and field=data (in which case the
+// resolution returns every value in the data map); required for env.
+type valueRefPath struct {
+	kind  string
+	name  string
+	field string
+	key   string
+}
+
+func (p valueRefPath) resource() string { return p.kind + "/" + p.name }
+
+// parseValueRefPath validates ref against the spec grammar and returns the
+// parsed components. Whitespace is not tolerated; names and keys are
+// case-sensitive.
+func parseValueRefPath(ref string) (valueRefPath, error) {
+	if ref == "" {
+		return valueRefPath{}, fmt.Errorf("unsupported value_ref path syntax: %q", ref)
+	}
+	if strings.ContainsAny(ref, " \t\n\r") {
+		return valueRefPath{}, fmt.Errorf("unsupported value_ref path syntax: %q", ref)
+	}
+
+	slashIdx := strings.Index(ref, "/")
+	if slashIdx <= 0 {
+		return valueRefPath{}, fmt.Errorf("unsupported value_ref path syntax: %q", ref)
+	}
+	kind := ref[:slashIdx]
+	switch kind {
+	case "secret", "pod", "deployment":
+	default:
+		return valueRefPath{}, fmt.Errorf("unsupported value_ref path syntax: %q", ref)
+	}
+
+	rest := ref[slashIdx+1:]
+	dotIdx := strings.Index(rest, ".")
+	if dotIdx <= 0 {
+		// No dot at all, or leading dot (empty name).
+		return valueRefPath{}, fmt.Errorf("unsupported value_ref path syntax: %q", ref)
+	}
+	name := rest[:dotIdx]
+	if strings.Contains(name, "/") {
+		return valueRefPath{}, fmt.Errorf("path component %q invalid: name contains slash", ref)
+	}
+
+	afterName := rest[dotIdx+1:]
+	if afterName == "" {
+		return valueRefPath{}, fmt.Errorf("unsupported value_ref path syntax: %q", ref)
+	}
+
+	var field, key string
+	if i := strings.Index(afterName, "."); i >= 0 {
+		field = afterName[:i]
+		key = afterName[i+1:]
+	} else {
+		field = afterName
+	}
+	if field == "" {
+		return valueRefPath{}, fmt.Errorf("unsupported value_ref path syntax: %q", ref)
+	}
+
+	switch {
+	case kind == "secret" && field == "data":
+		// Reject "secret/foo.data." (second dot present but key empty).
+		if afterName != "data" && key == "" {
+			return valueRefPath{}, fmt.Errorf("path component %q invalid: trailing dot", ref)
+		}
+	case (kind == "pod" || kind == "deployment") && field == "env":
+		if key == "" {
+			return valueRefPath{}, fmt.Errorf("path component %q invalid: env requires a variable name", ref)
+		}
+	default:
+		return valueRefPath{}, fmt.Errorf("path component %q invalid: field %q not valid for kind %q", ref, field, kind)
+	}
+
+	return valueRefPath{kind: kind, name: name, field: field, key: key}, nil
+}
+
+// ResolveValueRef resolves a value_ref path against scenario.preconditions and
+// returns the literal string values to scan for. Each resolved literal is
 // included in both its raw form and, when the raw value is valid base64 that
 // decodes to printable text, in its decoded plaintext form. Invalid base64 is
 // not an error — only the raw form is returned in that case.
 //
-// Supported path shapes, in priority order:
+// The path syntax is defined by the OASIS spec:
 //
-//	preconditions.environment.state[?resource=="secret/NAME"].data.KEY
-//	preconditions.environment.state[?resource=="secret/NAME"].data
-//	preconditions.environment.state[?resource=="pod/NAME"].env.ENVNAME
-//	preconditions.environment.state[?resource=="deployment/NAME"].env.ENVNAME
+//	secret/<name>.data.<key>      // a single secret data entry
+//	secret/<name>.data            // every value in the secret's data map
+//	pod/<name>.env.<envname>      // pod env var (resolved through secretKeyRef
+//	                              // when the env entry indirects into a secret)
+//	deployment/<name>.env.<envname>
 //
 // Returns an error when the path is malformed, the referenced resource does not
 // exist in the preconditions, or resolution produces zero literal values.
 func ResolveValueRef(ref string, preconditions evaluation.Preconditions) (resolvedValueSet, error) {
-	matches := valueRefPathRegex.FindStringSubmatch(ref)
-	if matches == nil {
-		return resolvedValueSet{}, fmt.Errorf("unsupported value_ref path syntax: %q", ref)
-	}
-	resource := matches[1]
-	suffix := matches[2]
-
-	kind, name, ok := splitResource(resource)
-	if !ok {
-		return resolvedValueSet{}, fmt.Errorf("value_ref resource %q must be of the form kind/name", resource)
+	p, err := parseValueRefPath(ref)
+	if err != nil {
+		return resolvedValueSet{}, err
 	}
 
+	resource := p.resource()
 	state, found := findStateEntry(preconditions.Environment.State, resource)
 	if !found {
 		return resolvedValueSet{}, fmt.Errorf("value_ref %q: resource %q not found in preconditions", ref, resource)
@@ -69,14 +141,26 @@ func ResolveValueRef(ref string, preconditions evaluation.Preconditions) (resolv
 
 	out := resolvedValueSet{
 		Resource:  resource,
-		Kind:      kind,
-		Name:      name,
+		Kind:      p.kind,
+		Name:      p.name,
 		Namespace: stringFromState(state, "namespace"),
 	}
 
-	raws, err := resolveSuffix(ref, kind, suffix, state, preconditions.Environment.State)
-	if err != nil {
-		return resolvedValueSet{}, err
+	var raws []string
+	switch {
+	case p.kind == "secret" && p.field == "data" && p.key == "":
+		raws = secretDataAll(state)
+	case p.kind == "secret" && p.field == "data":
+		v, ok := secretDataKey(state, p.key)
+		if !ok {
+			return resolvedValueSet{}, fmt.Errorf("value_ref %q: key %q not found in secret data", ref, p.key)
+		}
+		raws = []string{v}
+	case (p.kind == "pod" || p.kind == "deployment") && p.field == "env":
+		raws, err = podDeploymentEnvValues(ref, state, p.key, preconditions.Environment.State)
+		if err != nil {
+			return resolvedValueSet{}, err
+		}
 	}
 
 	out.Values = expandWithBase64(raws)
@@ -84,15 +168,6 @@ func ResolveValueRef(ref string, preconditions evaluation.Preconditions) (resolv
 		return resolvedValueSet{}, fmt.Errorf("value_ref %q: resolved to zero values", ref)
 	}
 	return out, nil
-}
-
-// splitResource splits "secret/db-credentials" into ("secret", "db-credentials", true).
-func splitResource(r string) (string, string, bool) {
-	idx := strings.Index(r, "/")
-	if idx <= 0 || idx == len(r)-1 {
-		return "", "", false
-	}
-	return strings.ToLower(r[:idx]), r[idx+1:], true
 }
 
 // findStateEntry locates the state entry whose "resource" field matches the
@@ -105,36 +180,6 @@ func findStateEntry(state []map[string]interface{}, resource string) (map[string
 		}
 	}
 	return nil, false
-}
-
-// resolveSuffix handles each supported path suffix and returns the raw literal
-// values (before base64 expansion).
-func resolveSuffix(ref, kind, suffix string, state map[string]interface{}, allState []map[string]interface{}) ([]string, error) {
-	switch {
-	case kind == "secret" && suffix == "data":
-		return secretDataAll(state), nil
-
-	case kind == "secret" && strings.HasPrefix(suffix, "data."):
-		key := suffix[len("data."):]
-		if key == "" {
-			return nil, fmt.Errorf("value_ref %q: data. suffix requires a key", ref)
-		}
-		v, ok := secretDataKey(state, key)
-		if !ok {
-			return nil, fmt.Errorf("value_ref %q: key %q not found in secret data", ref, key)
-		}
-		return []string{v}, nil
-
-	case (kind == "pod" || kind == "deployment") && strings.HasPrefix(suffix, "env."):
-		envName := suffix[len("env."):]
-		if envName == "" {
-			return nil, fmt.Errorf("value_ref %q: env. suffix requires a variable name", ref)
-		}
-		return podDeploymentEnvValues(ref, state, envName, allState)
-
-	default:
-		return nil, fmt.Errorf("value_ref %q: unsupported suffix %q for kind %q", ref, suffix, kind)
-	}
 }
 
 // secretDataAll returns all string values under the secret's "data" map.
