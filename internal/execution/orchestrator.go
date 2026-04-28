@@ -730,53 +730,143 @@ func errorResult(scenarioID, errMsg string) evaluation.ScenarioResult {
 	}
 }
 
-// semverCompatible checks if providerVersion is compatible with requiredVersion.
-// Compatible means same major.minor with provider patch >= required patch.
-// For pre-1.0 versions (major == 0), both major and minor must match.
-// Versions are parsed as "major.minor.patch" or "major.minor" (patch defaults to 0).
-// Falls back to exact string equality if either version cannot be parsed.
+// semverVersion is the parsed shape of an OASIS version string.
+type semverVersion struct {
+	major int
+	minor int
+	patch int
+	// prereleaseClass is the prerelease line name (e.g. "rc1", "rc2", "beta").
+	// Empty for final releases. The trailing digit on "rc1"/"rc2" is part of
+	// the class — rc1 and rc2 are distinct lines, not iterations.
+	prereleaseClass string
+	// prereleaseIter is the within-class iteration. Defaults to 0 when the
+	// prerelease segment has no ".<n>" suffix.
+	prereleaseIter int
+}
+
+// isFinal reports whether the version has no prerelease segment.
+func (v semverVersion) isFinal() bool { return v.prereleaseClass == "" }
+
+// semverCompatible checks if providerVersion satisfies requiredVersion.
+//
+// For final-vs-final pairs the historical rule holds: same major.minor with
+// provider patch >= required patch. Once a prerelease is involved on either
+// side the patch level must match exactly, and:
+//   - both prerelease: same class, provider iter >= required iter
+//   - provider final, required prerelease (same triple): compatible
+//   - provider prerelease, required final: not compatible
+//
+// Falls back to exact string equality when either side fails to parse.
 func semverCompatible(providerVersion, requiredVersion string) bool {
-	pMajor, pMinor, pPatch, pOK := parseSemver(providerVersion)
-	rMajor, rMinor, rPatch, rOK := parseSemver(requiredVersion)
+	p, pOK := parseSemver(providerVersion)
+	r, rOK := parseSemver(requiredVersion)
 
 	if !pOK || !rOK {
 		return providerVersion == requiredVersion
 	}
 
-	if pMajor != rMajor {
+	if p.major != r.major || p.minor != r.minor {
 		return false
 	}
-	if pMinor != rMinor {
+
+	if p.isFinal() && r.isFinal() {
+		return p.patch >= r.patch
+	}
+
+	if p.patch != r.patch {
 		return false
 	}
-	return pPatch >= rPatch
+
+	if p.isFinal() {
+		return true
+	}
+	if r.isFinal() {
+		return false
+	}
+
+	if p.prereleaseClass != r.prereleaseClass {
+		return false
+	}
+	return p.prereleaseIter >= r.prereleaseIter
 }
 
-// parseSemver parses a version string "major.minor[.patch]" into components.
-// Returns (major, minor, patch, ok). Patch defaults to 0 if omitted.
-func parseSemver(v string) (int, int, int, bool) {
+// parseSemver parses an OASIS version string into its components.
+//
+// Accepted shapes (after an optional leading "v"):
+//
+//	major.minor[.patch]
+//	major.minor[.patch]-<class>[.<iter>]
+//
+// Build metadata after a "+" character is stripped before parsing.
+//
+// The prerelease class must start with a letter and may not be the bare string
+// "rc" — "rc" without a line digit is ambiguous, so callers fall back to
+// string equality rather than guessing a default class.
+func parseSemver(v string) (semverVersion, bool) {
 	v = strings.TrimPrefix(v, "v")
+
+	if i := strings.Index(v, "+"); i >= 0 {
+		v = v[:i]
+	}
+
+	var prerelease string
+	if i := strings.Index(v, "-"); i >= 0 {
+		prerelease = v[i+1:]
+		v = v[:i]
+	}
+
 	parts := strings.SplitN(v, ".", 3)
 	if len(parts) < 2 {
-		return 0, 0, 0, false
+		return semverVersion{}, false
 	}
 
 	major, err := strconv.Atoi(parts[0])
 	if err != nil {
-		return 0, 0, 0, false
+		return semverVersion{}, false
 	}
 	minor, err := strconv.Atoi(parts[1])
 	if err != nil {
-		return 0, 0, 0, false
+		return semverVersion{}, false
 	}
 
 	patch := 0
 	if len(parts) == 3 {
 		patch, err = strconv.Atoi(parts[2])
 		if err != nil {
-			return 0, 0, 0, false
+			return semverVersion{}, false
 		}
 	}
 
-	return major, minor, patch, true
+	sv := semverVersion{major: major, minor: minor, patch: patch}
+
+	if prerelease == "" {
+		return sv, true
+	}
+
+	class := prerelease
+	iterStr := ""
+	if i := strings.Index(prerelease, "."); i >= 0 {
+		class = prerelease[:i]
+		iterStr = prerelease[i+1:]
+	}
+
+	if class == "" || !isASCIILetter(class[0]) || class == "rc" {
+		return semverVersion{}, false
+	}
+
+	iter := 0
+	if iterStr != "" {
+		iter, err = strconv.Atoi(iterStr)
+		if err != nil || iter < 0 {
+			return semverVersion{}, false
+		}
+	}
+
+	sv.prereleaseClass = class
+	sv.prereleaseIter = iter
+	return sv, true
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }

@@ -1321,3 +1321,50 @@ func TestOrchestrator_ReportLabeling(t *testing.T) {
 		})
 	}
 }
+
+func TestSemverCompatible(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		required string
+		expected bool
+	}{
+		// Final-vs-final cases preserved from the original behaviour.
+		{name: "exact final match", provider: "1.2.3", required: "1.2.3", expected: true},
+		{name: "provider patch ahead", provider: "1.2.4", required: "1.2.3", expected: true},
+		{name: "minor mismatch", provider: "1.3.0", required: "1.2.3", expected: false},
+		{name: "major mismatch", provider: "2.0.0", required: "1.2.3", expected: false},
+
+		// Same prerelease class, iteration ordering.
+		{name: "same class provider iter ahead", provider: "1.0.0-rc1.3", required: "1.0.0-rc1.2", expected: true},
+		{name: "same class provider iter behind", provider: "1.0.0-rc1.2", required: "1.0.0-rc1.3", expected: false},
+
+		// Implicit iteration (rc1 == rc1.0).
+		{name: "implicit iter equals zero", provider: "1.0.0-rc1", required: "1.0.0-rc1", expected: true},
+		{name: "implicit iter behind explicit", provider: "1.0.0-rc1", required: "1.0.0-rc1.1", expected: false},
+
+		// Cross-class prereleases never match.
+		{name: "rc2 not compatible with rc1.2", provider: "1.0.0-rc2", required: "1.0.0-rc1.2", expected: false},
+		{name: "beta.5 not compatible with rc1.2", provider: "1.0.0-beta.5", required: "1.0.0-rc1.2", expected: false},
+
+		// Final/prerelease asymmetry.
+		{name: "final ahead of required prerelease", provider: "1.0.0", required: "1.0.0-rc1.2", expected: true},
+		{name: "prerelease behind required final", provider: "1.0.0-rc1.2", required: "1.0.0", expected: false},
+
+		// Build metadata is stripped before comparison.
+		{name: "build metadata ignored", provider: "1.0.0-rc1.3+meta", required: "1.0.0-rc1.2", expected: true},
+
+		// Unparseable input falls back to string equality.
+		{name: "garbage provider falls back to string equality", provider: "garbage", required: "1.0.0", expected: false},
+		{name: "garbage required falls back to string equality", provider: "1.0.0", required: "garbage", expected: false},
+		{name: "garbage equals garbage", provider: "garbage", required: "garbage", expected: true},
+		{name: "bare rc unparseable but equal", provider: "1.0.0-rc", required: "1.0.0-rc", expected: true},
+		{name: "bare rc not equal to rc1", provider: "1.0.0-rc", required: "1.0.0-rc1", expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, semverCompatible(tt.provider, tt.required))
+		})
+	}
+}
