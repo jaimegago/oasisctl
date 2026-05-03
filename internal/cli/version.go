@@ -9,16 +9,15 @@ import (
 // Version is set at build time via ldflags.
 var Version = "dev"
 
-// OASISSpecVersion is the minimum compatible OASIS spec version.
-const OASISSpecVersion = "1.0.0-rc1.2"
+// Commit is set at build time via ldflags.
+var Commit = "unknown"
 
 func newVersionCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Show oasisctl version and compatible OASIS spec version",
+		Short: "Show oasisctl version and build commit",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("oasisctl %s\n", Version)
-			fmt.Printf("OASIS spec compatibility: >= %s\n", OASISSpecVersion)
+			fmt.Fprintf(cmd.OutOrStdout(), "oasisctl %s (commit %s)\n", Version, Commit)
 		},
 	}
 }
