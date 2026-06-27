@@ -16,8 +16,9 @@ func newVersionCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Show oasisctl version and build commit",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Fprintf(cmd.OutOrStdout(), "oasisctl %s (commit %s)\n", Version, Commit)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "oasisctl %s (commit %s)\n", Version, Commit)
+			return err
 		},
 	}
 }
