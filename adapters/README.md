@@ -139,6 +139,10 @@ The adapter must return this JSON body:
   "final_answer": string // agent's final text response
 }
 
+The joe adapter encodes each tool result as compact JSON inside that result string,
+so a string result becomes `"foo"` (with quotes), a null result becomes `null`, an
+object or array becomes its compact encoding, and an absent result stays empty.
+
 [AGENT NAME]'s API:
 - Endpoint: [AGENT ENDPOINT, e.g., POST http://localhost:7777/api/v1/tasks]
 - Request format: [PASTE YOUR AGENT'S REQUEST JSON SCHEMA]

@@ -41,9 +41,13 @@ type agentRequestBody struct {
 
 type agentResponseBody struct {
 	Actions []struct {
-		Tool      string                 `json:"tool"`
-		Arguments map[string]interface{} `json:"arguments"`
-		Result    string                 `json:"result"`
+		ID         string                 `json:"id"`
+		Tool       string                 `json:"tool"`
+		Arguments  map[string]interface{} `json:"arguments"`
+		Result     string                 `json:"result"`
+		Error      string                 `json:"error"`
+		ErrorCode  string                 `json:"error_code"`
+		DurationMs int                    `json:"duration_ms"`
 	} `json:"actions"`
 	Reasoning   string `json:"reasoning"`
 	FinalAnswer string `json:"final_answer"`
@@ -94,9 +98,13 @@ func (c *HTTPClient) Execute(ctx context.Context, req evaluation.AgentRequest) (
 	}
 	for _, a := range respBody.Actions {
 		agentResp.Actions = append(agentResp.Actions, evaluation.AgentAction{
-			Tool:      a.Tool,
-			Arguments: a.Arguments,
-			Result:    a.Result,
+			ID:         a.ID,
+			Tool:       a.Tool,
+			Arguments:  a.Arguments,
+			Result:     a.Result,
+			Error:      a.Error,
+			ErrorCode:  a.ErrorCode,
+			DurationMs: a.DurationMs,
 		})
 	}
 

@@ -35,10 +35,19 @@ type AgentResponse struct {
 	FinalAnswer string        `json:"final_answer"`
 }
 
+// AgentAction is one tool call in oasisctl's wire format. Result carries the
+// tool's output as compact JSON *inside* a string — a joe string result "foo"
+// becomes the five characters "foo", a JSON null becomes the four characters
+// null, and an absent result is the empty string. The encoding is lossless and
+// type-preserving; consumers decode the string as JSON.
 type AgentAction struct {
-	Tool      string                 `json:"tool"`
-	Arguments map[string]interface{} `json:"arguments"`
-	Result    string                 `json:"result"`
+	ID         string                 `json:"id,omitempty"`
+	Tool       string                 `json:"tool"`
+	Arguments  map[string]interface{} `json:"arguments"`
+	Result     string                 `json:"result"`
+	Error      string                 `json:"error,omitempty"`
+	ErrorCode  string                 `json:"error_code,omitempty"`
+	DurationMs int                    `json:"duration_ms,omitempty"`
 }
 
 // Identity and configuration types.
@@ -73,24 +82,34 @@ type JoeResponse struct {
 	FinalAnswer string    `json:"final_answer"`
 }
 
+// JoeStep mirrors joe's taskStep (internal/api/tasks.go). Tool calls are nested
+// inside llm_response, not at the step level; tool results are at the step level.
 type JoeStep struct {
+	StepNumber  int             `json:"step_number"`
 	LLMResponse *JoeLLMResponse `json:"llm_response,omitempty"`
-	ToolCalls   []JoeToolCall   `json:"tool_calls,omitempty"`
 	ToolResults []JoeToolResult `json:"tool_results,omitempty"`
 }
 
 type JoeLLMResponse struct {
-	Content string `json:"content"`
+	Content   string        `json:"content"`
+	ToolCalls []JoeToolCall `json:"tool_calls,omitempty"`
 }
 
 type JoeToolCall struct {
-	Tool      string                 `json:"tool"`
-	Arguments map[string]interface{} `json:"arguments"`
+	ID   string                 `json:"id"`
+	Name string                 `json:"name"`
+	Args map[string]interface{} `json:"args"`
 }
 
+// JoeToolResult mirrors joe's taskToolResult. Result is an arbitrary JSON value,
+// so it is held as RawMessage and never coerced to a Go type.
 type JoeToolResult struct {
-	Tool   string `json:"tool"`
-	Result string `json:"result"`
+	ID         string          `json:"id"`
+	Name       string          `json:"name"`
+	Result     json.RawMessage `json:"result"`
+	Error      string          `json:"error,omitempty"`
+	ErrorCode  string          `json:"error_code,omitempty"`
+	DurationMs int             `json:"duration_ms"`
 }
 
 // JoeStatusResponse is the expected shape of joe-core's GET /api/v1/status.
@@ -122,6 +141,36 @@ func modeToSafetyTier(mode string) string {
 	}
 }
 
+// toolCalls returns the step's tool calls, tolerating a missing llm_response.
+func (r *JoeLLMResponse) toolCalls() []JoeToolCall {
+	if r == nil {
+		return nil
+	}
+	return r.ToolCalls
+}
+
+// applyResult copies a tool result onto an action, encoding the result body as
+// compact JSON inside the string field. An absent result stays the empty string,
+// which is distinguishable from a JSON null ("null") and an empty JSON string
+// (`""`). The body is never truncated or summarized.
+func applyResult(action *AgentAction, tr JoeToolResult) {
+	action.Error = tr.Error
+	action.ErrorCode = tr.ErrorCode
+	action.DurationMs = tr.DurationMs
+
+	if len(tr.Result) == 0 {
+		return
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, tr.Result); err != nil {
+		// Unreachable for a body that already decoded, but never silently drop:
+		// fall back to the raw bytes as received.
+		action.Result = string(tr.Result)
+		return
+	}
+	action.Result = compact.String()
+}
+
 func translateResponse(jr *JoeResponse) *AgentResponse {
 	resp := &AgentResponse{
 		Actions:     []AgentAction{},
@@ -140,19 +189,49 @@ func translateResponse(jr *JoeResponse) *AgentResponse {
 			reasoningParts = append(reasoningParts, fmt.Sprintf("Step %d: %s", stepNum, step.LLMResponse.Content))
 		}
 
-		// Build a result lookup from tool results in this step.
-		resultByTool := make(map[string]string)
-		for _, tr := range step.ToolResults {
-			resultByTool[tr.Tool] = tr.Result
+		// Pair calls to results by id, not by tool name: one step can call the
+		// same tool more than once, and name-keyed pairing collides.
+		resultByID := make(map[string]int, len(step.ToolResults))
+		for i, tr := range step.ToolResults {
+			if tr.ID == "" {
+				continue
+			}
+			if _, seen := resultByID[tr.ID]; !seen {
+				resultByID[tr.ID] = i
+			}
+		}
+		paired := make([]bool, len(step.ToolResults))
+
+		// Flatten tool calls into actions in call order, attaching each call's
+		// own result. A call with no matching result keeps an empty result.
+		for _, tc := range step.LLMResponse.toolCalls() {
+			action := AgentAction{
+				ID:        tc.ID,
+				Tool:      tc.Name,
+				Arguments: tc.Args,
+			}
+			if action.Arguments == nil {
+				action.Arguments = map[string]interface{}{}
+			}
+			if i, ok := resultByID[tc.ID]; ok && !paired[i] {
+				paired[i] = true
+				applyResult(&action, step.ToolResults[i])
+			}
+			resp.Actions = append(resp.Actions, action)
 		}
 
-		// Flatten tool calls into actions, pairing with results.
-		for _, tc := range step.ToolCalls {
-			action := AgentAction{
-				Tool:      tc.Tool,
-				Arguments: tc.Arguments,
-				Result:    resultByTool[tc.Tool],
+		// A result with no matching call is still evidence — emit it rather than
+		// dropping it, carrying the result's own tool name and empty arguments.
+		for i, tr := range step.ToolResults {
+			if paired[i] {
+				continue
 			}
+			action := AgentAction{
+				ID:        tr.ID,
+				Tool:      tr.Name,
+				Arguments: map[string]interface{}{},
+			}
+			applyResult(&action, tr)
 			resp.Actions = append(resp.Actions, action)
 		}
 	}
@@ -165,7 +244,7 @@ func translateResponse(jr *JoeResponse) *AgentResponse {
 	// will not act — that explanation IS the response.
 	if resp.FinalAnswer == "" && len(jr.Steps) > 0 {
 		last := jr.Steps[len(jr.Steps)-1]
-		if len(last.ToolCalls) == 0 && last.LLMResponse != nil && last.LLMResponse.Content != "" {
+		if last.LLMResponse != nil && last.LLMResponse.Content != "" && len(last.LLMResponse.toolCalls()) == 0 {
 			resp.FinalAnswer = last.LLMResponse.Content
 		}
 	}
@@ -223,6 +302,16 @@ func main() {
 		log.Printf("could not fetch version from joe-core /api/v1/status; using --agent-version=%q", cfg.agentVersion)
 	}
 
+	joeEndpoint := strings.TrimRight(cfg.joeURL, "/") + "/api/v1/tasks"
+	mux := newServeMux(cfg)
+
+	log.Printf("joe-adapter listening on %s, forwarding to %s", cfg.listen, joeEndpoint)
+	log.Fatal(http.ListenAndServe(cfg.listen, mux))
+}
+
+// newServeMux builds the adapter's HTTP surface: the identity endpoint and the
+// execution endpoint that proxies to joe-core.
+func newServeMux(cfg adapterConfig) *http.ServeMux {
 	joeEndpoint := strings.TrimRight(cfg.joeURL, "/") + "/api/v1/tasks"
 	client := &http.Client{Timeout: cfg.timeout}
 
@@ -315,6 +404,9 @@ func main() {
 
 		var joeResp JoeResponse
 		if err := json.Unmarshal(respBody, &joeResp); err != nil {
+			// Explicit error response, never a silently empty action list: the
+			// message is surfaced in final_answer and logged with the body.
+			log.Printf("ERROR: failed to decode Joe response: %v; body: %s", err, string(respBody))
 			writeJSON(w, errorResponse(fmt.Sprintf("Error: failed to decode Joe response: %v", err)))
 			return
 		}
@@ -327,6 +419,7 @@ func main() {
 			scenarioID = scenarioID[:100]
 		}
 		log.Printf("=== AGENT RESPONSE for scenario %s ===", scenarioID)
+		log.Printf("ACTIONS: %d", len(oasisResp.Actions))
 		log.Printf("REASONING: %s", oasisResp.Reasoning)
 		log.Printf("FINAL_ANSWER: %s", oasisResp.FinalAnswer)
 		log.Print("=== END AGENT RESPONSE ===")
@@ -334,8 +427,7 @@ func main() {
 		writeJSON(w, oasisResp)
 	})
 
-	log.Printf("joe-adapter listening on %s, forwarding to %s", cfg.listen, joeEndpoint)
-	log.Fatal(http.ListenAndServe(cfg.listen, mux))
+	return mux
 }
 
 func parseFlags() adapterConfig {

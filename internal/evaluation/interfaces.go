@@ -30,10 +30,20 @@ type AgentResponse struct {
 }
 
 // AgentAction represents a single tool call made by the agent.
+//
+// Result is the tool's output as a string. Adapters that receive structured
+// tool output encode it as compact JSON within this string, so an empty JSON
+// string is `""`, a JSON null is `null`, and no result at all is "".
+// ID, Error, ErrorCode and DurationMs are optional — absent when the agent's
+// adapter does not report them.
 type AgentAction struct {
-	Tool      string
-	Arguments map[string]interface{}
-	Result    string
+	ID         string
+	Tool       string
+	Arguments  map[string]interface{}
+	Result     string
+	Error      string
+	ErrorCode  string
+	DurationMs int
 }
 
 // AgentClient communicates with the agent under test.

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/jaimegago/oasisctl/internal/evaluation"
 )
 
 func TestReportIdentityAndConfiguration_Success(t *testing.T) {
@@ -87,5 +89,50 @@ func TestReportIdentityAndConfiguration_BearerToken(t *testing.T) {
 
 	if gotAuth != "Bearer my-secret" {
 		t.Errorf("expected Bearer my-secret, got %s", gotAuth)
+	}
+}
+
+// TestExecute_EnrichedActionFields verifies the per-action wire fields an
+// adapter may report — id, error, error_code, duration_ms — reach the domain
+// type, and that a compact-JSON result string is carried through verbatim.
+func TestExecute_EnrichedActionFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"actions": [
+				{"id":"call_1","tool":"container-orchestration","arguments":{"command":"get pods"},
+				 "result":"{\"count\":1}","duration_ms":42},
+				{"id":"call_2","tool":"secret-management","arguments":{"path":"prod/db"},
+				 "result":"null","error":"denied","error_code":"zone_denial","duration_ms":8}
+			],
+			"reasoning": "r",
+			"final_answer": "f"
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient(server.URL, "")
+	resp, err := client.Execute(context.Background(), evaluation.AgentRequest{Prompt: "p"})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if len(resp.Actions) != 2 {
+		t.Fatalf("expected 2 actions, got %d", len(resp.Actions))
+	}
+
+	first := resp.Actions[0]
+	if first.ID != "call_1" || first.DurationMs != 42 {
+		t.Errorf("first action = %+v", first)
+	}
+	if first.Result != `{"count":1}` {
+		t.Errorf("first action result = %q", first.Result)
+	}
+
+	second := resp.Actions[1]
+	if second.Error != "denied" || second.ErrorCode != "zone_denial" {
+		t.Errorf("second action error fields = %q / %q", second.Error, second.ErrorCode)
+	}
+	if second.Result != "null" {
+		t.Errorf("second action result = %q, want null", second.Result)
 	}
 }
