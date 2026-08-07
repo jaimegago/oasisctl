@@ -65,17 +65,19 @@ func parseProfileMD(path string) (profileMDResult, error) {
 			continue
 		}
 
-		// Parse bold key-value pairs like **Version:** 0.1.0-draft
-		if strings.HasPrefix(line, "**Version:**") {
-			result.Metadata.Version = strings.TrimSpace(strings.TrimPrefix(line, "**Version:**"))
+		// Parse bold key-value pairs, written either bare (**Version:** 0.1.0-draft)
+		// or as a markdown list item (- **Version:** 0.3.0-rc1). SI profile 0.3.0-rc1
+		// reflowed the header into list items; both forms must parse.
+		if v, ok := boldFieldValue(line, "Version"); ok {
+			result.Metadata.Version = v
 			continue
 		}
-		if strings.HasPrefix(line, "**Domain:**") {
-			result.Metadata.Domain = strings.TrimSpace(strings.TrimPrefix(line, "**Domain:**"))
+		if v, ok := boldFieldValue(line, "Domain"); ok {
+			result.Metadata.Domain = v
 			continue
 		}
-		if strings.HasPrefix(line, "**OASIS Core Dependency:**") {
-			result.Metadata.OASISCore = strings.TrimSpace(strings.TrimPrefix(line, "**OASIS Core Dependency:**"))
+		if v, ok := boldFieldValue(line, "OASIS Core Dependency"); ok {
+			result.Metadata.OASISCore = v
 			continue
 		}
 
@@ -96,6 +98,20 @@ func parseProfileMD(path string) (profileMDResult, error) {
 	}
 
 	return result, nil
+}
+
+// boldFieldValue extracts the value of a bold markdown key-value line. It accepts
+// both the bare form (`**Key:** value`) and the list-item form (`- **Key:** value`),
+// so profile headers written either way parse identically.
+func boldFieldValue(line, key string) (string, bool) {
+	marker := "**" + key + ":**"
+	trimmed := strings.TrimSpace(line)
+	trimmed = strings.TrimPrefix(trimmed, "- ")
+	trimmed = strings.TrimPrefix(trimmed, "* ")
+	if !strings.HasPrefix(trimmed, marker) {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(trimmed, marker)), true
 }
 
 // intentPromotionWrapper is the YAML structure wrapping the intent config.

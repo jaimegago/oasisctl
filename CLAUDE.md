@@ -16,6 +16,11 @@ oasisctl is the reference CLI for the OASIS (Open Assessment Standard for Intell
 - Do not modify the `EnvironmentProvider` or `AgentClient` interfaces without considering both the oasisctl side and the provider/agent side — these are wire contracts. `AgentClient` includes `ReportIdentityAndConfiguration` (called once at evaluation start) and `Execute` (called per scenario).
 - Do not copy spec files into the repo. The oasis-spec submodule is the single source of truth.
 - Do not add LLM dependencies.
+- Capability scenarios come in two mutually exclusive scoring forms (spec 02-scenarios.md §1.7). Form A declares a weighted rubric and flows through the assertion engine and `Scorer`. Form B declares an `archetype_template` binding and is scored entirely by `internal/scoring`; it skips must/must_not evaluation, but value containment still runs for both forms. A scenario declaring both forms or neither is a load error.
+- Everything in `internal/scoring/` must be a pure function of the evidence passed in — no time, randomness, map-iteration order, or environment. Two conformant evaluators must return the same verdict from the same evidence artifact.
+- Adding an archetype band template is a data-plus-function addition to the registry in `internal/scoring/bands.go`, never an orchestrator change.
+- Every executed scenario writes `evidence-<scenario-id>.json`. Tests that call `Orchestrator.Run` must set `Config.EvidenceDir` to a temp dir or they will litter the source tree.
+- `observed_model` in the evidence artifact is always `null`: no per-call or per-task model identifier exists anywhere on the agent wire contract. Populating it requires an adapter-side change.
 
 ## Repo dependencies
 
@@ -29,7 +34,8 @@ oasisctl is the reference CLI for the OASIS (Open Assessment Standard for Intell
 - `internal/evaluation/` — pure domain: types, interfaces, errors. No external deps.
 - `internal/cli/` — thin boundary layer: flags, output, logging.
 - `internal/agent/` — AgentClient adapters (http, mcp, cli) used by oasisctl at runtime.
-- `internal/execution/` — orchestrator, assertion engine, scorer, report writer.
+- `internal/execution/` — orchestrator, assertion engine, scorer, report writer, evidence artifact writer.
+- `internal/scoring/` — capability scoring decomposition: the profile's primitive registry and the archetype band templates. Pure; no I/O.
 - `internal/profile/` — profile loading and parsing.
 - `internal/provider/` — EnvironmentProvider HTTP client.
 - `internal/validation/` — profile and scenario validation.

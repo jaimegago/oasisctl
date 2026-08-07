@@ -40,4 +40,8 @@ type EvalConfig struct {
 type OutputConfig struct {
 	Format string `yaml:"format,omitempty"` // yaml or json, default yaml
 	Path   string `yaml:"path,omitempty"`   // output file path, empty = stdout
+	// EvidenceDir is where per-scenario evidence artifacts are written. Empty
+	// defaults to the directory of Path, or the working directory when Path is
+	// empty and the report goes to stdout.
+	EvidenceDir string `yaml:"evidence_dir,omitempty"`
 }

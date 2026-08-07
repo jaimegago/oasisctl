@@ -20,9 +20,49 @@ type Scenario struct {
 	Applicability  map[string]interface{} `yaml:"applicability,omitempty" json:"applicability,omitempty"`
 	Assertions     Assertions             `yaml:"assertions"`
 	Conditional    []ConditionalAssertion `yaml:"conditional,omitempty" json:"conditional,omitempty"`
+	Injection      *Injection             `yaml:"injection,omitempty" json:"injection,omitempty"`
 	Verification   Verification           `yaml:"verification"`
 	Scoring        Scoring                `yaml:"scoring"`
 	Observability  []string               `yaml:"observability_requirements"`
+}
+
+// Injection is the scenario's injection manifest per spec/02-scenarios.md §1.11.
+// It declares the healthy baseline, the deviations applied to it, and the symptom
+// those deviations produce. A Form B scoring binding derives its answer key from
+// this block rather than restating it.
+type Injection struct {
+	Baseline       []map[string]interface{} `yaml:"baseline" json:"baseline"`
+	Deviations     []Deviation              `yaml:"deviations" json:"deviations"`
+	Symptom        Symptom                  `yaml:"symptom" json:"symptom"`
+	Counterfactual string                   `yaml:"counterfactual" json:"counterfactual"`
+}
+
+// Deviation is a single injected departure from the declared baseline.
+// Scoring bindings reference it by ID.
+type Deviation struct {
+	ID            string `yaml:"id" json:"id"`
+	Resource      string `yaml:"resource" json:"resource"`
+	DeviationType string `yaml:"deviation_type" json:"deviation_type"`
+	Subject       string `yaml:"subject" json:"subject"`
+}
+
+// Symptom is the observable condition the deviations produce.
+type Symptom struct {
+	Resource  string `yaml:"resource" json:"resource"`
+	Condition string `yaml:"condition" json:"condition"`
+}
+
+// FindDeviation returns the deviation with the given ID, or nil.
+func (i *Injection) FindDeviation(id string) *Deviation {
+	if i == nil {
+		return nil
+	}
+	for idx := range i.Deviations {
+		if i.Deviations[idx].ID == id {
+			return &i.Deviations[idx]
+		}
+	}
+	return nil
 }
 
 // QualityMetadata holds safety scenario quality fields.
@@ -135,13 +175,44 @@ type APIAuditItem struct {
 	Required  string `yaml:"required,omitempty"`
 }
 
-// Scoring defines how the scenario is scored.
+// Scoring defines how the scenario is scored. Capability scenarios take one of
+// two mutually exclusive forms per spec/02-scenarios.md §1.7: Form A declares
+// type/rubric/dimensions, Form B declares archetype_template plus the binding
+// parameters the referenced band template requires.
 type Scoring struct {
 	Type            ScoringType            `yaml:"type"`
 	SafetyTolerance int                    `yaml:"safety_tolerance,omitempty"`
 	PassCondition   string                 `yaml:"pass_condition,omitempty"`
 	Rubric          map[string]interface{} `yaml:"rubric,omitempty"`
 	Dimensions      map[string]interface{} `yaml:"dimensions,omitempty"`
+
+	// Form B binding. ArchetypeTemplate names a band template in the owning
+	// profile's scoring-decomposition document; the remaining fields bind that
+	// template's declared roles. The permitted key set is profile-owned, so
+	// these fields track the SI profile's registry v1 role vocabulary.
+	ArchetypeTemplate string         `yaml:"archetype_template,omitempty" json:"archetype_template,omitempty"`
+	StepBudget        int            `yaml:"step_budget,omitempty" json:"step_budget,omitempty"`
+	Channels          []string       `yaml:"channels,omitempty" json:"channels,omitempty"`
+	Factor            *ScoringFactor `yaml:"factor,omitempty" json:"factor,omitempty"`
+	SubsystemSet      []string       `yaml:"subsystem_set,omitempty" json:"subsystem_set,omitempty"`
+	ExcludeToolEcho   bool           `yaml:"exclude_tool_echo,omitempty" json:"exclude_tool_echo,omitempty"`
+}
+
+// ScoringFactor binds a contributing factor to a deviation in the scenario's
+// injection manifest. Ref is a deviation ID; the deviation type is read from
+// that deviation, never restated here.
+type ScoringFactor struct {
+	Ref                 string   `yaml:"ref" json:"ref"`
+	RequiredIdentifiers []string `yaml:"required_identifiers" json:"required_identifiers"`
+}
+
+// IsFormB reports whether the scoring block is a Form B binding.
+func (s Scoring) IsFormB() bool { return s.ArchetypeTemplate != "" }
+
+// IsFormA reports whether the scoring block is a Form A rubric. A capability
+// scenario declaring neither form, or both, is malformed.
+func (s Scoring) IsFormA() bool {
+	return s.Type != "" || len(s.Rubric) > 0 || len(s.Dimensions) > 0
 }
 
 // Suite is a collection of scenarios to run together.
@@ -370,6 +441,12 @@ type ScenarioResult struct {
 	AssertionResults []AssertionResult    `json:"assertion_results,omitempty" yaml:"assertion_results,omitempty"`
 	Evidence         []string             `json:"evidence,omitempty" yaml:"evidence,omitempty"`
 	Errors           []string             `json:"errors,omitempty" yaml:"errors,omitempty"`
+	// Band is the band label selected by the archetype band template. Empty for
+	// Form A scenarios, which have no band vocabulary.
+	Band string `json:"band,omitempty" yaml:"band,omitempty"`
+	// EvidencePath is the evidence artifact's path relative to the run output
+	// directory, per spec/05-reporting.md §1.2.
+	EvidencePath string `json:"evidence_path,omitempty" yaml:"evidence_path,omitempty"`
 }
 
 // EvaluationMode describes which filters were active during an evaluation.

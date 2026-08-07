@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/jaimegago/oasisctl/internal/evaluation"
+	"github.com/jaimegago/oasisctl/internal/scoring"
 )
 
 // Config controls orchestrator behaviour.
@@ -24,6 +26,10 @@ type Config struct {
 	Categories    []string
 	Subcategories []string
 	ScenarioIDs   []string // glob patterns to filter by scenario ID
+	// EvidenceDir is where per-scenario evidence artifacts are written. Empty
+	// means "beside the report": the directory of the output path, or the
+	// working directory when the report goes to stdout.
+	EvidenceDir string
 }
 
 // Orchestrator runs the full OASIS evaluation loop.
@@ -94,6 +100,19 @@ func (o *Orchestrator) Run(
 
 	// 2b. Filter by category/subcategory.
 	filtered = o.applyFilters(filtered)
+
+	// 2b2. Bind every Form B scoring block up front. A binding that references an
+	// unregistered archetype template, or that omits a role the template
+	// declares, fails the run here rather than surfacing as a per-scenario error
+	// after an agent has already been driven through the scenario.
+	for i := range filtered {
+		if filtered[i].Classification != evaluation.ClassificationCapability || !filtered[i].Scoring.IsFormB() {
+			continue
+		}
+		if _, err := scoring.Bind(&filtered[i]); err != nil {
+			return nil, fmt.Errorf("scoring binding: %w", err)
+		}
+	}
 
 	// 2c. Build evaluation mode.
 	evalMode := o.buildEvaluationMode()
@@ -217,8 +236,15 @@ func (o *Orchestrator) Run(
 		OASISCoreSpec:      profile.Metadata.OASISCore,
 	}
 
+	// 4b. Resolve where per-scenario evidence artifacts are written. Fixed for
+	// the run; every scenario writes one, Form A and Form B alike.
+	evidence := evidenceTarget{
+		dir:        ResolveEvidenceDir(o.cfg.EvidenceDir, outputPath),
+		outputPath: outputPath,
+	}
+
 	// 5. Phase 1 — Safety gate.
-	verdict.SafetyResults = o.runScenariosParallel(ctx, safetyScenarios, profile, evaluation.ClassificationSafety, effectiveConfig)
+	verdict.SafetyResults = o.runScenariosParallel(ctx, safetyScenarios, profile, evaluation.ClassificationSafety, effectiveConfig, evidence)
 
 	// Compute safety verdict per spec §3.6.
 	verdict.Safety, verdict.SafetyPassed = computeSafetyVerdict(verdict.SafetyResults)
@@ -247,7 +273,7 @@ func (o *Orchestrator) Run(
 	}
 
 	// 7. Phase 2 — Capability scoring.
-	verdict.CapabilityResults = o.runScenariosParallel(ctx, capabilityScenarios, profile, evaluation.ClassificationCapability, effectiveConfig)
+	verdict.CapabilityResults = o.runScenariosParallel(ctx, capabilityScenarios, profile, evaluation.ClassificationCapability, effectiveConfig, evidence)
 
 	// 8. Aggregate scores.
 	archetypeScores := AggregateArchetype(verdict.CapabilityResults, capabilityScenarios)
@@ -393,6 +419,7 @@ func (o *Orchestrator) runScenariosParallel(
 	profile *evaluation.Profile,
 	classification evaluation.Classification,
 	agentConfig evaluation.AgentConfiguration,
+	evidence evidenceTarget,
 ) []evaluation.ScenarioResult {
 	if len(scenarios) == 0 {
 		return nil
@@ -403,7 +430,7 @@ func (o *Orchestrator) runScenariosParallel(
 	if workers <= 1 {
 		// Sequential fallback.
 		for i, s := range scenarios {
-			results[i] = o.runScenario(ctx, s, profile, classification, agentConfig)
+			results[i] = o.runScenario(ctx, s, profile, classification, agentConfig, evidence)
 		}
 		return results
 	}
@@ -417,12 +444,23 @@ func (o *Orchestrator) runScenariosParallel(
 			defer wg.Done()
 			sem <- struct{}{}        // acquire
 			defer func() { <-sem }() // release
-			results[idx] = o.runScenario(ctx, sc, profile, classification, agentConfig)
+			results[idx] = o.runScenario(ctx, sc, profile, classification, agentConfig, evidence)
 		}(i, s)
 	}
 
 	wg.Wait()
 	return results
+}
+
+// evidenceTarget locates the run's evidence artifacts. Both fields are fixed for
+// the whole run, so it is passed by value into every scenario execution rather
+// than held as mutable orchestrator state.
+type evidenceTarget struct {
+	// dir is the resolved evidence directory.
+	dir string
+	// outputPath is the report path the recorded artifact reference is made
+	// relative to. Empty means the report goes to stdout.
+	outputPath string
 }
 
 // runScenario executes a single scenario and returns its result.
@@ -432,6 +470,7 @@ func (o *Orchestrator) runScenario(
 	profile *evaluation.Profile,
 	classification evaluation.Classification,
 	agentConfig evaluation.AgentConfiguration,
+	evidence evidenceTarget,
 ) evaluation.ScenarioResult {
 	scenarioCtx, cancel := context.WithTimeout(ctx, o.cfg.Timeout)
 	defer cancel()
@@ -531,17 +570,46 @@ func (o *Orchestrator) runScenario(
 		}
 	}
 
-	// g. Evaluate assertions.
-	assertionResults, err := o.asserter.Evaluate(scenarioCtx, &s, agentResp, observations)
+	// g. Persist the evidence artifact. Every executed scenario gets one, per
+	// spec/05-reporting.md §1.2. A failed write is a scenario-level error: a
+	// verdict whose evidence was never written cannot be replayed, and claiming
+	// it can is worse than reporting the failure.
+	//
+	// ObservedModel is nil because no per-call or per-task model identifier
+	// exists on the agent wire contract today; the artifact records an explicit
+	// null rather than inventing a value.
+	artifact := BuildEvidenceArtifact(s.ID, agentResp, observations, nil)
+	evidencePath, err := WriteEvidenceArtifact(artifact, evidence.dir, evidence.outputPath)
 	if err != nil {
-		return errorResult(s.ID, fmt.Sprintf("evaluate assertions: %v", err))
+		return errorResult(s.ID, fmt.Sprintf("write evidence artifact: %v", err))
 	}
 
-	// h. Score.
+	// h. Evaluate assertions and score.
+	//
+	// A Form B capability scenario is scored by its archetype band template and
+	// skips must/must_not evaluation entirely: the decision table IS the
+	// evaluation, and per-scenario behavior names would only restate what it
+	// already decides (spec/02-scenarios.md §1.5). Value containment still runs
+	// for both forms — it is driven by verification.value_containment, not by
+	// the scoring form, and a Form B scenario carrying a containment entry keeps
+	// that independent check.
 	var result *evaluation.ScenarioResult
-	if classification == evaluation.ClassificationSafety {
+	switch {
+	case classification == evaluation.ClassificationCapability && s.Scoring.IsFormB():
+		result, err = o.scoreFormB(scenarioCtx, &s, agentResp)
+	case classification == evaluation.ClassificationSafety:
+		var assertionResults []evaluation.AssertionResult
+		assertionResults, err = o.asserter.Evaluate(scenarioCtx, &s, agentResp, observations)
+		if err != nil {
+			return errorResult(s.ID, fmt.Sprintf("evaluate assertions: %v", err))
+		}
 		result, err = o.scorer.ScoreSafety(scenarioCtx, &s, assertionResults)
-	} else {
+	default:
+		var assertionResults []evaluation.AssertionResult
+		assertionResults, err = o.asserter.Evaluate(scenarioCtx, &s, agentResp, observations)
+		if err != nil {
+			return errorResult(s.ID, fmt.Sprintf("evaluate assertions: %v", err))
+		}
 		result, err = o.scorer.ScoreCapability(scenarioCtx, &s, assertionResults)
 	}
 	if err != nil {
@@ -552,6 +620,7 @@ func (o *Orchestrator) runScenario(
 	result.Category = s.Category
 	result.Subcategory = s.Subcategory
 	result.Archetype = s.Archetype
+	result.EvidencePath = evidencePath
 	if result.Passed {
 		result.Status = evaluation.ScenarioPass
 	} else {
@@ -562,6 +631,52 @@ func (o *Orchestrator) runScenario(
 	return *result
 }
 
+// scoreFormB evaluates a Form B capability scenario through its archetype band
+// template, then runs value containment so a containment entry is still an
+// independent check under Form B.
+//
+// Band selection is a pure function of the agent's recorded evidence: the same
+// artifact yields the same band on every evaluation.
+func (o *Orchestrator) scoreFormB(
+	ctx context.Context,
+	s *evaluation.Scenario,
+	agentResp *evaluation.AgentResponse,
+) (*evaluation.ScenarioResult, error) {
+	bound, err := scoring.Bind(s)
+	if err != nil {
+		return nil, err
+	}
+
+	band := bound.Evaluate(scoring.EvidenceFromResponse(agentResp))
+
+	containment, err := o.asserter.Evaluate(ctx, &evaluation.Scenario{
+		ID:            s.ID,
+		Preconditions: s.Preconditions,
+		Verification:  evaluation.Verification{ValueContainment: s.Verification.ValueContainment},
+	}, agentResp, nil)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate value containment: %w", err)
+	}
+
+	result := &evaluation.ScenarioResult{
+		ScenarioID:       s.ID,
+		Band:             band.Label,
+		Score:            band.Score,
+		Passed:           true,
+		AssertionResults: containment,
+		Evidence: []string{fmt.Sprintf("archetype template %s selected band %q (score %.1f)",
+			s.Scoring.ArchetypeTemplate, band.Label, band.Score)},
+	}
+	for _, r := range containment {
+		if r.Status == evaluation.AssertionFail {
+			result.Passed = false
+		}
+		result.Evidence = append(result.Evidence, fmt.Sprintf("%s: %s", r.Status, r.Evidence))
+	}
+
+	return result, nil
+}
+
 // collectObservations builds Observe requests from the scenario's verification block.
 // Returns the collected observations and a non-empty string if a provider failure
 // was detected via evidence_source.status per spec §3.7.
@@ -569,7 +684,7 @@ func (o *Orchestrator) collectObservations(ctx context.Context, s evaluation.Sce
 	needed := observationTypesFromVerification(s.Verification)
 
 	var out []evaluation.ObserveResponse
-	for obsType := range needed {
+	for _, obsType := range sortedObservationTypes(needed) {
 		resp, err := o.provider.Observe(ctx, evaluation.ObserveRequest{
 			EnvironmentID:   envID,
 			ObservationType: obsType,
@@ -599,6 +714,21 @@ func (o *Orchestrator) collectObservations(ctx context.Context, s evaluation.Sce
 //   - api_audit         → "audit_log"
 //   - negative_verification → "audit_log"
 //   - state_diff        → "state_diff"
+//
+// sortedObservationTypes returns the observation types in a fixed order.
+//
+// Go map iteration is randomized, and the observation set is persisted into the
+// evidence artifact, which must be byte-stable across runs for the replay
+// guarantee of spec/05-reporting.md §1.2 to hold.
+func sortedObservationTypes(types map[string]struct{}) []string {
+	out := make([]string, 0, len(types))
+	for t := range types {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func observationTypesFromVerification(v evaluation.Verification) map[string]struct{} {
 	types := make(map[string]struct{})
 

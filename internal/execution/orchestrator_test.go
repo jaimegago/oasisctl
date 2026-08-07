@@ -243,7 +243,7 @@ func TestOrchestrator_DryRun(t *testing.T) {
 
 	orch := NewOrchestrator(
 		loader, nil, nil, nil, nil, reporter, nil,
-		Config{Tier: 1, DryRun: true},
+		Config{EvidenceDir: t.TempDir(), Tier: 1, DryRun: true},
 	)
 
 	scenarios := []evaluation.Scenario{
@@ -269,7 +269,7 @@ func TestOrchestrator_SafetyPassThenCapability(t *testing.T) {
 	scorer := &mockScorer{}
 	reporter := &mockReportWriter{}
 
-	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 2})
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 2})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("s.001", 1),
@@ -297,7 +297,7 @@ func TestOrchestrator_SafetyGateFails(t *testing.T) {
 	}
 	reporter := &mockReportWriter{}
 
-	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 1})
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("s.001", 1),
@@ -322,7 +322,7 @@ func TestOrchestrator_TierFiltering(t *testing.T) {
 	scorer := &mockScorer{}
 	reporter := &mockReportWriter{}
 
-	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 1})
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("s.001", 1),     // included
@@ -348,7 +348,7 @@ func TestOrchestrator_ProvisionError(t *testing.T) {
 	scorer := &mockScorer{}
 	reporter := &mockReportWriter{}
 
-	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 1})
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("s.001", 1),
@@ -371,7 +371,7 @@ func TestOrchestrator_AgentExecuteError(t *testing.T) {
 	scorer := &mockScorer{}
 	reporter := &mockReportWriter{}
 
-	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 1})
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("s.001", 1),
@@ -389,7 +389,7 @@ func TestOrchestrator_LoadProfileError(t *testing.T) {
 	loader := &mockProfileLoader{err: assert.AnError}
 	reporter := &mockReportWriter{}
 
-	orch := NewOrchestrator(loader, nil, nil, nil, nil, reporter, nil, Config{Tier: 1})
+	orch := NewOrchestrator(loader, nil, nil, nil, nil, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 
 	_, err := orch.Run(context.Background(), "/profile", nil, "agent", "provider", "yaml", "")
 	require.Error(t, err)
@@ -397,7 +397,7 @@ func TestOrchestrator_LoadProfileError(t *testing.T) {
 }
 
 func TestOrchestrator_DefaultTimeout(t *testing.T) {
-	cfg := Config{Tier: 1, Timeout: 0}
+	cfg := Config{EvidenceDir: t.TempDir(), Tier: 1, Timeout: 0}
 	orch := NewOrchestrator(nil, nil, nil, nil, nil, nil, nil, cfg)
 	assert.Equal(t, 5*time.Minute, orch.cfg.Timeout)
 }
@@ -426,7 +426,7 @@ func TestOrchestrator_CapabilityScoreAggregation(t *testing.T) {
 	}
 	reporter := &mockReportWriter{}
 
-	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 2})
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 2})
 
 	scenarios := []evaluation.Scenario{
 		capabilityScenario("c.001", 1),
@@ -520,7 +520,7 @@ func TestOrchestrator_CollectObservationsFromVerification(t *testing.T) {
 	scorer := &mockScorer{}
 	reporter := &mockReportWriter{}
 
-	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 1})
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 
 	scenarios := []evaluation.Scenario{
 		{
@@ -564,7 +564,7 @@ func TestOrchestrator_SafetyOnly(t *testing.T) {
 	reporter := &mockReportWriter{}
 
 	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
-		Config{Tier: 1, SafetyOnly: true})
+		Config{EvidenceDir: t.TempDir(), Tier: 1, SafetyOnly: true})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("s.001", 1),
@@ -593,7 +593,7 @@ func TestOrchestrator_CategoryFilterSingle(t *testing.T) {
 	reporter := &mockReportWriter{}
 
 	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
-		Config{Tier: 1, Categories: []string{"boundary-enforcement"}})
+		Config{EvidenceDir: t.TempDir(), Tier: 1, Categories: []string{"boundary-enforcement"}})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenarioWithCategorySub("s.001", 1, "boundary-enforcement", "permission-boundary"),
@@ -623,7 +623,7 @@ func TestOrchestrator_CategoryFilterMultiple(t *testing.T) {
 	reporter := &mockReportWriter{}
 
 	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
-		Config{Tier: 1, Categories: []string{"boundary-enforcement", "prompt-injection-resistance"}})
+		Config{EvidenceDir: t.TempDir(), Tier: 1, Categories: []string{"boundary-enforcement", "prompt-injection-resistance"}})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenarioWithCategorySub("s.001", 1, "boundary-enforcement", "permission-boundary"),
@@ -648,7 +648,7 @@ func TestOrchestrator_SubcategoryFilter(t *testing.T) {
 	reporter := &mockReportWriter{}
 
 	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
-		Config{Tier: 1, Subcategories: []string{"permission-boundary"}})
+		Config{EvidenceDir: t.TempDir(), Tier: 1, Subcategories: []string{"permission-boundary"}})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenarioWithCategorySub("s.001", 1, "boundary-enforcement", "permission-boundary"),
@@ -675,7 +675,7 @@ func TestOrchestrator_SafetyOnlyWithCategory(t *testing.T) {
 	reporter := &mockReportWriter{}
 
 	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
-		Config{Tier: 1, SafetyOnly: true, Categories: []string{"boundary-enforcement"}})
+		Config{EvidenceDir: t.TempDir(), Tier: 1, SafetyOnly: true, Categories: []string{"boundary-enforcement"}})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenarioWithCategorySub("s.001", 1, "boundary-enforcement", "permission-boundary"),
@@ -699,7 +699,7 @@ func TestOrchestrator_FilterNoMatches(t *testing.T) {
 	reporter := &mockReportWriter{}
 
 	orch := NewOrchestrator(loader, nil, nil, nil, nil, reporter, nil,
-		Config{Tier: 1, Categories: []string{"nonexistent-category"}})
+		Config{EvidenceDir: t.TempDir(), Tier: 1, Categories: []string{"nonexistent-category"}})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenarioWithCategorySub("s.001", 1, "boundary-enforcement", "permission-boundary"),
@@ -715,7 +715,7 @@ func TestOrchestrator_DryRunWithFilters(t *testing.T) {
 	reporter := &mockReportWriter{}
 
 	orch := NewOrchestrator(loader, nil, nil, nil, nil, reporter, nil,
-		Config{Tier: 1, DryRun: true, SafetyOnly: true})
+		Config{EvidenceDir: t.TempDir(), Tier: 1, DryRun: true, SafetyOnly: true})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("s.001", 1),
@@ -744,7 +744,7 @@ func TestOrchestrator_ScenarioIDFilter(t *testing.T) {
 	reporter := &mockReportWriter{}
 
 	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
-		Config{Tier: 1, ScenarioIDs: []string{"s.001"}})
+		Config{EvidenceDir: t.TempDir(), Tier: 1, ScenarioIDs: []string{"s.001"}})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("s.001", 1),
@@ -772,7 +772,7 @@ func TestOrchestrator_ScenarioIDGlobFilter(t *testing.T) {
 	reporter := &mockReportWriter{}
 
 	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
-		Config{Tier: 1, ScenarioIDs: []string{"s.*"}})
+		Config{EvidenceDir: t.TempDir(), Tier: 1, ScenarioIDs: []string{"s.*"}})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("s.001", 1),
@@ -853,7 +853,7 @@ func TestOrchestrator_ParallelExecution(t *testing.T) {
 	reporter := &mockReportWriter{}
 
 	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil,
-		Config{Tier: 1, Parallel: 3})
+		Config{EvidenceDir: t.TempDir(), Tier: 1, Parallel: 3})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("s.001", 1),
@@ -907,7 +907,7 @@ func TestOrchestrator_InfraFailureProducesProviderFailure(t *testing.T) {
 	}
 	reporter := &mockReportWriter{}
 
-	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 1})
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("zone-violation-001", 1),
@@ -952,7 +952,7 @@ func TestOrchestrator_InfraFailureWithPassingScenario(t *testing.T) {
 	_ = callCount
 	_ = origExec
 
-	orch := NewOrchestrator(loader, infraAgent, prov, asserter, scorer, reporter, nil, Config{Tier: 1})
+	orch := NewOrchestrator(loader, infraAgent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("s.001", 1), // will get infra failure response
@@ -990,7 +990,7 @@ func TestOrchestrator_GenuineRefusalNotProviderFailure(t *testing.T) {
 	}
 	reporter := &mockReportWriter{}
 
-	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 1})
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 
 	scenarios := []evaluation.Scenario{
 		safetyScenario("zone-violation-001", 1),
@@ -1037,7 +1037,7 @@ func TestOrchestrator_PreflightConformanceFailure(t *testing.T) {
 	scorer := &mockScorer{}
 	reporter := &mockReportWriter{}
 
-	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 1})
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 	scenarios := []evaluation.Scenario{safetyScenario("s.001", 1)}
 
 	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
@@ -1222,7 +1222,7 @@ func TestOrchestrator_EvidenceSourceUnreachableAbortsRun(t *testing.T) {
 		},
 	}
 
-	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{Tier: 1})
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 	scenarios := []evaluation.Scenario{
 		{
 			ID:             "s.001",

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -140,6 +141,13 @@ func buildOrchestrator(
 	t.Helper()
 	loader := profile.NewLoader()
 
+	// Keep evidence artifacts out of the source tree. Every executed scenario
+	// writes one, and the default location is the working directory when the
+	// report goes to stdout.
+	if cfg.EvidenceDir == "" {
+		cfg.EvidenceDir = t.TempDir()
+	}
+
 	// Pre-load the profile for the assertion engine.
 	prof, err := loader.Load(context.Background(), profileDir)
 	require.NoError(t, err)
@@ -250,8 +258,10 @@ func TestIntegration_CapabilityScenarioScored(t *testing.T) {
 	}
 
 	scenario := loadScenarioByID(t, profileDir, "infra.capability.da.single-signal-diagnosis-001")
+	require.True(t, scenario.Scoring.IsFormB(), "DA-1 is the migrated Form B scenario")
 
-	orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1})
+	evidenceDir := t.TempDir()
+	orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1, EvidenceDir: evidenceDir})
 
 	verdict, err := orch.Run(
 		context.Background(), profileDir,
@@ -267,20 +277,61 @@ func TestIntegration_CapabilityScenarioScored(t *testing.T) {
 
 	result := verdict.CapabilityResults[0]
 	assert.Equal(t, "infra.capability.da.single-signal-diagnosis-001", result.ScenarioID)
+	assert.Empty(t, result.Errors)
 
-	// The scenario uses behaviors (e.g. reference_missing_config_key) that the
-	// evaluator does not yet implement. Per spec §3.5.3 this returns an error
-	// rather than a verdict, so the scenario gets an error result with score 0.
-	// This is correct behavior — the evaluator implementation is incomplete.
-	if len(result.Errors) > 0 {
-		assert.Contains(t, result.Errors[0], "evaluator does not implement")
-	} else {
-		assert.Greater(t, result.Score, 0.0, "capability score should be > 0")
-	}
+	// The agent named SMTP_PORT and characterized the deviation, so the C-DA-001
+	// table selects its top band. Before Form B support this scenario scored 0.0
+	// and reported PASS, because there were no assertions to evaluate.
+	assert.Equal(t, "root_cause_identified", result.Band)
+	assert.Equal(t, 1.0, result.Score)
+
+	// The scenario record references its evidence artifact by relative path.
+	require.NotEmpty(t, result.EvidencePath)
+	assert.Equal(t, "evidence-infra.capability.da.single-signal-diagnosis-001.json",
+		filepath.Base(result.EvidencePath))
+	assert.FileExists(t, filepath.Join(evidenceDir, filepath.Base(result.EvidencePath)))
 
 	// Archetype scores should be populated from individual results.
 	assert.NotEmpty(t, verdict.ArchetypeScores)
 	assert.Contains(t, verdict.ArchetypeScores, "C-DA-001")
+	assert.Equal(t, 1.0, verdict.ArchetypeScores["C-DA-001"])
+}
+
+// TestIntegration_FormBBandAndEvidenceInReports confirms the two new scenario
+// record fields reach every report format.
+func TestIntegration_FormBBandAndEvidenceInReports(t *testing.T) {
+	provSrv := newMockProviderServer(t)
+	agentSrv := newMockAgentServer(t)
+
+	agentSrv.defaultResponse = mockAgentResponse{
+		Reasoning:   "Checked the deployment, then the ConfigMap.",
+		FinalAnswer: "The SMTP_PORT key is missing from the smtp-config ConfigMap.",
+	}
+
+	scenario := loadScenarioByID(t, profileDir, "infra.capability.da.single-signal-diagnosis-001")
+
+	for _, format := range []string{"yaml", "json", "html"} {
+		t.Run(format, func(t *testing.T) {
+			dir := t.TempDir()
+			reportPath := filepath.Join(dir, "report."+format)
+
+			orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1})
+			_, err := orch.Run(
+				context.Background(), profileDir,
+				[]evaluation.Scenario{scenario},
+				"test-agent", "integration-test", format, reportPath,
+			)
+			require.NoError(t, err)
+
+			rendered, err := os.ReadFile(reportPath)
+			require.NoError(t, err)
+			body := string(rendered)
+
+			assert.Contains(t, body, "root_cause_identified", "the band must appear in the %s report", format)
+			assert.Contains(t, body, "evidence-infra.capability.da.single-signal-diagnosis-001.json",
+				"the evidence artifact reference must appear in the %s report", format)
+		})
+	}
 }
 
 func TestIntegration_FullEvaluationMixedResults(t *testing.T) {

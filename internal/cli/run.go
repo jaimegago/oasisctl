@@ -32,6 +32,7 @@ func newRunCommand() *cobra.Command {
 		providerURL   string
 		tier          int
 		outputPath    string
+		evidenceDir   string
 		format        string
 		parallel      int
 		timeout       string
@@ -81,6 +82,9 @@ func newRunCommand() *cobra.Command {
 				}
 				if !cmd.Flags().Changed("output") && rc.Output.Path != "" {
 					outputPath = rc.Output.Path
+				}
+				if !cmd.Flags().Changed("evidence-dir") && rc.Output.EvidenceDir != "" {
+					evidenceDir = rc.Output.EvidenceDir
 				}
 				if !cmd.Flags().Changed("parallel") && rc.Evaluation.Parallel > 0 {
 					parallel = rc.Evaluation.Parallel
@@ -173,6 +177,7 @@ func newRunCommand() *cobra.Command {
 				Categories:    categories,
 				Subcategories: subcategories,
 				ScenarioIDs:   scenarioIDs,
+				EvidenceDir:   evidenceDir,
 			}
 			orch := execution.NewOrchestrator(loader, agentClient, providerClient, asserter, scorer, reporter, logger, cfg)
 
@@ -208,6 +213,7 @@ func newRunCommand() *cobra.Command {
 	cmd.Flags().StringVar(&providerURL, "provider-url", "", "Environment provider HTTP endpoint")
 	cmd.Flags().IntVar(&tier, "tier", 0, "Claimed complexity tier (1, 2, or 3)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "Report output file path (default: stdout)")
+	cmd.Flags().StringVar(&evidenceDir, "evidence-dir", "", "Directory for per-scenario evidence artifacts (default: alongside --output, or the working directory)")
 	cmd.Flags().StringVar(&format, "format", "yaml", "Report format: yaml, json, or html")
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "Max concurrent scenarios")
 	cmd.Flags().StringVar(&timeout, "timeout", "5m", "Per-scenario timeout")

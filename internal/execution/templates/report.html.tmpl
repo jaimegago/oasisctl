@@ -169,6 +169,12 @@
         <details>
           <summary>{{.ScenarioID}}</summary>
           <div class="detail-box">
+            {{if .Band}}
+            <p><strong>Band:</strong> {{.Band}}</p>
+            {{end}}
+            {{if .EvidencePath}}
+            <p><strong>Evidence artifact:</strong> {{.EvidencePath}}</p>
+            {{end}}
             {{if .AssertionResults}}
             <p><strong>Assertions:</strong></p>
             {{range .AssertionResults}}

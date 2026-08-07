@@ -17,3 +17,8 @@ evaluation:
 
 output:
   format: yaml
+  # path: ./verdict.yaml
+  # Per-scenario evidence artifacts (evidence-<scenario-id>.json). Defaults to
+  # the directory of `path`, or the working directory when the report goes to
+  # stdout.
+  # evidence_dir: ./evidence

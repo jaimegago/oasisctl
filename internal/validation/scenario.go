@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jaimegago/oasisctl/internal/evaluation"
+	"github.com/jaimegago/oasisctl/internal/scoring"
 )
 
 // ValidateScenario checks a single scenario for structural correctness.
@@ -18,9 +19,8 @@ func ValidateScenario(s evaluation.Scenario, intentConfig ...evaluation.IntentPr
 	if s.Name == "" {
 		verr.Add("name", "required")
 	}
-	if s.Version == "" {
-		verr.Add("version", "required")
-	}
+	// version is optional per spec/02-scenarios.md §1.1: a scenario that omits it
+	// inherits the version of its parent profile.
 	if err := s.Classification.Validate(); err != nil {
 		verr.Add("classification", err.Error())
 	}
@@ -40,25 +40,16 @@ func ValidateScenario(s evaluation.Scenario, intentConfig ...evaluation.IntentPr
 		}
 	}
 
-	if len(s.Assertions.Must) == 0 && len(s.Assertions.MustNot) == 0 {
-		verr.Add("assertions", "at least one must or must_not assertion is required")
-	}
+	validateConcern(s, verr)
+	validateScoringForm(s, verr)
 
-	if err := s.Scoring.Type.Validate(); err != nil {
-		verr.Add("scoring.type", err.Error())
-	}
-
-	// Binary scoring for safety, weighted for capability.
-	if s.Classification == evaluation.ClassificationSafety && s.Scoring.Type != evaluation.ScoringTypeBinary {
-		verr.Add("scoring.type", "safety scenarios must use binary scoring")
-	}
-	if s.Classification == evaluation.ClassificationCapability && s.Scoring.Type != evaluation.ScoringTypeWeighted {
-		verr.Add("scoring.type", "capability scenarios must use weighted scoring")
-	}
-
+	// value_containment is a verification method per spec/02-scenarios.md §1.6,
+	// listed alongside state_assertions, api_audit, negative_verification and
+	// state_diff.
 	hasVerification := len(s.Verification.StateAssertions) > 0 ||
 		len(s.Verification.APIAudit) > 0 ||
 		len(s.Verification.NegativeVerification) > 0 ||
+		len(s.Verification.ValueContainment) > 0 ||
 		s.Verification.StateDiff != nil
 	if !hasVerification {
 		verr.Add("verification", "at least one verification method is required")
@@ -77,6 +68,56 @@ func ValidateScenario(s evaluation.Scenario, intentConfig ...evaluation.IntentPr
 		return verr
 	}
 	return nil
+}
+
+// validateConcern enforces spec/02-scenarios.md §1.5: every scenario must declare
+// at least one verifiable concern, but a must/must_not entry is only one of the
+// three shapes that satisfies it. A value-containment entry IS the assertion for
+// a scenario whose threat is captured entirely by containment, and a Form B
+// scoring binding IS the evaluation for a capability scenario whose bands the
+// archetype decision table decides.
+func validateConcern(s evaluation.Scenario, verr *evaluation.ValidationError) {
+	if len(s.Assertions.Must) > 0 || len(s.Assertions.MustNot) > 0 {
+		return
+	}
+	if len(s.Verification.ValueContainment) > 0 || s.Scoring.IsFormB() {
+		return
+	}
+	verr.Add("assertions",
+		"a scenario must declare at least one concern: a must/must_not assertion, a verification.value_containment entry, or a Form B scoring binding")
+}
+
+// validateScoringForm enforces spec/02-scenarios.md §1.7. Safety scenarios are
+// always binary. Capability scenarios use exactly one of Form A (weighted rubric)
+// and Form B (archetype_template binding); Form B omits scoring.type entirely, so
+// the enum check must not run against it.
+func validateScoringForm(s evaluation.Scenario, verr *evaluation.ValidationError) {
+	if s.Classification == evaluation.ClassificationCapability && s.Scoring.IsFormB() {
+		if s.Scoring.IsFormA() {
+			verr.Add("scoring",
+				"declares both Form A (type/rubric/dimensions) and Form B (archetype_template); the two forms are mutually exclusive")
+		}
+		// A Form B scenario must reference a template that exists and must bind
+		// the roles that template declares. An unregistered reference is
+		// non-conformant (spec/02-scenarios.md §1.7) and is caught here rather
+		// than degrading into a runtime skip that would score every agent alike.
+		if _, err := scoring.Bind(&s); err != nil {
+			verr.Add("scoring.archetype_template", err.Error())
+		}
+		return
+	}
+
+	if err := s.Scoring.Type.Validate(); err != nil {
+		verr.Add("scoring.type", err.Error())
+	}
+
+	// Binary scoring for safety, weighted for capability.
+	if s.Classification == evaluation.ClassificationSafety && s.Scoring.Type != evaluation.ScoringTypeBinary {
+		verr.Add("scoring.type", "safety scenarios must use binary scoring")
+	}
+	if s.Classification == evaluation.ClassificationCapability && s.Scoring.Type != evaluation.ScoringTypeWeighted {
+		verr.Add("scoring.type", "capability scenarios must use weighted scoring, or a Form B archetype_template binding")
+	}
 }
 
 // validateIntent checks intent presence and length based on promotion rules.

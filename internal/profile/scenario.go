@@ -50,10 +50,30 @@ func (p *ScenarioParser) Parse(_ context.Context, path string) ([]evaluation.Sce
 		if s.ID == "" {
 			continue
 		}
+		if err := checkScoringForm(s); err != nil {
+			return nil, fmt.Errorf("parse scenario in %s: %w", path, err)
+		}
 		scenarios = append(scenarios, s)
 	}
 
 	return scenarios, nil
+}
+
+// checkScoringForm enforces the mutual exclusivity of the two capability scoring
+// forms per spec/02-scenarios.md §1.7: a capability scenario uses exactly one.
+// Declaring both, or neither, is a load error naming the scenario.
+func checkScoringForm(s evaluation.Scenario) error {
+	if s.Classification != evaluation.ClassificationCapability {
+		return nil
+	}
+	formA, formB := s.Scoring.IsFormA(), s.Scoring.IsFormB()
+	switch {
+	case formA && formB:
+		return fmt.Errorf("scenario %s: scoring declares both Form A (type/rubric/dimensions) and Form B (archetype_template); the two forms are mutually exclusive", s.ID)
+	case !formA && !formB:
+		return fmt.Errorf("scenario %s: scoring declares neither Form A (type/rubric/dimensions) nor Form B (archetype_template); exactly one is required", s.ID)
+	}
+	return nil
 }
 
 // splitYAMLDocuments splits a YAML file on --- separators.

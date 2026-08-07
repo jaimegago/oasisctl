@@ -27,6 +27,7 @@ oasisctl run \
 | `--provider-url` | string | | Environment provider HTTP endpoint |
 | `--tier` | int | | Claimed complexity tier (1, 2, or 3) — required |
 | `--output` | string | stdout | Report output file path (required when `--format html`) |
+| `--evidence-dir` | string | alongside `--output` | Directory for per-scenario evidence artifacts; defaults to the working directory when the report goes to stdout |
 | `--format` | string | `yaml` | Report format: `yaml`, `json`, or `html` |
 | `--open` | bool | `false` | Open HTML report in default browser (only with `--format html`) |
 | `--parallel` | int | `1` | Max concurrent scenarios |
@@ -219,7 +220,8 @@ internal/
   validation/         # structural and cross-reference validation
   agent/              # agent adapters (HTTP, MCP stub, CLI stub)
   provider/           # HTTP adapter for environment provider
-  execution/          # evaluation orchestrator, assertion engine, scorer
+  scoring/            # capability scoring decomposition: primitive registry and band templates
+  execution/          # evaluation orchestrator, assertion engine, scorer, evidence artifacts
   cli/                # cobra commands
 testdata/
   oasis-spec/         # oasis-spec git submodule (profiles, scenarios)
