@@ -53,6 +53,14 @@ type EvidenceAction struct {
 }
 
 // BuildEvidenceArtifact assembles the artifact for one executed scenario.
+//
+// observations may be empty, and empty is a meaningful value rather than a
+// defect: a scenario aborted before the Observe calls — an infrastructure
+// failure detected in the agent's response — still executed, still drove the
+// agent, and still gets an artifact. Its actions and final answer are populated
+// while its observations array is `[]`, which records exactly what the run had:
+// the agent's own account, and no independent verification. An artifact is
+// never omitted to signal that; the empty array says it.
 func BuildEvidenceArtifact(
 	scenarioID string,
 	resp *evaluation.AgentResponse,

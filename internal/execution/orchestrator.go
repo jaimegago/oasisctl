@@ -534,19 +534,37 @@ func (o *Orchestrator) runScenario(
 
 	// d. Check for infrastructure failure before evaluating behavior.
 	// Per v0.4, infrastructure failures are now PROVIDER_FAILURE, not INCONCLUSIVE.
-	if detected, evidence := DetectInfrastructureFailure(agentResp); detected {
+	if detected, infraEvidence := DetectInfrastructureFailure(agentResp); detected {
 		if o.cfg.Verbose {
-			o.logger.Info("infrastructure failure detected", "id", s.ID, "evidence", evidence)
+			o.logger.Info("infrastructure failure detected", "id", s.ID, "evidence", infraEvidence)
 		}
-		return evaluation.ScenarioResult{
+		result := evaluation.ScenarioResult{
 			ScenarioID:  s.ID,
 			Category:    s.Category,
 			Subcategory: s.Subcategory,
 			Archetype:   s.Archetype,
 			Status:      evaluation.ScenarioProviderFailure,
 			Passed:      false,
-			Evidence:    []string{evidence},
+			Evidence:    []string{infraEvidence},
 		}
+		// This scenario drove the agent, so it executed, and spec/05-reporting.md
+		// §1.2 mandates an artifact for every executed scenario. Write it with
+		// what is in hand: the agent's answer, reasoning and actions, and no
+		// observations — the run stops before the Observe calls, so the
+		// observation set is legitimately empty. Without this the one scenario
+		// whose verdict most needs auditing is the one that leaves no trace.
+		var observedModel *string
+		if agentResp != nil {
+			observedModel = agentResp.Model
+		}
+		artifact := BuildEvidenceArtifact(s.ID, agentResp, nil, observedModel)
+		evidencePath, werr := WriteEvidenceArtifact(artifact, evidence.dir, evidence.outputPath)
+		if werr != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("write evidence artifact: %v", werr))
+		} else {
+			result.EvidencePath = evidencePath
+		}
+		return result
 	}
 
 	// e. State snapshot.

@@ -2,6 +2,9 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -927,6 +930,64 @@ func TestOrchestrator_InfraFailureProducesProviderFailure(t *testing.T) {
 	// PROVIDER_FAILURE means safety verdict is PROVIDER_FAILURE.
 	assert.Equal(t, evaluation.SafetyVerdictProviderFailure, verdict.Safety)
 	assert.False(t, verdict.SafetyPassed)
+}
+
+// A scenario killed by the infrastructure-failure detector still executed — it
+// drove the agent — so spec/05-reporting.md §1.2 still mandates its artifact.
+// The artifact carries the agent's actions and final answer; its observations
+// array is empty because the run stops before the Observe calls.
+func TestOrchestrator_InfraFailureStillWritesEvidenceArtifact(t *testing.T) {
+	loader := &mockProfileLoader{profile: defaultProfile()}
+	agent := &mockAgentClient{
+		response: &evaluation.AgentResponse{
+			FinalAnswer: "I wasn't able to reach the cluster: connection refused.",
+			Reasoning:   "The API server did not answer.",
+			Actions: []evaluation.AgentAction{
+				{
+					ID:        "list_components",
+					Tool:      "list_components",
+					Arguments: map[string]interface{}{"type": "kubernetes"},
+					Result:    `{"components":[],"count":0}`,
+				},
+			},
+		},
+	}
+	prov := &mockProvider{provisionResp: defaultProvision()}
+	asserter := &mockAsserter{}
+	scorer := &mockScorer{safetyResult: &evaluation.ScenarioResult{Passed: false}}
+	reporter := &mockReportWriter{}
+
+	evidenceDir := t.TempDir()
+	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: evidenceDir, Tier: 1})
+
+	scenarios := []evaluation.Scenario{safetyScenario("zone-violation-001", 1)}
+
+	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	require.NoError(t, err)
+	require.Len(t, verdict.SafetyResults, 1)
+
+	result := verdict.SafetyResults[0]
+	require.Equal(t, evaluation.ScenarioProviderFailure, result.Status)
+	require.Empty(t, result.Errors)
+	assert.Equal(t, EvidenceFileName("zone-violation-001"), result.EvidencePath,
+		"a detector-killed scenario must reference its artifact")
+
+	data, err := os.ReadFile(filepath.Join(evidenceDir, EvidenceFileName("zone-violation-001")))
+	require.NoError(t, err, "a detector-killed scenario must still leave an artifact")
+
+	var artifact EvidenceArtifact
+	require.NoError(t, json.Unmarshal(data, &artifact))
+
+	assert.Equal(t, "zone-violation-001", artifact.ScenarioID)
+	assert.Equal(t, "I wasn't able to reach the cluster: connection refused.", artifact.FinalAnswer)
+	assert.Equal(t, "The API server did not answer.", artifact.ReasoningTrace)
+	require.Len(t, artifact.Actions, 1)
+	assert.Equal(t, "list_components", artifact.Actions[0].Tool)
+	assert.Empty(t, artifact.Observations, "the run stops before Observe, so the observation set is empty")
+
+	// The empty observation set is serialized as [], not omitted or null: the
+	// artifact records that there was no independent verification.
+	assert.Contains(t, string(data), `"observations": []`)
 }
 
 func TestOrchestrator_InfraFailureWithPassingScenario(t *testing.T) {
