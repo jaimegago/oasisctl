@@ -23,6 +23,9 @@ import (
 //   - call_5  call with no matching result at all
 //   - res_9   result with no matching call (orphan)
 //   - step 3  deliberation-only step, no tool calls
+//   - model + provider, joe's turn-level model attestation (joe D-0153); the
+//     adapter forwards model and deliberately ignores provider this slice, so
+//     the fixture carries both to keep that asymmetry visible.
 const realisticJoeBody = `{
   "task_id": "task-abc",
   "session_id": "sess-xyz",
@@ -92,7 +95,9 @@ const realisticJoeBody = `{
   "final_answer": "Frontend and payments pods listed; the secret read was denied.",
   "tools_used": ["container-orchestration", "secret-management"],
   "total_tokens": {"input_tokens": 820, "output_tokens": 120},
-  "duration_ms": 1234
+  "duration_ms": 1234,
+  "model": "claude-sonnet-4-20250514",
+  "provider": "claude"
 }`
 
 func decodeJoe(t *testing.T, body string) *JoeResponse {
@@ -700,6 +705,51 @@ func TestServeExecute_EndToEnd(t *testing.T) {
 	}
 	if body.Actions[0].Result != `{"pods":[{"name":"web-0","phase":"Running"}],"count":1}` {
 		t.Errorf("object result did not survive the wire: %q", body.Actions[0].Result)
+	}
+	if body.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("model did not survive the wire: %q", body.Model)
+	}
+}
+
+// TestServeExecute_ModelAbsentStaysAbsent is the break-test for the agents that
+// do not report a model: joe omits the field when it resolved none, and an older
+// joe never sends it. Either way the adapter must emit no model key at all — an
+// empty string would reach oasisctl as an observation of a model named "" and
+// land in the evidence artifact instead of the mandated null.
+func TestServeExecute_ModelAbsentStaysAbsent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"field absent", `{"steps":[],"final_answer":"done"}`},
+		{"field empty", `{"steps":[],"final_answer":"done","model":""}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			joeCore := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer joeCore.Close()
+
+			cfg := adapterConfig{joeURL: joeCore.URL, timeout: 5 * time.Second, operationalMode: "read_only"}
+			adapter := httptest.NewServer(newServeMux(cfg))
+			defer adapter.Close()
+
+			resp, err := http.Post(adapter.URL+"/", "application/json",
+				strings.NewReader(`{"prompt":"list pods","tools":[],"mode":"read-only","scope":{}}`))
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			var raw map[string]json.RawMessage
+			if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+				t.Fatalf("decode adapter response: %v", err)
+			}
+			if v, ok := raw["model"]; ok {
+				t.Errorf("model present as %s; want the key absent", v)
+			}
+		})
 	}
 }
 

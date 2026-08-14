@@ -33,6 +33,12 @@ type AgentResponse struct {
 	Actions     []AgentAction `json:"actions"`
 	Reasoning   string        `json:"reasoning"`
 	FinalAnswer string        `json:"final_answer"`
+	// Model is the provider model identifier that served the execution, forwarded
+	// from joe's task response (joe D-0153). It is omitempty in both directions:
+	// joe omits it when nothing resolved, and the adapter omits it in turn, so an
+	// agent that reports no model produces an absent field rather than an empty
+	// string that would read downstream as a real observation.
+	Model string `json:"model,omitempty"`
 }
 
 // AgentAction is one tool call in oasisctl's wire format. Result carries the
@@ -80,6 +86,16 @@ type JoeConfig struct {
 type JoeResponse struct {
 	Steps       []JoeStep `json:"steps"`
 	FinalAnswer string    `json:"final_answer"`
+	// Model is joe's provider model identifier for the turn — "claude-sonnet-4-20250514",
+	// not the catalogue key that names it in joe's own config (joe D-0153). It
+	// attests the model resolved at TASK PREPARATION, which is what the evidence
+	// artifact's observed_model records. joe omits the field when it resolved no
+	// model, and an older joe does not send it at all; both decode to "" here and
+	// travel onward as an absent field, never an empty one.
+	//
+	// joe also reports a sibling `provider` (the adapter family). It is
+	// deliberately not carried this slice — see the slice ledger.
+	Model string `json:"model"`
 }
 
 // JoeStep mirrors joe's taskStep (internal/api/tasks.go). Tool calls are nested
@@ -175,6 +191,7 @@ func translateResponse(jr *JoeResponse) *AgentResponse {
 	resp := &AgentResponse{
 		Actions:     []AgentAction{},
 		FinalAnswer: jr.FinalAnswer,
+		Model:       jr.Model,
 	}
 
 	var reasoningParts []string

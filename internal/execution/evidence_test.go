@@ -150,6 +150,44 @@ func TestEvidenceArtifact_Golden(t *testing.T) {
 	})
 }
 
+// TestEvidenceArtifact_ObservedModelPopulated is the golden test's other half:
+// the same artifact built for an agent that DOES report a model. The null case
+// above proves an absent model is recorded as an explicit JSON null; this proves
+// a reported one is recorded verbatim as a JSON string, so both states of the
+// field are pinned and neither can silently become the other.
+func TestEvidenceArtifact_ObservedModelPopulated(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "report.yaml")
+
+	model := "claude-sonnet-4-20250514"
+	artifact := BuildEvidenceArtifact(
+		"infra.capability.da.single-signal-diagnosis-001",
+		goldenResponse(),
+		twoObservations(),
+		&model,
+	)
+	relPath, err := WriteEvidenceArtifact(artifact, dir, outputPath)
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(filepath.Join(dir, relPath))
+	require.NoError(t, err)
+
+	var loose map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &loose))
+	require.Contains(t, loose, "observed_model")
+	assert.JSONEq(t, `"claude-sonnet-4-20250514"`, string(loose["observed_model"]))
+
+	var got EvidenceArtifact
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.NotNil(t, got.ObservedModel)
+	assert.Equal(t, "claude-sonnet-4-20250514", *got.ObservedModel)
+
+	// Nothing else about the artifact moves when the model is present.
+	assert.Equal(t, "The SMTP_PORT key is missing from the smtp-config ConfigMap.", got.FinalAnswer)
+	require.Len(t, got.Actions, 3)
+	require.Len(t, got.Observations, 2)
+}
+
 // TestCollectObservations_DeterministicOrder covers the ordering hazard directly:
 // the observation type set is derived from a Go map, whose iteration order is
 // randomized, so a scenario needing two observation types would otherwise

@@ -3,10 +3,8 @@
 package execution_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jaimegago/oasisctl/internal/agent"
 	"github.com/jaimegago/oasisctl/internal/evaluation"
 	"github.com/jaimegago/oasisctl/internal/execution"
 	"github.com/jaimegago/oasisctl/internal/profile"
@@ -73,58 +72,24 @@ func loadAllScenarios(t *testing.T, profilePath string) []evaluation.Scenario {
 	return all
 }
 
-// httpAgentAdapter implements evaluation.AgentClient over real HTTP for integration tests.
+// httpAgentAdapter implements evaluation.AgentClient over real HTTP for
+// integration tests. Execute delegates to the PRODUCTION client
+// (internal/agent.HTTPClient) rather than re-implementing the decode: a private
+// copy would green these tests against its own decode rules and prove nothing
+// about the one that ships — the observed-model collapse of absent-or-empty to
+// nil lives in that decode, and asserting it here against a copy would be
+// vacuous. Only identity is stubbed, because the mock agent server serves the
+// execution route alone.
 type httpAgentAdapter struct {
-	endpoint string
+	inner *agent.HTTPClient
 }
 
 func newHTTPAgentClient(endpoint string) *httpAgentAdapter {
-	return &httpAgentAdapter{endpoint: endpoint}
+	return &httpAgentAdapter{inner: agent.NewHTTPClient(endpoint, "")}
 }
 
 func (a *httpAgentAdapter) Execute(ctx context.Context, req evaluation.AgentRequest) (*evaluation.AgentResponse, error) {
-	body := agentRequestJSON{
-		Prompt: req.Prompt,
-		Tools:  req.Tools,
-		Mode:   string(req.Mode),
-	}
-	body.Scope.Namespaces = req.Scope.Namespaces
-	body.Scope.Zones = req.Scope.Zones
-
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var respBody mockAgentResponse
-	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
-		return nil, err
-	}
-
-	agentResp := &evaluation.AgentResponse{
-		Reasoning:   respBody.Reasoning,
-		FinalAnswer: respBody.FinalAnswer,
-	}
-	for _, act := range respBody.Actions {
-		agentResp.Actions = append(agentResp.Actions, evaluation.AgentAction{
-			Tool:      act.Tool,
-			Arguments: act.Arguments,
-			Result:    act.Result,
-		})
-	}
-	return agentResp, nil
+	return a.inner.Execute(ctx, req)
 }
 
 func (a *httpAgentAdapter) ReportIdentityAndConfiguration(_ context.Context) (evaluation.AgentIdentity, evaluation.AgentConfiguration, error) {
@@ -295,6 +260,62 @@ func TestIntegration_CapabilityScenarioScored(t *testing.T) {
 	assert.NotEmpty(t, verdict.ArchetypeScores)
 	assert.Contains(t, verdict.ArchetypeScores, "C-DA-001")
 	assert.Equal(t, 1.0, verdict.ArchetypeScores["C-DA-001"])
+}
+
+// TestIntegration_ObservedModelReachesEvidenceArtifact is the end-to-end half of
+// the observed-model chain: a model on the agent's wire response survives the
+// decode, the orchestrator, and the artifact write, landing in observed_model —
+// and an agent that reports none still produces the mandated explicit JSON null.
+//
+// The absent case is the break-test. Reporting a model is an adapter capability,
+// not a requirement of the wire contract, so a regression that turned "no model"
+// into an empty string would silently fabricate an observation of a model named
+// "" for every agent that does not report one. It is asserted on the raw file
+// bytes, because only those distinguish null from "".
+func TestIntegration_ObservedModelReachesEvidenceArtifact(t *testing.T) {
+	run := func(t *testing.T, model string) map[string]json.RawMessage {
+		t.Helper()
+
+		provSrv := newMockProviderServer(t)
+		agentSrv := newMockAgentServer(t)
+		agentSrv.defaultResponse = mockAgentResponse{
+			Reasoning:   "The notification-service pods are crashing because the SMTP_PORT key is missing from the smtp-config ConfigMap.",
+			FinalAnswer: "The root cause is a missing configuration key: SMTP_PORT is not present in the smtp-config ConfigMap.",
+			Model:       model,
+		}
+
+		scenario := loadScenarioByID(t, profileDir, "infra.capability.da.single-signal-diagnosis-001")
+		evidenceDir := t.TempDir()
+		orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1, EvidenceDir: evidenceDir})
+
+		verdict, err := orch.Run(
+			context.Background(), profileDir,
+			[]evaluation.Scenario{scenario},
+			"test-agent", "integration-test", "yaml", "",
+		)
+		require.NoError(t, err)
+		require.Len(t, verdict.CapabilityResults, 1)
+
+		path := filepath.Join(evidenceDir, filepath.Base(verdict.CapabilityResults[0].EvidencePath))
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+
+		var loose map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &loose))
+		require.Contains(t, loose, "observed_model")
+		return loose
+	}
+
+	t.Run("reported model survives to the artifact", func(t *testing.T) {
+		loose := run(t, "claude-sonnet-4-20250514")
+		assert.JSONEq(t, `"claude-sonnet-4-20250514"`, string(loose["observed_model"]))
+	})
+
+	t.Run("no reported model records an explicit null, not an empty string", func(t *testing.T) {
+		loose := run(t, "")
+		assert.JSONEq(t, "null", string(loose["observed_model"]),
+			"an agent that reports no model must not fabricate an observation of a model named \"\"")
+	})
 }
 
 // TestIntegration_FormBBandAndEvidenceInReports confirms the two new scenario

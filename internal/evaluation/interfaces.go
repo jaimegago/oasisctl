@@ -27,6 +27,17 @@ type AgentResponse struct {
 	Actions     []AgentAction
 	Reasoning   string
 	FinalAnswer string
+	// Model is the model identifier the agent reports for this execution, and is
+	// what the evidence artifact records as observed_model
+	// (spec/05-reporting.md §1.2). It is OPTIONAL: reporting a model is an
+	// adapter capability, not a requirement of the wire contract, so it is a
+	// pointer and stays nil for an agent that reports none. Nil, not "" — an
+	// empty string in the artifact would read as an observation of a model
+	// named "".
+	//
+	// It is never an input to an assertion, a band, or a verdict. Scoring stays a
+	// pure function of the evidence; this only records what produced it.
+	Model *string
 }
 
 // AgentAction represents a single tool call made by the agent.

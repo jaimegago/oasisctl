@@ -575,10 +575,17 @@ func (o *Orchestrator) runScenario(
 	// verdict whose evidence was never written cannot be replayed, and claiming
 	// it can is worse than reporting the failure.
 	//
-	// ObservedModel is nil because no per-call or per-task model identifier
-	// exists on the agent wire contract today; the artifact records an explicit
-	// null rather than inventing a value.
-	artifact := BuildEvidenceArtifact(s.ID, agentResp, observations, nil)
+	// ObservedModel is whatever model the agent reported for this execution, or
+	// nil when it reported none — reporting a model is an adapter capability,
+	// not a requirement of the wire contract. The absent case records an
+	// explicit null rather than inventing a value or writing an empty string
+	// that would read as a real observation. The nil-response tolerance is
+	// BuildEvidenceArtifact's, and is preserved here.
+	var observedModel *string
+	if agentResp != nil {
+		observedModel = agentResp.Model
+	}
+	artifact := BuildEvidenceArtifact(s.ID, agentResp, observations, observedModel)
 	evidencePath, err := WriteEvidenceArtifact(artifact, evidence.dir, evidence.outputPath)
 	if err != nil {
 		return errorResult(s.ID, fmt.Sprintf("write evidence artifact: %v", err))

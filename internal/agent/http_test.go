@@ -136,3 +136,59 @@ func TestExecute_EnrichedActionFields(t *testing.T) {
 		t.Errorf("second action result = %q, want null", second.Result)
 	}
 }
+
+// TestExecute_ObservedModel pins the decode boundary that turns a reported model
+// into an optional value. This is the ONLY place absent-or-empty collapses to
+// nil, and the collapse is what keeps the evidence artifact's observed_model an
+// explicit JSON null for an agent that reports no model — an empty string there
+// would read as an observation of a model named "".
+func TestExecute_ObservedModel(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want *string
+	}{
+		{
+			name: "reported model reaches the domain type",
+			body: `{"actions":[],"reasoning":"r","final_answer":"f","model":"claude-sonnet-4-20250514"}`,
+			want: strPtr("claude-sonnet-4-20250514"),
+		},
+		{
+			name: "field absent yields nil, never an empty string",
+			body: `{"actions":[],"reasoning":"r","final_answer":"f"}`,
+			want: nil,
+		},
+		{
+			name: "field empty yields nil, never an empty string",
+			body: `{"actions":[],"reasoning":"r","final_answer":"f","model":""}`,
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			client := NewHTTPClient(server.URL, "")
+			resp, err := client.Execute(context.Background(), evaluation.AgentRequest{Prompt: "p"})
+			if err != nil {
+				t.Fatalf("execute failed: %v", err)
+			}
+
+			switch {
+			case tt.want == nil && resp.Model != nil:
+				t.Errorf("Model = %q, want nil", *resp.Model)
+			case tt.want != nil && resp.Model == nil:
+				t.Errorf("Model = nil, want %q", *tt.want)
+			case tt.want != nil && *resp.Model != *tt.want:
+				t.Errorf("Model = %q, want %q", *resp.Model, *tt.want)
+			}
+		})
+	}
+}
+
+func strPtr(s string) *string { return &s }

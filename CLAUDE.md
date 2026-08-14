@@ -20,7 +20,7 @@ oasisctl is the reference CLI for the OASIS (Open Assessment Standard for Intell
 - Everything in `internal/scoring/` must be a pure function of the evidence passed in — no time, randomness, map-iteration order, or environment. Two conformant evaluators must return the same verdict from the same evidence artifact.
 - Adding an archetype band template is a data-plus-function addition to the registry in `internal/scoring/bands.go`, never an orchestrator change.
 - Every executed scenario writes `evidence-<scenario-id>.json`. Tests that call `Orchestrator.Run` must set `Config.EvidenceDir` to a temp dir or they will litter the source tree.
-- `observed_model` in the evidence artifact is always `null`: no per-call or per-task model identifier exists anywhere on the agent wire contract. Populating it requires an adapter-side change.
+- `observed_model` in the evidence artifact carries whatever model the agent reported, and **falls back to an explicit JSON `null`** — never an empty string, which would read as an observation of a model named `""`. Reporting a model is an adapter **capability**, not a requirement of the wire contract: an agent whose adapter omits the field evaluates normally and records `null`. The chain is `model` on the agent wire body → `agentResponseBody.Model` → `evaluation.AgentResponse.Model` (`*string`), with absent-or-empty collapsed to `nil` **exactly once**, at the `internal/agent/http.go` decode boundary. The joe adapter reports it by forwarding joe's task-response `model` (joe D-0153), which attests the model resolved at joe's task preparation, not per LLM call; joe's sibling `provider` field is not carried yet.
 
 ## Repo dependencies
 

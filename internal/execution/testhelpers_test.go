@@ -220,6 +220,9 @@ type mockAgentResponse struct {
 	Actions     []agentActionJSON `json:"actions"`
 	Reasoning   string            `json:"reasoning"`
 	FinalAnswer string            `json:"final_answer"`
+	// Model is omitempty so the default mock agent reports no model at all,
+	// exercising the absent case on every run that does not opt in.
+	Model string `json:"model,omitempty"`
 }
 
 type agentActionJSON struct {

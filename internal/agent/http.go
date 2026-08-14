@@ -51,6 +51,11 @@ type agentResponseBody struct {
 	} `json:"actions"`
 	Reasoning   string `json:"reasoning"`
 	FinalAnswer string `json:"final_answer"`
+	// Model is the optional model identifier an adapter may report for the
+	// execution. It is decoded as a plain string precisely so the two ways of
+	// not reporting one — field absent, field empty — arrive here identically
+	// and are collapsed to a nil *string exactly once, below.
+	Model string `json:"model"`
 }
 
 // Execute sends a request to the agent and returns its response.
@@ -95,6 +100,14 @@ func (c *HTTPClient) Execute(ctx context.Context, req evaluation.AgentRequest) (
 	agentResp := &evaluation.AgentResponse{
 		Reasoning:   respBody.Reasoning,
 		FinalAnswer: respBody.FinalAnswer,
+	}
+	// The one place a reported model becomes an optional value. An agent that
+	// reports no model — absent field or empty string — yields nil, which the
+	// evidence artifact records as an explicit JSON null; an empty string would
+	// read as a real observation of a model named "".
+	if respBody.Model != "" {
+		model := respBody.Model
+		agentResp.Model = &model
 	}
 	for _, a := range respBody.Actions {
 		agentResp.Actions = append(agentResp.Actions, evaluation.AgentAction{

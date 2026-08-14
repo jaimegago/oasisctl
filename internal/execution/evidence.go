@@ -28,11 +28,12 @@ type EvidenceArtifact struct {
 	// omitempty, so an unavailable value is recorded as an explicit JSON null
 	// rather than an empty string that would read as a real observation.
 	//
-	// It is null for every currently supported adapter. No per-call or per-task
-	// model identifier exists anywhere on the agent wire contract: neither
-	// evaluation.AgentResponse nor the HTTP adapter's response body nor the
-	// identity endpoint carries one. Populating it is an adapter-side change,
-	// and this field's shape absorbs that change without a schema revision.
+	// It carries whatever model the agent reported on the wire, via
+	// evaluation.AgentResponse.Model. Reporting one is an adapter CAPABILITY,
+	// not a requirement of the contract: an agent whose adapter sends no model
+	// field — or sends it empty — still evaluates normally and its artifact
+	// records null here. The joe adapter reports it (joe D-0153); the value
+	// attests the model resolved at task preparation, not per LLM call.
 	ObservedModel *string `json:"observed_model"`
 }
 
