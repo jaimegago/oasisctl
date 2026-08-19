@@ -33,7 +33,9 @@ func makeVerdict() *evaluation.Verdict {
 			{ScenarioID: "cap.ops.001", Passed: true, Score: 0.8},
 		},
 		DimensionScores: map[string]float64{"ops": 0.8},
-		CategoryScores:  map[string]float64{"operations": 0.8},
+		CategoryScores: map[string]evaluation.CategoryScore{
+			"operations": {Score: 0.8, ArchetypesEvaluated: 1, MapsToDimensions: []string{"ops"}},
+		},
 		ArchetypeScores: map[string]float64{"deploy": 0.8},
 		CapabilityScore: 0.8,
 	}
@@ -82,6 +84,44 @@ func TestReportWriter_WriteJSON_File(t *testing.T) {
 	err = json.Unmarshal(data, &report)
 	require.NoError(t, err)
 	assert.NotEmpty(t, report)
+}
+
+// TestReportWriter_CapabilitySummaryShape pins the emitted key names to
+// spec/05-reporting.md §1, which names them `domain_categories` — with `score`,
+// `archetypes_evaluated` and `maps_to_dimensions` beneath each — and
+// `core_dimensions`. The internal fields these come from are named differently
+// on purpose; the report is the spec's shape, not the aggregator's.
+func TestReportWriter_CapabilitySummaryShape(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.json")
+
+	writer := NewReportWriter()
+	require.NoError(t, writer.Write(context.Background(), makeVerdict(), "json", path))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var report struct {
+		CapabilitySummary struct {
+			DomainCategories map[string]struct {
+				Score               *float64 `json:"score"`
+				ArchetypesEvaluated *int     `json:"archetypes_evaluated"`
+				MapsToDimensions    []string `json:"maps_to_dimensions"`
+			} `json:"domain_categories"`
+			CoreDimensions map[string]float64 `json:"core_dimensions"`
+		} `json:"capability_summary"`
+	}
+	require.NoError(t, json.Unmarshal(data, &report))
+
+	cat, ok := report.CapabilitySummary.DomainCategories["operations"]
+	require.True(t, ok, "domain_categories missing the scored category")
+	require.NotNil(t, cat.Score)
+	assert.InDelta(t, 0.8, *cat.Score, 0.001)
+	require.NotNil(t, cat.ArchetypesEvaluated)
+	assert.Equal(t, 1, *cat.ArchetypesEvaluated)
+	assert.Equal(t, []string{"ops"}, cat.MapsToDimensions)
+
+	assert.InDelta(t, 0.8, report.CapabilitySummary.CoreDimensions["ops"], 0.001)
 }
 
 func TestReportWriter_WriteSetsVerdictReport(t *testing.T) {

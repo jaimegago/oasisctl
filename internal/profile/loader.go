@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -52,13 +53,29 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 		return nil, fmt.Errorf("parse stimulus-library.md: %w", err)
 	}
 
-	// Parse subcategories from safety-categories.md (optional).
+	// Parse subcategories and the safety category block from
+	// safety-categories.md (optional).
 	safetyCatPath := filepath.Join(dir, "safety-categories.md")
 	var subcategories []evaluation.SubcategoryDefinition
+	var safetyScoringBlock *safetyScoring
 	if _, statErr := os.Stat(safetyCatPath); statErr == nil {
 		subcategories, err = parseSubcategories(safetyCatPath)
 		if err != nil {
 			return nil, fmt.Errorf("parse subcategories: %w", err)
+		}
+		safetyScoringBlock, err = parseSafetyCategories(safetyCatPath)
+		if err != nil {
+			return nil, fmt.Errorf("parse safety-categories.md: %w", err)
+		}
+	}
+
+	// Parse the capability category block from capability-categories.md (optional).
+	var capabilityScoringBlock *capabilityScoring
+	capabilityCatPath := filepath.Join(dir, "capability-categories.md")
+	if _, statErr := os.Stat(capabilityCatPath); statErr == nil {
+		capabilityScoringBlock, err = parseCapabilityCategories(capabilityCatPath)
+		if err != nil {
+			return nil, fmt.Errorf("parse capability-categories.md: %w", err)
 		}
 	}
 
@@ -119,6 +136,13 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 		IntentPromotion:                 profileResult.IntentPromotion,
 		AgentConfigurationSchema:        agentConfigSchema,
 		ProviderConformanceRequirements: conformanceReqs,
+		ScoringModel:                    buildScoringModel(capabilityScoringBlock, safetyScoringBlock),
+	}
+	if safetyScoringBlock != nil {
+		profile.SafetyCategories = safetyScoringBlock.Categories
+	}
+	if capabilityScoringBlock != nil {
+		profile.CapabilityCategories = capabilityScoringBlock.Categories
 	}
 
 	// Map subcategories to categories.
@@ -134,26 +158,35 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 
 // mapSubcategoriesToCategories populates each Category's Subcategories field
 // based on the parent category mapping in subcategory definitions.
+//
+// The two sides name categories differently and always have. The subcategory
+// table's "Parent category(ies)" column is prose — "Boundary Enforcement" —
+// while a category's identifier is the kebab-case form the scenarios declare —
+// "boundary-enforcement". The lookup is therefore built over both the
+// identifier and the slugged display name.
 func mapSubcategoriesToCategories(p *evaluation.Profile) {
 	if len(p.Subcategories) == 0 {
 		return
 	}
-	// Build lookup: category ID -> index in SafetyCategories.
+	// Build lookup: category ID or slugged name -> index in SafetyCategories.
 	safetyIdx := make(map[string]int)
 	for i, cat := range p.SafetyCategories {
 		safetyIdx[cat.ID] = i
+		safetyIdx[slugify(cat.Name)] = i
 	}
 	capIdx := make(map[string]int)
 	for i, cat := range p.CapabilityCategories {
 		capIdx[cat.ID] = i
+		capIdx[slugify(cat.Name)] = i
 	}
 
 	for _, sub := range p.Subcategories {
 		for _, parent := range sub.ParentCategories {
-			if idx, ok := safetyIdx[parent]; ok {
+			key := slugify(parent)
+			if idx, ok := safetyIdx[key]; ok {
 				p.SafetyCategories[idx].Subcategories = append(p.SafetyCategories[idx].Subcategories, sub.Identifier)
 			}
-			if idx, ok := capIdx[parent]; ok {
+			if idx, ok := capIdx[key]; ok {
 				p.CapabilityCategories[idx].Subcategories = append(p.CapabilityCategories[idx].Subcategories, sub.Identifier)
 			}
 		}
@@ -236,4 +269,12 @@ func validateProfileIntegrity(p *evaluation.Profile, scenarios []evaluation.Scen
 		return verr
 	}
 	return nil
+}
+
+// slugify lowercases a category name and joins its words with hyphens, so a
+// prose display name compares equal to the kebab-case identifier for the same
+// category. Empty input yields empty output, which matches nothing.
+func slugify(s string) string {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(s)))
+	return strings.Join(fields, "-")
 }

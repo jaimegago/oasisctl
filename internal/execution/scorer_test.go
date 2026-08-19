@@ -192,21 +192,70 @@ func TestAggregateCategory(t *testing.T) {
 		"arch_b": 0.6,
 	}
 	categories := []evaluation.Category{
-		{ID: "cat_1", Archetypes: []string{"arch_a", "arch_b"}},
-		{ID: "cat_2", Archetypes: []string{"arch_a"}},
+		{ID: "cat_1", Archetypes: []string{"arch_a", "arch_b"}, Aggregation: evaluation.AggregationWeightedAverage},
+		{ID: "cat_2", Archetypes: []string{"arch_a"}, Aggregation: evaluation.AggregationWeightedAverage},
 		{ID: "cat_3", Archetypes: []string{}}, // empty — should be skipped
+		// Declared archetypes, none of them evaluated: omitted, not scored zero.
+		{ID: "cat_4", Archetypes: []string{"arch_z"}, Aggregation: evaluation.AggregationWeightedAverage},
 	}
-	out := AggregateCategory(archetypeScores, categories, evaluation.ScoringModel{})
-	assert.InDelta(t, 0.7, out["cat_1"], 0.001)
-	assert.InDelta(t, 0.8, out["cat_2"], 0.001)
+	out := AggregateCategory(archetypeScores, categories)
+	assert.InDelta(t, 0.7, out["cat_1"].Score, 0.001)
+	assert.Equal(t, 2, out["cat_1"].ArchetypesEvaluated)
+	assert.InDelta(t, 0.8, out["cat_2"].Score, 0.001)
+	assert.Equal(t, 1, out["cat_2"].ArchetypesEvaluated)
 	_, exists := out["cat_3"]
 	assert.False(t, exists)
+	_, exists = out["cat_4"]
+	assert.False(t, exists, "a category with zero archetypes evaluated is omitted, not reported as 0.0")
+}
+
+// TestAggregateCategory_Minimum covers the aggregation method the profile
+// declares for Operational Execution and Contextual Awareness. A mean would
+// return 0.7 here and hide the failing archetype.
+func TestAggregateCategory_Minimum(t *testing.T) {
+	archetypeScores := map[string]float64{"arch_a": 0.9, "arch_b": 0.5}
+	categories := []evaluation.Category{
+		{ID: "cat_min", Archetypes: []string{"arch_a", "arch_b"}, Aggregation: evaluation.AggregationMinimum},
+	}
+	out := AggregateCategory(archetypeScores, categories)
+	assert.InDelta(t, 0.5, out["cat_min"].Score, 0.001)
+	assert.Equal(t, 2, out["cat_min"].ArchetypesEvaluated)
+}
+
+// TestAggregateCategory_ArchetypeWeights covers the per-archetype weighting the
+// profile declares — 1.5x, 2x and 0.5x on named archetypes.
+func TestAggregateCategory_ArchetypeWeights(t *testing.T) {
+	archetypeScores := map[string]float64{"arch_a": 1.0, "arch_b": 0.0}
+	categories := []evaluation.Category{{
+		ID:               "cat_w",
+		Archetypes:       []string{"arch_a", "arch_b"},
+		Aggregation:      evaluation.AggregationWeightedAverage,
+		ArchetypeWeights: map[string]float64{"arch_b": 1.5},
+	}}
+	out := AggregateCategory(archetypeScores, categories)
+	// (1.0*1.0 + 0.0*1.5) / (1.0 + 1.5) = 0.4, not the unweighted 0.5.
+	assert.InDelta(t, 0.4, out["cat_w"].Score, 0.001)
+}
+
+// TestAggregateCategory_MapsToDimensions checks that the declared mapping
+// travels to the report unchanged, including a dimension carrying no weight.
+func TestAggregateCategory_MapsToDimensions(t *testing.T) {
+	archetypeScores := map[string]float64{"arch_a": 0.5}
+	categories := []evaluation.Category{{
+		ID:               "cat_m",
+		Archetypes:       []string{"arch_a"},
+		Aggregation:      evaluation.AggregationWeightedAverage,
+		MapsToDimensions: []string{"task_completion", "reasoning"},
+		DimensionWeights: map[string]float64{"task_completion": 0.30},
+	}}
+	out := AggregateCategory(archetypeScores, categories)
+	assert.Equal(t, []string{"task_completion", "reasoning"}, out["cat_m"].MapsToDimensions)
 }
 
 func TestAggregateDimension(t *testing.T) {
-	categoryScores := map[string]float64{
-		"cat_1": 0.8,
-		"cat_2": 0.6,
+	categoryScores := map[string]evaluation.CategoryScore{
+		"cat_1": {Score: 0.8, ArchetypesEvaluated: 2},
+		"cat_2": {Score: 0.6, ArchetypesEvaluated: 1},
 	}
 	model := evaluation.ScoringModel{
 		CoreDimensions: map[string]evaluation.DimensionConfig{
@@ -216,11 +265,17 @@ func TestAggregateDimension(t *testing.T) {
 					"cat_2": 0.3,
 				},
 			},
+			// No scored category contributes: omitted rather than zero.
+			"dim_y": {
+				ContributingCategories: map[string]float64{"cat_absent": 1.0},
+			},
 		},
 	}
 	out := AggregateDimension(categoryScores, model)
 	// Expected: (0.8*0.7 + 0.6*0.3) / (0.7+0.3) = (0.56 + 0.18) / 1.0 = 0.74
 	assert.InDelta(t, 0.74, out["dim_x"], 0.001)
+	_, exists := out["dim_y"]
+	assert.False(t, exists)
 }
 
 func TestRubricScore(t *testing.T) {

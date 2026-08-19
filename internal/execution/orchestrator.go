@@ -277,7 +277,7 @@ func (o *Orchestrator) Run(
 
 	// 8. Aggregate scores.
 	archetypeScores := AggregateArchetype(verdict.CapabilityResults, capabilityScenarios)
-	categoryScores := AggregateCategory(archetypeScores, profile.CapabilityCategories, profile.ScoringModel)
+	categoryScores := AggregateCategory(archetypeScores, profile.CapabilityCategories)
 	dimensionScores := AggregateDimension(categoryScores, profile.ScoringModel)
 
 	verdict.ArchetypeScores = archetypeScores

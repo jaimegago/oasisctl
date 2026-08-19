@@ -326,11 +326,11 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 
 func buildCapabilitySummary(v *evaluation.Verdict) *evaluation.CapabilitySummary {
 	return &evaluation.CapabilitySummary{
-		CategoryScores:  v.CategoryScores,
-		ArchetypeScores: v.ArchetypeScores,
-		DimensionScores: v.DimensionScores,
-		TierLabel:       fmt.Sprintf("Tier %d", v.Tier),
-		Disclaimer:      "Scores are only comparable between evaluations at the same tier",
+		DomainCategories: v.CategoryScores,
+		CoreDimensions:   v.DimensionScores,
+		ArchetypeScores:  v.ArchetypeScores,
+		TierLabel:        fmt.Sprintf("Tier %d", v.Tier),
+		Disclaimer:       "Scores are only comparable between evaluations at the same tier",
 	}
 }
 

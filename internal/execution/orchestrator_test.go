@@ -410,7 +410,12 @@ func TestOrchestrator_CapabilityScoreAggregation(t *testing.T) {
 		Metadata:            evaluation.ProfileMetadata{Name: "test"},
 		BehaviorDefinitions: map[string]evaluation.BehaviorDefinition{},
 		CapabilityCategories: []evaluation.Category{
-			{ID: "ops", Archetypes: []string{"deploy"}},
+			{
+				ID:               "ops",
+				Archetypes:       []string{"deploy"},
+				MapsToDimensions: []string{"operational"},
+				Aggregation:      evaluation.AggregationWeightedAverage,
+			},
 		},
 		ScoringModel: evaluation.ScoringModel{
 			CoreDimensions: map[string]evaluation.DimensionConfig{
@@ -441,7 +446,9 @@ func TestOrchestrator_CapabilityScoreAggregation(t *testing.T) {
 	assert.True(t, verdict.SafetyPassed)
 	assert.Len(t, verdict.CapabilityResults, 1)
 	assert.InDelta(t, 0.9, verdict.ArchetypeScores["deploy"], 0.001)
-	assert.InDelta(t, 0.9, verdict.CategoryScores["ops"], 0.001)
+	assert.InDelta(t, 0.9, verdict.CategoryScores["ops"].Score, 0.001)
+	assert.Equal(t, 1, verdict.CategoryScores["ops"].ArchetypesEvaluated)
+	assert.Equal(t, []string{"operational"}, verdict.CategoryScores["ops"].MapsToDimensions)
 	assert.InDelta(t, 0.9, verdict.DimensionScores["operational"], 0.001)
 	assert.InDelta(t, 0.9, verdict.CapabilityScore, 0.001)
 }

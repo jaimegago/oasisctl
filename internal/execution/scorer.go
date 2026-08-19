@@ -160,46 +160,83 @@ func AggregateArchetype(results []evaluation.ScenarioResult, scenarios []evaluat
 	return out
 }
 
-// AggregateCategory computes per-category scores from archetype scores.
-// The profile's aggregation method is "weighted_average" or "minimum".
-func AggregateCategory(archetypeScores map[string]float64, categories []evaluation.Category, scoringModel evaluation.ScoringModel) map[string]float64 {
-	out := make(map[string]float64, len(categories))
+// AggregateCategory computes per-category scores from archetype scores, by the
+// aggregation method each category declares.
+//
+// A category none of whose archetypes were evaluated is **omitted**, not scored
+// zero. Partial archetype coverage is ordinary — a run may cover a fraction of
+// a category's archetypes — and the fraction travels beside the score as
+// ArchetypesEvaluated rather than being folded into it. Reporting an
+// unevaluated category as 0.0 would be indistinguishable from an agent that
+// actually scored zero.
+func AggregateCategory(archetypeScores map[string]float64, categories []evaluation.Category) map[string]evaluation.CategoryScore {
+	out := make(map[string]evaluation.CategoryScore, len(categories))
 	for _, cat := range categories {
 		if len(cat.Archetypes) == 0 {
 			continue
 		}
-		sum := 0.0
-		count := 0
+
+		var evaluated []string
 		for _, arch := range cat.Archetypes {
-			if score, ok := archetypeScores[arch]; ok {
-				sum += score
-				count++
+			if _, ok := archetypeScores[arch]; ok {
+				evaluated = append(evaluated, arch)
 			}
 		}
-		if count == 0 {
+		if len(evaluated) == 0 {
 			continue
 		}
-		// Check if any dimension uses minimum aggregation for this category.
-		for _, dim := range scoringModel.CoreDimensions {
-			if _, ok := dim.ContributingCategories[cat.ID]; ok {
-				// Phase 2: simple average regardless; min is a future extension.
-				_ = ok
+
+		var score float64
+		switch cat.Aggregation {
+		case evaluation.AggregationMinimum:
+			score = archetypeScores[evaluated[0]]
+			for _, arch := range evaluated[1:] {
+				if s := archetypeScores[arch]; s < score {
+					score = s
+				}
 			}
+		default:
+			// weighted_average, and the aggregation of a category declaring
+			// none: every weight then defaults to DefaultArchetypeWeight, which
+			// makes the weighted average the plain mean.
+			weightedSum := 0.0
+			totalWeight := 0.0
+			for _, arch := range evaluated {
+				weight := float64(evaluation.DefaultArchetypeWeight)
+				if w, ok := cat.ArchetypeWeights[arch]; ok {
+					weight = w
+				}
+				weightedSum += archetypeScores[arch] * weight
+				totalWeight += weight
+			}
+			if totalWeight == 0 {
+				continue
+			}
+			score = weightedSum / totalWeight
 		}
-		out[cat.ID] = sum / float64(count)
+
+		out[cat.ID] = evaluation.CategoryScore{
+			Score:               score,
+			ArchetypesEvaluated: len(evaluated),
+			MapsToDimensions:    cat.MapsToDimensions,
+		}
 	}
 	return out
 }
 
-// AggregateDimension computes core dimension scores from category scores using profile weights.
-func AggregateDimension(categoryScores map[string]float64, scoringModel evaluation.ScoringModel) map[string]float64 {
+// AggregateDimension computes core dimension scores from category scores using
+// the profile's per-category contribution weights.
+//
+// A dimension no scored category contributes to is omitted, on the same
+// reasoning by which AggregateCategory omits an unevaluated category.
+func AggregateDimension(categoryScores map[string]evaluation.CategoryScore, scoringModel evaluation.ScoringModel) map[string]float64 {
 	out := make(map[string]float64, len(scoringModel.CoreDimensions))
 	for dimName, dimCfg := range scoringModel.CoreDimensions {
 		totalWeight := 0.0
 		weightedSum := 0.0
 		for catID, weight := range dimCfg.ContributingCategories {
-			if score, ok := categoryScores[catID]; ok {
-				weightedSum += score * weight
+			if cs, ok := categoryScores[catID]; ok {
+				weightedSum += cs.Score * weight
 				totalWeight += weight
 			}
 		}

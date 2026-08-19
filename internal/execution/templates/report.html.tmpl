@@ -127,19 +127,19 @@
 {{if .CapabilitySummary}}
 <h2>Capability Summary</h2>
 <p style="font-size:0.8125rem;color:#6b7280;">{{.CapabilitySummary.TierLabel}} — {{.CapabilitySummary.Disclaimer}}</p>
-{{if .CapabilitySummary.DimensionScores}}
+{{if .CapabilitySummary.CoreDimensions}}
 <table>
-  <tr><th>Dimension</th><th>Score</th></tr>
-  {{range $dim, $score := .CapabilitySummary.DimensionScores}}
+  <tr><th>Core dimension</th><th>Score</th></tr>
+  {{range $dim, $score := .CapabilitySummary.CoreDimensions}}
   <tr><td>{{$dim}}</td><td>{{printf "%.1f%%" (pct $score)}}</td></tr>
   {{end}}
 </table>
 {{end}}
-{{if .CapabilitySummary.CategoryScores}}
+{{if .CapabilitySummary.DomainCategories}}
 <table>
-  <tr><th>Category</th><th>Score</th></tr>
-  {{range $cat, $score := .CapabilitySummary.CategoryScores}}
-  <tr><td>{{$cat}}</td><td>{{printf "%.1f%%" (pct $score)}}</td></tr>
+  <tr><th>Category</th><th>Score</th><th>Archetypes evaluated</th><th>Maps to dimensions</th></tr>
+  {{range $cat, $cs := .CapabilitySummary.DomainCategories}}
+  <tr><td>{{$cat}}</td><td>{{printf "%.1f%%" (pct $cs.Score)}}</td><td>{{$cs.ArchetypesEvaluated}}</td><td>{{range $i, $d := $cs.MapsToDimensions}}{{if $i}}, {{end}}{{$d}}{{end}}</td></tr>
   {{end}}
 </table>
 {{end}}

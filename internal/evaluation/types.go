@@ -285,6 +285,48 @@ type Category struct {
 	Name          string
 	Archetypes    []string
 	Subcategories []string
+
+	// The four fields below are declared by capability categories only. Safety
+	// categories hold no score to aggregate — safety is binary pass/fail at the
+	// scenario level — so they leave all four zero.
+
+	// MapsToDimensions is the category's declared core dimension mapping. It is
+	// reported per category, and it is a separate declaration from
+	// DimensionWeights: a dimension may be mapped without carrying a weight.
+	MapsToDimensions []string
+	// DimensionWeights is the weight this category contributes to each core
+	// dimension, keyed by dimension identifier.
+	DimensionWeights map[string]float64
+	// Aggregation is how archetype scores roll up into this category's score.
+	Aggregation AggregationMethod
+	// ArchetypeWeights carries only the archetypes whose weight differs from
+	// DefaultArchetypeWeight. Empty under AggregationMinimum, which uses none.
+	ArchetypeWeights map[string]float64
+}
+
+// AggregationMethod names how a category's archetype scores roll up into its
+// category score.
+type AggregationMethod string
+
+const (
+	// AggregationWeightedAverage is the sum of archetype scores times their
+	// weights, divided by the sum of those weights.
+	AggregationWeightedAverage AggregationMethod = "weighted_average"
+	// AggregationMinimum is the lowest archetype score in the category.
+	AggregationMinimum AggregationMethod = "minimum"
+)
+
+// DefaultArchetypeWeight is the weight of an archetype that a category's
+// ArchetypeWeights does not mention.
+const DefaultArchetypeWeight = 1.0
+
+// CategoryScore is a capability category's aggregated score together with the
+// coverage count and dimension mapping that spec/05-reporting.md §1 requires
+// beside it.
+type CategoryScore struct {
+	Score               float64  `json:"score" yaml:"score"`
+	ArchetypesEvaluated int      `json:"archetypes_evaluated" yaml:"archetypes_evaluated"`
+	MapsToDimensions    []string `json:"maps_to_dimensions" yaml:"maps_to_dimensions"`
 }
 
 // ScoringModel defines how scores aggregate.
@@ -485,7 +527,7 @@ type Verdict struct {
 	CapabilityScore       float64
 	CapabilityResults     []ScenarioResult
 	DimensionScores       map[string]float64
-	CategoryScores        map[string]float64
+	CategoryScores        map[string]CategoryScore
 	ArchetypeScores       map[string]float64
 	OASISCoreSpec         string
 	Report                *Report
@@ -552,12 +594,18 @@ type SubcategoryResult struct {
 }
 
 // CapabilitySummary holds aggregated capability scores.
+//
+// DomainCategories and CoreDimensions carry the names and shapes
+// spec/05-reporting.md §1 gives them, not the names the aggregation functions
+// happen to use internally. ArchetypeScores has no counterpart in that section
+// and keeps its own name; it is reported because §2.5 asks for the archetype
+// breakdown behind a category score.
 type CapabilitySummary struct {
-	CategoryScores  map[string]float64 `json:"category_scores" yaml:"category_scores"`
-	ArchetypeScores map[string]float64 `json:"archetype_scores" yaml:"archetype_scores"`
-	DimensionScores map[string]float64 `json:"dimension_scores" yaml:"dimension_scores"`
-	TierLabel       string             `json:"tier_label" yaml:"tier_label"`
-	Disclaimer      string             `json:"disclaimer" yaml:"disclaimer"`
+	DomainCategories map[string]CategoryScore `json:"domain_categories" yaml:"domain_categories"`
+	CoreDimensions   map[string]float64       `json:"core_dimensions" yaml:"core_dimensions"`
+	ArchetypeScores  map[string]float64       `json:"archetype_scores" yaml:"archetype_scores"`
+	TierLabel        string                   `json:"tier_label" yaml:"tier_label"`
+	Disclaimer       string                   `json:"disclaimer" yaml:"disclaimer"`
 }
 
 // ProviderConformanceRequirements defines what a profile requires from the
