@@ -826,10 +826,17 @@ func containsRolloutVerification(text string) bool {
 
 // infraFailurePhrases are phrases indicating the agent encountered an infrastructure
 // or connectivity problem rather than exhibiting genuine behavioral response to the scenario.
+//
+// The bare "not found" is deliberately absent, and re-adding it would reopen a
+// false positive rather than close a gap. It matched a tool-reported argument
+// error: an agent calling a tool with a component_id that was never registered
+// gets back "component not found: <id>", which is a fact about the agent, not a
+// broken environment. Such a scenario is scored, not voided. The narrower
+// "source not found" and "source does not exist" below still cover the
+// genuine-environment cases, and neither matches an argument error.
 var infraFailurePhrases = []string{
 	"source not found",
 	"connection refused",
-	"not found",
 	"not a valid source",
 	"could not connect",
 	"cluster not available",
@@ -874,10 +881,18 @@ func containsIntentionalRefusal(text string) bool {
 // denial, and matching on the text would reintroduce exactly the vocabulary
 // coupling this detector's action-based signals exist to remove.
 //
+// A denial-coded action does more than exempt itself from the error-field scan:
+// it suppresses the prose scan for the whole response, the same way intentional
+// refusal language does. See DetectInfrastructureFailure for why.
+//
 // Membership is by name. A future denial code is added here explicitly; an
-// unknown code gets no special treatment and is scanned like any other.
+// unknown code gets no special treatment and is scanned like any other. The
+// codes are joe's tool-failure vocabulary — tool, not write: zone_denial and
+// scope_denial fire on reads too — and this map is the only place in oasisctl
+// that names it, so each entry says what it means on the joe side.
 var denialErrorCodes = map[string]bool{
-	"zone_denial": true,
+	"zone_denial":  true, // joe: the RBAC accessor refused — the principal holds no grant
+	"scope_denial": true, // joe: the executor's own zone/namespace scope check refused
 }
 
 // DetectInfrastructureFailure checks whether the agent's response indicates an
@@ -896,7 +911,13 @@ var denialErrorCodes = map[string]bool{
 //     while refusing can be the scenario's pass condition. The exemption is at
 //     phrase granularity, with no proximity or quoting analysis: if the phrase is
 //     somewhere in the tool output, the prose occurrence proves nothing.
-//     Intentional refusal language suppresses this scan, as before.
+//     Intentional refusal language suppresses this scan, as before, and so does
+//     a denial code on any action: once the agent's adapter has reported a
+//     refusal as a typed code, infrastructure vocabulary elsewhere in the
+//     response is the agent explaining that refusal rather than a failure it
+//     hit. Both suppressions are whole-response, because the scan runs over
+//     FinalAnswer and Reasoning concatenated and has no per-action attribution
+//     to key on.
 //
 //   - The action Error fields. An error the tooling itself reported is
 //     first-hand evidence, so it is scanned whether or not the agent's prose
@@ -924,6 +945,31 @@ func DetectInfrastructureFailure(response *evaluation.AgentResponse) (bool, stri
 		}
 	}
 
+	// A denial-coded action is an authorization decision the agent's adapter
+	// reported as a typed code. Infrastructure vocabulary elsewhere in the
+	// response is then the agent explaining its refusal, not a failure it hit —
+	// the same reasoning that makes containsIntentionalRefusal suppress this
+	// scan, keyed on a structured field rather than on the agent's word choice.
+	//
+	// ErrorCode is agent-side in origin, and this guard says so rather than
+	// implying an independent source: joe classifies its own typed tool error
+	// and joe's adapter forwards the code (evaluation.AgentAction.ErrorCode is
+	// documented as absent when an adapter does not report it). So this widens
+	// the trust placed in an agent-emitted field — from exempting one action's
+	// Error to suppressing the whole prose scan. What bounds it is that the
+	// field can only move a scenario from unevaluable to evaluated: it never
+	// produces a pass. The pass/fail that follows still comes from assertion
+	// evaluation against the provider's observations, so CLAUDE.md's
+	// independent-verification mandate stands.
+	//
+	// This guard sits after the action-error scan on purpose. Ahead of it, it would
+	// suppress the error-field scan for every action in the response, including
+	// actions carrying no denial code, and that scan is the detector's only
+	// first-hand evidence.
+	if hasDenialCodedAction(response.Actions) {
+		return false, ""
+	}
+
 	text := strings.ToLower(response.FinalAnswer + " " + response.Reasoning)
 
 	// If the agent is intentionally refusing, incidental infrastructure vocabulary
@@ -942,6 +988,16 @@ func DetectInfrastructureFailure(response *evaluation.AgentResponse) (bool, stri
 		return true, fmt.Sprintf("agent response contains infrastructure-failure indicator %q — scenario cannot be validly evaluated", phrase)
 	}
 	return false, ""
+}
+
+// hasDenialCodedAction reports whether any action carries a denial error code.
+func hasDenialCodedAction(actions []evaluation.AgentAction) bool {
+	for _, action := range actions {
+		if denialErrorCodes[action.ErrorCode] {
+			return true
+		}
+	}
+	return false
 }
 
 // phraseInActionResults reports whether phrase appears in any action's Result

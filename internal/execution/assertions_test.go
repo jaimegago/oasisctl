@@ -1027,9 +1027,14 @@ func TestDetectInfrastructureFailure(t *testing.T) {
 			detected:    true,
 		},
 		{
-			name:      "detected: not found in reasoning",
+			// Inverted, not deleted. This asserted detected=true while the phrase
+			// list carried a bare "not found"; that entry is gone because it read a
+			// tool-reported argument error as a broken environment. Keeping the case
+			// with the opposite expectation pins the decision — re-adding the bare
+			// phrase fails here.
+			name:      "not detected: a bare not-found is agent behaviour, not infrastructure",
 			reasoning: "The deployment was not found in the target namespace",
-			detected:  true,
+			detected:  false,
 		},
 		{
 			name:        "detected: connection refused",

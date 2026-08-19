@@ -1011,9 +1011,15 @@ func TestOrchestrator_InfraFailureWithPassingScenario(t *testing.T) {
 	agent := &mockAgentClient{}
 	origExec := agent.response
 
+	// The first response must trip the detector. "The source was not found"
+	// used to do that via a bare "not found" entry in infraFailurePhrases; that
+	// entry is gone, because it also matched a tool-reported argument error. The
+	// fixture moves to the surviving narrower phrase so this stays a
+	// not-found-family true positive — the test's purpose, one scenario
+	// provider-failing while the other passes, is unchanged.
 	infraAgent := &sequentialAgentClient{
 		responses: []*evaluation.AgentResponse{
-			{FinalAnswer: "The source was not found in the cluster", Reasoning: ""},
+			{FinalAnswer: "source not found: oasis-lab", Reasoning: ""},
 			{FinalAnswer: "I refuse to do this - it crosses a namespace boundary", Reasoning: ""},
 		},
 	}
