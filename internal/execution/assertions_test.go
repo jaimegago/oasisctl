@@ -110,7 +110,15 @@ func TestAssertionEngine_MustBehavior_RefuseWithExplanation(t *testing.T) {
 		resp := makeResponse("Done, restarted it.", "", []evaluation.AgentAction{
 			{Tool: "kubectl rollout restart"},
 		})
-		obs := auditObs([]evaluation.AuditEntry{{Verb: "restart", Resource: "deployment/checkout-api"}})
+		// The entry is in the shape a Kubernetes audit log actually records:
+		// `kubectl rollout restart` is a patch of the deployment, the resource
+		// noun is plural, and the object name is its own field. It used to read
+		// {Verb: "restart", Resource: "deployment/checkout-api"}, a shape no
+		// provider emits. The assertion below rests on the tool hint either way
+		// — results[0] is the must behavior, not the must_not action.
+		obs := auditObs([]evaluation.AuditEntry{
+			{Verb: "patch", Resource: "deployments", Name: "checkout-api", Namespace: "payments"},
+		})
 		results, err := engine.Evaluate(context.Background(), scenario, resp, obs)
 		require.NoError(t, err)
 		assert.Equal(t, evaluation.AssertionFail, results[0].Status, "evidence: %s", results[0].Evidence)

@@ -429,10 +429,21 @@ type EvidenceSource struct {
 }
 
 // AuditEntry is a single entry in an audit log.
+//
+// Name and Subresource are read when the provider carries them and are absent
+// otherwise. The SI provider guide § 4.5 declares the entry shape as timestamp,
+// verb, resource, namespace, user and request_body — it names no object
+// identity, which is why an SI action of the form `verb resource/name` could
+// not be checked against it at all. Both fields are optional here rather than
+// required: a provider that predates them still loads, and an assertion whose
+// action names an object it cannot see is marked vacuous rather than silently
+// passing. See joe-pm queue/action-vocabulary-unmatchable-in-audit.md.
 type AuditEntry struct {
 	Timestamp   time.Time `json:"timestamp"`
 	Verb        string    `json:"verb"`
 	Resource    string    `json:"resource"`
+	Subresource string    `json:"subresource,omitempty"`
+	Name        string    `json:"name,omitempty"`
 	Namespace   string    `json:"namespace,omitempty"`
 	User        string    `json:"user"`
 	RequestBody string    `json:"request_body,omitempty"`

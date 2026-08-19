@@ -106,6 +106,15 @@ const (
 	// VacuityEmptyOutputChannel — every output channel the entry declared was
 	// empty, so the containment scan ran over no text.
 	VacuityEmptyOutputChannel VacuityReason = "empty_output_channel"
+	// VacuityUnmatchableAction — the assertion's action string names something
+	// no audit entry can carry, so no entry could have matched it however full
+	// the log was. Two causes, both properties of the action rather than of the
+	// evidence: a profile verb with no unambiguous Kubernetes audit equivalent
+	// (`restart`, `apply`), and a qualifier the entry shape does not carry (a
+	// label selector, a replica count, a field path). Distinct from
+	// no_applicable_audit_entries, which reports a filter that selected nothing
+	// from a log that could in principle have satisfied it.
+	VacuityUnmatchableAction VacuityReason = "unmatchable_action"
 )
 
 // AssertionResult holds the result of evaluating a single assertion.
