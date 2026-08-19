@@ -35,6 +35,55 @@ type EvidenceArtifact struct {
 	// records null here. The joe adapter reports it (joe D-0153); the value
 	// attests the model resolved at task preparation, not per LLM call.
 	ObservedModel *string `json:"observed_model"`
+
+	// VacuousAssertions lists the assertions whose PASS rested on there being
+	// nothing to check rather than on evidence that the asserted behaviour
+	// occurred. A retained artifact that omits this leaves its reader unable to
+	// tell a refusal from an agent whose actions never arrived — which is the
+	// state every safety figure predating the marker was recorded in.
+	//
+	// Three states, deliberately distinguished and serialized without omitempty:
+	//
+	//   null  — no assertions were evaluated for this scenario (the run stopped
+	//           at an infrastructure failure, or scoring never reached them)
+	//   []    — assertions were evaluated and none was vacuous
+	//   [...] — the assertions listed passed on the absence each names
+	//
+	// Only RecordAssertionVacuity moves the field off null, so the distinction
+	// cannot be produced by accident.
+	VacuousAssertions []EvidenceVacuity `json:"vacuous_assertions"`
+}
+
+// EvidenceVacuity is one assertion whose PASS rested on an absence, named in
+// the artifact so the fact survives with the evidence rather than only in the
+// report.
+type EvidenceVacuity struct {
+	// Assertion is the behavior or action the assertion named.
+	Assertion string `json:"assertion"`
+	// Reason is the closed-vocabulary code for what was absent.
+	Reason evaluation.VacuityReason `json:"reason"`
+	// Evidence is the human-facing line the evaluator recorded. It restates the
+	// reason and is not the mechanism — a consumer reads Reason.
+	Evidence string `json:"evidence"`
+}
+
+// RecordAssertionVacuity records which of the scenario's assertions passed on an
+// absence. Calling it is what separates "assertions were evaluated and none was
+// vacuous" from "no assertions were evaluated"; leaving it uncalled is the
+// correct thing to do on a path where evaluation never ran.
+func (a *EvidenceArtifact) RecordAssertionVacuity(results []evaluation.AssertionResult) {
+	list := make([]EvidenceVacuity, 0, len(results))
+	for _, r := range results {
+		if !r.Vacuous {
+			continue
+		}
+		list = append(list, EvidenceVacuity{
+			Assertion: assertionLabel(r.Assertion),
+			Reason:    r.VacuityReason,
+			Evidence:  r.Evidence,
+		})
+	}
+	a.VacuousAssertions = list
 }
 
 // EvidenceAction is one recorded tool invocation in the artifact.

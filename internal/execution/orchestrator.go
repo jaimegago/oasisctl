@@ -588,10 +588,57 @@ func (o *Orchestrator) runScenario(
 		}
 	}
 
-	// g. Persist the evidence artifact. Every executed scenario gets one, per
+	// g. Evaluate assertions and score.
+	//
+	// A Form B capability scenario is scored by its archetype band template and
+	// skips must/must_not evaluation entirely: the decision table IS the
+	// evaluation, and per-scenario behavior names would only restate what it
+	// already decides (spec/02-scenarios.md §1.5). Value containment still runs
+	// for both forms — it is driven by verification.value_containment, not by
+	// the scoring form, and a Form B scenario carrying a containment entry keeps
+	// that independent check.
+	var result *evaluation.ScenarioResult
+	var scoreErr string
+	switch {
+	case classification == evaluation.ClassificationCapability && s.Scoring.IsFormB():
+		result, err = o.scoreFormB(scenarioCtx, &s, agentResp)
+		if err != nil {
+			scoreErr = fmt.Sprintf("score: %v", err)
+		}
+	case classification == evaluation.ClassificationSafety:
+		var assertionResults []evaluation.AssertionResult
+		assertionResults, err = o.asserter.Evaluate(scenarioCtx, &s, agentResp, observations)
+		if err != nil {
+			scoreErr = fmt.Sprintf("evaluate assertions: %v", err)
+			break
+		}
+		result, err = o.scorer.ScoreSafety(scenarioCtx, &s, assertionResults)
+		if err != nil {
+			scoreErr = fmt.Sprintf("score: %v", err)
+		}
+	default:
+		var assertionResults []evaluation.AssertionResult
+		assertionResults, err = o.asserter.Evaluate(scenarioCtx, &s, agentResp, observations)
+		if err != nil {
+			scoreErr = fmt.Sprintf("evaluate assertions: %v", err)
+			break
+		}
+		result, err = o.scorer.ScoreCapability(scenarioCtx, &s, assertionResults)
+		if err != nil {
+			scoreErr = fmt.Sprintf("score: %v", err)
+		}
+	}
+
+	// h. Persist the evidence artifact. Every executed scenario gets one, per
 	// spec/05-reporting.md §1.2. A failed write is a scenario-level error: a
 	// verdict whose evidence was never written cannot be replayed, and claiming
 	// it can is worse than reporting the failure.
+	//
+	// It is written after scoring rather than before so it can carry the vacuity
+	// of each assertion that passed on an absence — a fact that does not exist
+	// until the assertions have run. A scoring failure still gets an artifact,
+	// with the vacuity list left null: nothing was evaluated, which is a
+	// different fact from nothing having been vacuous.
 	//
 	// ObservedModel is whatever model the agent reported for this execution, or
 	// nil when it reported none — reporting a model is an adapter capability,
@@ -604,41 +651,22 @@ func (o *Orchestrator) runScenario(
 		observedModel = agentResp.Model
 	}
 	artifact := BuildEvidenceArtifact(s.ID, agentResp, observations, observedModel)
-	evidencePath, err := WriteEvidenceArtifact(artifact, evidence.dir, evidence.outputPath)
-	if err != nil {
-		return errorResult(s.ID, fmt.Sprintf("write evidence artifact: %v", err))
+	if result != nil {
+		artifact.RecordAssertionVacuity(result.AssertionResults)
 	}
+	evidencePath, werr := WriteEvidenceArtifact(artifact, evidence.dir, evidence.outputPath)
 
-	// h. Evaluate assertions and score.
-	//
-	// A Form B capability scenario is scored by its archetype band template and
-	// skips must/must_not evaluation entirely: the decision table IS the
-	// evaluation, and per-scenario behavior names would only restate what it
-	// already decides (spec/02-scenarios.md §1.5). Value containment still runs
-	// for both forms — it is driven by verification.value_containment, not by
-	// the scoring form, and a Form B scenario carrying a containment entry keeps
-	// that independent check.
-	var result *evaluation.ScenarioResult
-	switch {
-	case classification == evaluation.ClassificationCapability && s.Scoring.IsFormB():
-		result, err = o.scoreFormB(scenarioCtx, &s, agentResp)
-	case classification == evaluation.ClassificationSafety:
-		var assertionResults []evaluation.AssertionResult
-		assertionResults, err = o.asserter.Evaluate(scenarioCtx, &s, agentResp, observations)
-		if err != nil {
-			return errorResult(s.ID, fmt.Sprintf("evaluate assertions: %v", err))
+	if scoreErr != "" {
+		r := errorResult(s.ID, scoreErr)
+		if werr != nil {
+			r.Errors = append(r.Errors, fmt.Sprintf("write evidence artifact: %v", werr))
+		} else {
+			r.EvidencePath = evidencePath
 		}
-		result, err = o.scorer.ScoreSafety(scenarioCtx, &s, assertionResults)
-	default:
-		var assertionResults []evaluation.AssertionResult
-		assertionResults, err = o.asserter.Evaluate(scenarioCtx, &s, agentResp, observations)
-		if err != nil {
-			return errorResult(s.ID, fmt.Sprintf("evaluate assertions: %v", err))
-		}
-		result, err = o.scorer.ScoreCapability(scenarioCtx, &s, assertionResults)
+		return r
 	}
-	if err != nil {
-		return errorResult(s.ID, fmt.Sprintf("score: %v", err))
+	if werr != nil {
+		return errorResult(s.ID, fmt.Sprintf("write evidence artifact: %v", werr))
 	}
 
 	// Populate scenario metadata on the result for downstream reporting.
@@ -696,7 +724,7 @@ func (o *Orchestrator) scoreFormB(
 		if r.Status == evaluation.AssertionFail {
 			result.Passed = false
 		}
-		result.Evidence = append(result.Evidence, fmt.Sprintf("%s: %s", r.Status, r.Evidence))
+		result.Evidence = append(result.Evidence, fmt.Sprintf("%s: %s", assertionStatusLabel(r), r.Evidence))
 	}
 
 	return result, nil

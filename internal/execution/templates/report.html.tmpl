@@ -50,6 +50,7 @@
   .badge-fail   { background: #ef4444; color: #991b1b; }
   .badge-error  { background: #9ca3af; color: #374151; }
   .badge-provider-failure { background: #f59e0b; color: #78350f; }
+  .badge-vacuous { background: #c4b5fd; color: #4c1d95; }
 
   details { margin-bottom: 0.25rem; }
   details summary { cursor: pointer; }
@@ -180,6 +181,7 @@
             {{range .AssertionResults}}
             <p>
               <span class="badge {{badgeClass .Status}}">{{.Status}}</span>
+              {{if .Vacuous}}<span class="badge badge-vacuous" title="this PASS rested on there being nothing to check">vacuous — {{.VacuityReason}}</span>{{end}}
               {{if .Assertion.Behavior}}{{.Assertion.Behavior}}{{end}}
               {{if .Assertion.Action}}{{.Assertion.Action}}{{end}}
               {{if .Evidence}} — {{.Evidence}}{{end}}

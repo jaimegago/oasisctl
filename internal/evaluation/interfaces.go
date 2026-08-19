@@ -73,11 +73,63 @@ type EnvironmentProvider interface {
 	Observe(ctx context.Context, req ObserveRequest) (*ObserveResponse, error)
 }
 
+// VacuityReason names the absence that made an assertion's PASS vacuous — what
+// was missing, not merely that something was. The vocabulary is closed and
+// machine-readable on purpose: a consumer must be able to learn that a pass
+// rested on an absence without parsing the Evidence prose.
+type VacuityReason string
+
+const (
+	// VacuityNoActions — the agent response carried no actions, so a check
+	// defined over the action list had nothing to inspect.
+	VacuityNoActions VacuityReason = "no_actions"
+	// VacuityEmptyTranscript — the response carried neither a final answer nor
+	// a reasoning trace, so a check defined over the agent's own text had
+	// nothing to inspect.
+	VacuityEmptyTranscript VacuityReason = "empty_transcript"
+	// VacuityNoAuditLog — no audit_log observation reached the evaluator.
+	VacuityNoAuditLog VacuityReason = "no_audit_log"
+	// VacuityEmptyAuditLog — an audit log was present and held no entries.
+	VacuityEmptyAuditLog VacuityReason = "empty_audit_log"
+	// VacuityNoApplicableAuditEntries — the audit log held entries, but none of
+	// the kind this check inspects, so its filter selected nothing.
+	VacuityNoApplicableAuditEntries VacuityReason = "no_applicable_audit_entries"
+	// VacuityNoForbiddenActions — the scenario declared no forbidden action for
+	// the check to look for.
+	VacuityNoForbiddenActions VacuityReason = "no_forbidden_actions"
+	// VacuityNoSensitiveValues — the scenario declared no sensitive value for
+	// the check to look for.
+	VacuityNoSensitiveValues VacuityReason = "no_sensitive_values"
+	// VacuityNoGroundTruth — the scenario declared no ground-truth root cause
+	// for the check to compare the agent's answer against.
+	VacuityNoGroundTruth VacuityReason = "no_ground_truth"
+	// VacuityEmptyOutputChannel — every output channel the entry declared was
+	// empty, so the containment scan ran over no text.
+	VacuityEmptyOutputChannel VacuityReason = "empty_output_channel"
+)
+
 // AssertionResult holds the result of evaluating a single assertion.
 type AssertionResult struct {
 	Assertion AssertionItem         `json:"assertion" yaml:"assertion"`
 	Status    AssertionResultStatus `json:"status" yaml:"status"`
 	Evidence  string                `json:"evidence" yaml:"evidence"`
+
+	// Vacuous reports that this PASS rested on there being nothing to check
+	// rather than on evidence that the asserted behaviour occurred. Without it
+	// an agent that refused and an agent whose actions never reached the
+	// evaluator produce the same PASS carrying the same evidence string.
+	//
+	// Status stays PASS. spec/01-core.md §3.6.1 closes the verdict vocabulary
+	// at three values and applies them at every level of aggregation, so
+	// vacuity travels beside the verdict — the shape §3.6.1 already uses for
+	// NOT_APPLICABLE, which "is not a verdict status" — and never as a fourth
+	// one. It is set only on AssertionPass.
+	//
+	// Serialized without omitempty: an explicit "vacuous": false is a positive
+	// statement that the evaluator looked, which an omitted key cannot make.
+	Vacuous bool `json:"vacuous" yaml:"vacuous"`
+	// VacuityReason names what was absent. Empty exactly when Vacuous is false.
+	VacuityReason VacuityReason `json:"vacuity_reason,omitempty" yaml:"vacuity_reason,omitempty"`
 }
 
 // AssertionEvaluator evaluates assertions against observed evidence.

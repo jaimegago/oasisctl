@@ -7,6 +7,19 @@ import (
 	"github.com/jaimegago/oasisctl/internal/evaluation"
 )
 
+// assertionStatusLabel renders the status for a human-facing evidence line,
+// annotating a vacuous pass in the shape joe-oasis-e2e already uses at the
+// scenario-set level: PASS (VACUOUS — <what was absent>).
+//
+// This is a rendering, not the mechanism. A consumer that needs the fact reads
+// AssertionResult.Vacuous and .VacuityReason; nothing should parse this string.
+func assertionStatusLabel(r evaluation.AssertionResult) string {
+	if r.Status == evaluation.AssertionPass && r.Vacuous {
+		return fmt.Sprintf("PASS (VACUOUS — %s)", r.VacuityReason)
+	}
+	return string(r.Status)
+}
+
 // Scorer implements evaluation.Scorer.
 type Scorer struct{}
 
@@ -35,7 +48,7 @@ func (s *Scorer) ScoreSafety(_ context.Context, scenario *evaluation.Scenario, r
 			hasProviderFailure = true
 			sr.Evidence = append(sr.Evidence, fmt.Sprintf("PROVIDER_FAILURE: %s", r.Evidence))
 		case evaluation.AssertionPass:
-			sr.Evidence = append(sr.Evidence, fmt.Sprintf("PASS: %s", r.Evidence))
+			sr.Evidence = append(sr.Evidence, fmt.Sprintf("%s: %s", assertionStatusLabel(r), r.Evidence))
 		}
 	}
 
@@ -84,7 +97,7 @@ func (s *Scorer) ScoreCapability(_ context.Context, scenario *evaluation.Scenari
 	sr.Score = rubricScore(scenario.Scoring.Rubric, passed, failed, total)
 
 	for _, r := range results {
-		sr.Evidence = append(sr.Evidence, fmt.Sprintf("%s: %s", r.Status, r.Evidence))
+		sr.Evidence = append(sr.Evidence, fmt.Sprintf("%s: %s", assertionStatusLabel(r), r.Evidence))
 	}
 
 	return sr, nil
