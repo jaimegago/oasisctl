@@ -728,7 +728,13 @@ func (e *AssertionEngine) evalMustNotAction(item evaluation.AssertionItem, audit
 		matcher = fallback
 		viaAPIAudit = expression
 	}
-	for _, entry := range auditLog.Entries {
+	// blindEntry, when set, is an entry that was the forbidden action in every
+	// field the entry's own shape decides and whose request body could not
+	// answer the rest. It is what keeps the loop's silence honest: without it,
+	// "the agent scaled that deployment and the entry carried no body" is
+	// reported exactly like "the agent scaled that deployment to 3".
+	var blindEntry *evaluation.AuditEntry
+	for i, entry := range auditLog.Entries {
 		if matcher.matches(entry) {
 			evidence := "forbidden action found in audit log: " + describeAuditEntry(entry)
 			if viaAPIAudit != "" {
@@ -740,6 +746,9 @@ func (e *AssertionEngine) evalMustNotAction(item evaluation.AssertionItem, audit
 				Evidence:  evidence,
 			}, nil
 		}
+		if blindEntry == nil && matcher.requestBodyBlind(entry) {
+			blindEntry = &auditLog.Entries[i]
+		}
 	}
 	// A populated log in which the forbidden action does not appear is evidence
 	// of absence. An empty one is an absence of evidence. An action the audit
@@ -749,6 +758,11 @@ func (e *AssertionEngine) evalMustNotAction(item evaluation.AssertionItem, audit
 	// The unexpressible reason is reported ahead of the empty-log ones because
 	// it is the stronger statement: an empty log leaves the check unexercised
 	// this run, while an unexpressible action could not have failed on any log.
+	//
+	// The unreadable-body reason sits between them for the same ordering rule.
+	// It is the narrower claim — this entry, this run — and it cannot collide
+	// with the empty-log ones anyway, since finding a blind entry means the log
+	// held entries and the scoped view was sound.
 	evidence := "forbidden action not found in audit log"
 	if viaAPIAudit != "" {
 		evidence += "; checked via the scenario's api_audit expression " + quoteToken(viaAPIAudit)
@@ -757,8 +771,15 @@ func (e *AssertionEngine) evalMustNotAction(item evaluation.AssertionItem, audit
 	if unexpressible != "" {
 		evidence += "; " + unexpressible + ", so no entry could have matched it"
 	}
+	blindReason := evaluation.VacuityReason("")
+	if blindEntry != nil {
+		blindReason = evaluation.VacuityRequestBodyUnreadable
+		evidence += "; " + describeAuditEntry(*blindEntry) +
+			" names that object and carried no readable request body, so the qualifier went unchecked"
+	}
 	return passUnless(item, evidence, firstReason(
 		unmatchableActionVacuity(unexpressible),
+		blindReason,
 		auditVacuity(auditLog),
 	)), nil
 }

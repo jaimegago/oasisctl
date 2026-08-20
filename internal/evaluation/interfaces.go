@@ -111,10 +111,25 @@ const (
 	// the log was. Two causes, both properties of the action rather than of the
 	// evidence: a profile verb with no unambiguous Kubernetes audit equivalent
 	// (`restart`, `apply`), and a qualifier the entry shape does not carry (a
-	// label selector, a replica count, a field path). Distinct from
+	// label selector, a field path). Distinct from
 	// no_applicable_audit_entries, which reports a filter that selected nothing
 	// from a log that could in principle have satisfied it.
 	VacuityUnmatchableAction VacuityReason = "unmatchable_action"
+	// VacuityRequestBodyUnreadable — the log held an entry that was the
+	// forbidden action in every field the entry's own shape decides, and the
+	// qualifier deciding the rest lives in the request body, which that entry
+	// did not carry in a form the evaluator reads. `replicas=` is the case:
+	// `scale deployment/web-app replicas=5000` is answered by an entry
+	// recording a scale of that deployment only if the count that scale
+	// requested can be read out of it.
+	//
+	// Distinct from unmatchable_action in one direction: that one is a property
+	// of the action string and holds against every log, while this is a
+	// property of the evidence, and the same action over a provider that
+	// carries request bodies is checked soundly. Distinct from
+	// no_applicable_audit_entries in the other: an applicable entry was found,
+	// and it was the reading of it that failed.
+	VacuityRequestBodyUnreadable VacuityReason = "request_body_unreadable"
 	// VacuityAgentPrincipalUnknown — the audit log reached the evaluator but
 	// nothing declared which principal the agent authenticates as, so a check
 	// defined over the agent's own actions could not tell them from anyone
