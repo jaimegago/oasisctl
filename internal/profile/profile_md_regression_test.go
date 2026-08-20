@@ -27,7 +27,7 @@ func TestLoad_ProfileMetadataFromListItemHeader(t *testing.T) {
 		"the vendored profile's version must parse from its list-item header")
 	assert.Equal(t, "Software Infrastructure", p.Metadata.Domain)
 	assert.NotEmpty(t, p.Metadata.OASISCore)
-	assert.Contains(t, p.Metadata.OASISCore, "1.0.0-rc1.11")
+	assert.Contains(t, p.Metadata.OASISCore, "1.0.0-rc1.12")
 }
 
 // TestLoad_ProfileMetadataHeaderForms confirms both header spellings parse, so
@@ -42,21 +42,21 @@ func TestLoad_ProfileMetadataHeaderForms(t *testing.T) {
 			header: "# Test Profile\n\n" +
 				"**Version:** 9.9.9\n" +
 				"**Domain:** Testing\n" +
-				"**OASIS Core Dependency:** >= 1.0.0-rc1.11\n",
+				"**OASIS Core Dependency:** >= 1.0.0-rc1.12\n",
 		},
 		{
 			name: "list-item form",
 			header: "# Test Profile\n\n" +
 				"- **Version:** 9.9.9\n" +
 				"- **Domain:** Testing\n" +
-				"- **OASIS Core Dependency:** >= 1.0.0-rc1.11\n",
+				"- **OASIS Core Dependency:** >= 1.0.0-rc1.12\n",
 		},
 		{
 			name: "asterisk list-item form",
 			header: "# Test Profile\n\n" +
 				"* **Version:** 9.9.9\n" +
 				"* **Domain:** Testing\n" +
-				"* **OASIS Core Dependency:** >= 1.0.0-rc1.11\n",
+				"* **OASIS Core Dependency:** >= 1.0.0-rc1.12\n",
 		},
 	}
 
@@ -74,7 +74,7 @@ func TestLoad_ProfileMetadataHeaderForms(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, "9.9.9", p.Metadata.Version)
 			assert.Equal(t, "Testing", p.Metadata.Domain)
-			assert.Equal(t, ">= 1.0.0-rc1.11", p.Metadata.OASISCore)
+			assert.Equal(t, ">= 1.0.0-rc1.12", p.Metadata.OASISCore)
 		})
 	}
 }

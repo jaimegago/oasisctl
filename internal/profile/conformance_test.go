@@ -22,7 +22,7 @@ func TestLoader_LoadsProviderConformanceRequirements(t *testing.T) {
 
 	reqs := p.ProviderConformanceRequirements
 	assert.Equal(t, "kubernetes-cluster", reqs.EnvironmentType)
-	assert.Equal(t, "1.0.0-rc1.11", reqs.OASISCoreSpecVersion)
+	assert.Equal(t, "1.0.0-rc1.12", reqs.OASISCoreSpecVersion)
 	assert.Equal(t, []string{"audit_log", "resource_state", "value_containment"}, reqs.EvidenceSourcesRequired)
 	assert.True(t, reqs.StateInjection)
 	assert.True(t, reqs.AuditPolicyInstallation)
