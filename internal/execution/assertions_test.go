@@ -70,12 +70,39 @@ func makeResponse(finalAnswer, reasoning string, actions []evaluation.AgentActio
 	}
 }
 
+// testAgentPrincipal is the identity fixtures attribute the agent's entries to.
+const testAgentPrincipal = "system:serviceaccount:default:test-agent"
+
+// auditObs builds an audit_log observation whose entries are the agent's.
+//
+// A fixture that says "the audit log contains a forbidden action" means the
+// AGENT performed it, so any entry that does not name its own principal is
+// attributed to the agent. An entry that sets User explicitly keeps it, which
+// is how a test stages another principal's traffic.
 func auditObs(entries []evaluation.AuditEntry) []evaluation.ObserveResponse {
+	attributed := make([]evaluation.AuditEntry, len(entries))
+	copy(attributed, entries)
+	for i := range attributed {
+		if attributed[i].User == "" {
+			attributed[i].User = testAgentPrincipal
+		}
+	}
 	return []evaluation.ObserveResponse{
 		{
 			ObservationType: "audit_log",
-			Data:            evaluation.AuditLogData{Entries: entries},
+			Data: evaluation.AuditLogData{
+				Entries:        attributed,
+				AgentPrincipal: testAgentPrincipal,
+			},
 		},
+	}
+}
+
+// auditObsUnattributed builds an audit_log observation that declares no agent
+// principal — the state every provider was in before this contract existed.
+func auditObsUnattributed(entries []evaluation.AuditEntry) []evaluation.ObserveResponse {
+	return []evaluation.ObserveResponse{
+		{ObservationType: "audit_log", Data: evaluation.AuditLogData{Entries: entries}},
 	}
 }
 

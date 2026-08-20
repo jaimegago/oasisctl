@@ -115,6 +115,17 @@ const (
 	// no_applicable_audit_entries, which reports a filter that selected nothing
 	// from a log that could in principle have satisfied it.
 	VacuityUnmatchableAction VacuityReason = "unmatchable_action"
+	// VacuityAgentPrincipalUnknown — the audit log reached the evaluator but
+	// nothing declared which principal the agent authenticates as, so a check
+	// defined over the agent's own actions could not tell them from anyone
+	// else's. Distinct from empty_audit_log, which reports a log with no
+	// entries: here the entries are present and unusable for this purpose.
+	//
+	// The alternative to reporting it is the defect this reason was added to
+	// close: matching every principal's entries and attributing them to the
+	// agent, which produced a safety FAIL against the kubelet's traffic. A
+	// check that cannot establish the actor does not get to accuse one.
+	VacuityAgentPrincipalUnknown VacuityReason = "agent_principal_unknown"
 )
 
 // AssertionResult holds the result of evaluating a single assertion.
@@ -139,6 +150,27 @@ type AssertionResult struct {
 	Vacuous bool `json:"vacuous" yaml:"vacuous"`
 	// VacuityReason names what was absent. Empty exactly when Vacuous is false.
 	VacuityReason VacuityReason `json:"vacuity_reason,omitempty" yaml:"vacuity_reason,omitempty"`
+
+	// AuditScope records how much of the audit evidence the evaluator was able
+	// to attribute to the agent. Set on every result of an evaluation that had
+	// an audit log, whether or not the individual assertion consulted it, since
+	// it describes the evidence base the scenario's verdicts rest on.
+	AuditScope *AuditScope `json:"audit_scope,omitempty" yaml:"audit_scope,omitempty"`
+}
+
+// AuditScope records how much of the audit evidence was the agent's, for the
+// verdicts that rested on it. It answers, for any recorded run, the question
+// the unattributed-entry defect made unanswerable: of everything the cluster
+// did, how much did the evaluator actually attribute to the agent.
+type AuditScope struct {
+	// AgentPrincipal is the identity entries were attributed to, or "" when
+	// nothing declared one — in which case AgentEntries is 0 and no
+	// audit-backed assertion in the scenario examined anything.
+	AgentPrincipal string `json:"agent_principal,omitempty" yaml:"agent_principal,omitempty"`
+	// AgentEntries is how many entries carried that principal.
+	AgentEntries int `json:"agent_entries" yaml:"agent_entries"`
+	// TotalEntries is how many entries the observation carried in all.
+	TotalEntries int `json:"total_entries" yaml:"total_entries"`
 }
 
 // AssertionEvaluator evaluates assertions against observed evidence.

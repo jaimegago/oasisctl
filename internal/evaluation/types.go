@@ -450,8 +450,91 @@ type AuditEntry struct {
 }
 
 // AuditLogData is the data returned for observation_type="audit_log".
+//
+// The observation is annotated, never narrowed: Entries carries every entry the
+// provider captured, from every principal on the cluster, and AgentPrincipal
+// declares which of them is the agent. A provider that filtered instead would
+// destroy the difference between "the log was empty" and "the agent did
+// nothing", and no consumer past that boundary could recover it.
 type AuditLogData struct {
 	Entries []AuditEntry `json:"entries"`
+
+	// AgentPrincipal is the identity the agent authenticates to the environment
+	// as — for Kubernetes, the audit event's user.username, e.g.
+	// "system:serviceaccount:default:joe-oasis-e2e". Empty means no party
+	// declared it, which is a vacuity cause and never a licence to match
+	// unattributed entries.
+	//
+	// It is not derived from anything the agent reported about itself: the
+	// principal is declared by the harness that mints the credential, and the
+	// entries are attributed by the API server. Independent verification
+	// (spec/01-core.md §3.4) constrains the provenance of the evidence, not its
+	// scope, so selecting the agent's own entries from an independently
+	// captured log preserves it intact.
+	AgentPrincipal string `json:"agent_principal,omitempty"`
+
+	// scopeReason is set on the narrowed view returned by agentScopedAuditLog
+	// and reports why that view is unusable, or "" when it is sound. It is
+	// unexported and unserialized: it describes a derived value, not anything
+	// the provider sent.
+	scopeReason VacuityReason
+
+	// full points at the unnarrowed log a scoped view was derived from, and is
+	// nil on the unnarrowed log itself. It is what makes "annotate, never
+	// narrow" true in the evaluator and not only at the provider boundary: the
+	// full evidence remains reachable from the scoped value.
+	full *AuditLogData
+}
+
+// AgentScoped returns a view of the log holding only entries attributed to
+// AgentPrincipal, together with the reason that view cannot be trusted when it
+// cannot be built. Callers in the execution package use the wrapper there.
+func (a *AuditLogData) AgentScoped() *AuditLogData {
+	if a == nil {
+		return nil
+	}
+	if a.AgentPrincipal == "" {
+		return &AuditLogData{scopeReason: VacuityAgentPrincipalUnknown, full: a}
+	}
+	scoped := &AuditLogData{AgentPrincipal: a.AgentPrincipal, full: a}
+	for _, e := range a.Entries {
+		if e.User == a.AgentPrincipal {
+			scoped.Entries = append(scoped.Entries, e)
+		}
+	}
+	// Naming the right absence. A captured log that held other principals'
+	// entries and none of the agent's is not an empty log, and reporting it as
+	// one would say the environment was quiet when in fact it was busy and none
+	// of it was the agent's. That distinction is the whole point of annotating
+	// rather than narrowing, so it survives into the vacuity reason.
+	//
+	// An empty capture is left alone: scopeReason stays "" and the ordinary
+	// empty-log reason applies, because there the outer absence IS the truth.
+	if len(scoped.Entries) == 0 && len(a.Entries) > 0 {
+		scoped.scopeReason = VacuityNoApplicableAuditEntries
+	}
+	return scoped
+}
+
+// ScopeReason reports why a scoped view had nothing usable to inspect, or "".
+func (a *AuditLogData) ScopeReason() VacuityReason {
+	if a == nil {
+		return ""
+	}
+	return a.scopeReason
+}
+
+// Full returns the unnarrowed log a scoped view was derived from, or the
+// receiver when it is already unnarrowed. A check that must see principals
+// other than the agent calls this and records why it may.
+func (a *AuditLogData) Full() *AuditLogData {
+	if a == nil {
+		return nil
+	}
+	if a.full != nil {
+		return a.full
+	}
+	return a
 }
 
 // ResourceStateData is the data returned for observation_type="resource_state".
