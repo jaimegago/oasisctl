@@ -128,8 +128,17 @@ func newReportSummaryCommand() *cobra.Command {
 				catParts = append(catParts, fmt.Sprintf("%s:%s", cat, status))
 			}
 
-			fmt.Printf("Safety: %s | Scenarios: %d passed, %d failed | Categories: %s\n",
-				safetyVerdict, passCount, failCount, strings.Join(catParts, ", "))
+			// The category list no longer accounts for every scenario, so say
+			// so when it does not. An uncategorized scenario used to appear in
+			// this line under a category name invented from its id; dropping
+			// it silently would trade a wrong entry for a missing one.
+			uncategorized := ""
+			if n := len(report.SafetySummary.UncategorizedIDs); n > 0 {
+				uncategorized = fmt.Sprintf(" | Uncategorized: %d", n)
+			}
+
+			fmt.Printf("Safety: %s | Scenarios: %d passed, %d failed | Categories: %s%s\n",
+				safetyVerdict, passCount, failCount, strings.Join(catParts, ", "), uncategorized)
 
 			return nil
 		},

@@ -279,15 +279,29 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 			ss.HumanReviewNeeded = true
 		}
 
-		// Use ScenarioResult.Category if populated, fall back to ID heuristic.
-		cat := sr.Category
-		if cat == "" {
-			cat = categoryFromID(sr.ScenarioID)
-		}
-		if existing, ok := categoryPass[cat]; ok {
-			categoryPass[cat] = existing && sr.Passed
+		// A scenario with no category contributes no category result.
+		//
+		// It used to contribute one derived from the scenario id, and that
+		// derivation is where the phantom came from: an SI id is
+		// `infra.safety.be.zone-violation-001`, the heuristic returned its
+		// second dotted segment, and the second segment of an SI id is the
+		// tier. So a result with an empty Category landed in the rollup under
+		// a key named `safety`, beside the seven categories the profile
+		// actually defines and indistinguishable from them — a plain false
+		// under the name of the most important category in the profile.
+		//
+		// There is no key that would be right here. The category is either on
+		// the result or it is unknown, and a name invented from the id is the
+		// second case wearing the first case's clothes. So the key is omitted
+		// and the scenario is named in UncategorizedIDs, which is the
+		// difference between a rollup that is silent about a gap and one that
+		// reports it. See joe-pm queue/errored-scenario-phantom-category.md.
+		if sr.Category == "" {
+			ss.UncategorizedIDs = append(ss.UncategorizedIDs, sr.ScenarioID)
+		} else if existing, ok := categoryPass[sr.Category]; ok {
+			categoryPass[sr.Category] = existing && sr.Passed
 		} else {
-			categoryPass[cat] = sr.Passed
+			categoryPass[sr.Category] = sr.Passed
 		}
 
 		if sr.Passed {
@@ -375,29 +389,4 @@ func joinStrings(ss []string) string {
 		result += s
 	}
 	return result
-}
-
-// categoryFromID derives a rough category key from a scenario ID (e.g. "safety.sec.001" -> "sec").
-func categoryFromID(id string) string {
-	parts := splitDots(id)
-	if len(parts) >= 2 {
-		return parts[1]
-	}
-	if len(parts) == 1 {
-		return parts[0]
-	}
-	return id
-}
-
-func splitDots(s string) []string {
-	var parts []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '.' {
-			parts = append(parts, s[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, s[start:])
-	return parts
 }

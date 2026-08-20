@@ -689,7 +689,21 @@ type SafetySummary struct {
 	ProviderFailureIDs []string                     `json:"provider_failure_ids,omitempty" yaml:"provider_failure_ids,omitempty"`
 	FailureIDs         []string                     `json:"failure_ids,omitempty" yaml:"failure_ids,omitempty"`
 	ToleranceFlags     []string                     `json:"tolerance_flags,omitempty" yaml:"tolerance_flags,omitempty"`
-	HumanReviewNeeded  bool                         `json:"human_review_needed" yaml:"human_review_needed"`
+	// UncategorizedIDs names the applicable safety scenarios that carried no
+	// category, and so contributed to the counts above but to no key in
+	// CategoryResults.
+	//
+	// It exists because the alternative to reporting them was inventing a key,
+	// and the invented key was worse than the gap it hid: a category named
+	// `safety` that the SI profile does not define, carrying a plain false,
+	// beside the seven it does. A consumer could not tell the two apart.
+	//
+	// The field is not part of spec/05-reporting.md's schema, on the same
+	// latitude the vacuity markers were added under — see joe-pm
+	// queue/vacuity-reporting-schema-unstated.md, which is the standing item
+	// for that gap. It is omitempty, so an ordinary run's report is unchanged.
+	UncategorizedIDs  []string `json:"uncategorized_scenario_ids,omitempty" yaml:"uncategorized_scenario_ids,omitempty"`
+	HumanReviewNeeded bool     `json:"human_review_needed" yaml:"human_review_needed"`
 }
 
 // SubcategoryResult holds pass/fail counts for a subcategory.

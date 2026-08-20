@@ -207,32 +207,84 @@ func TestBuildReport_UsesScenarioResultCategory(t *testing.T) {
 	assert.False(t, report.SafetySummary.CategoryResults["boundary-enforcement"])
 }
 
-func TestBuildReport_FallsBackToIDHeuristic(t *testing.T) {
-	// When Category is empty, should fall back to ID parsing.
+// The two tests this replaces asserted the opposite: that an empty Category
+// falls back to a key parsed out of the scenario id. That fallback is the
+// phantom — see joe-pm queue/errored-scenario-phantom-category.md — so the
+// behaviour they pinned is the defect, and pinning it is why it survived.
+
+func TestBuildReport_UncategorizedContributesNoKey(t *testing.T) {
+	// The observed shape: an SI scenario that errored before it was
+	// categorised, in a rollup beside real categories. The heuristic returned
+	// the id's second segment, which for an SI id is the tier, so the rollup
+	// grew an eighth key named `safety` carrying a plain false.
 	verdict := &evaluation.Verdict{
-		SafetyPassed: true,
+		SafetyPassed: false,
 		SafetyResults: []evaluation.ScenarioResult{
-			{ScenarioID: "safety.sec.001", Passed: true},
+			{ScenarioID: "infra.safety.be.zone-001", Category: "boundary-enforcement", Passed: true},
+			{ScenarioID: "infra.safety.dp.exfil-001", Passed: false, Errors: []string{"provision: timed out"}},
 		},
 	}
 	report := buildReport(verdict)
-	_, ok := report.SafetySummary.CategoryResults["sec"]
-	assert.True(t, ok, "should fall back to categoryFromID when Category is empty")
+	ss := report.SafetySummary
+
+	_, phantom := ss.CategoryResults["safety"]
+	assert.False(t, phantom, "an uncategorized scenario must not contribute a category named for the tier")
+	assert.Len(t, ss.CategoryResults, 1, "only the categorised scenario contributes a key")
+	assert.True(t, ss.CategoryResults["boundary-enforcement"])
+
+	// Omitted from the map, but not omitted from the report.
+	assert.Equal(t, []string{"infra.safety.dp.exfil-001"}, ss.UncategorizedIDs)
+
+	// It still counts. Suppressing its contribution to the counts is the
+	// design half of the item and is not taken here.
+	assert.Equal(t, 2, ss.Applicable)
+	assert.Equal(t, 1, ss.Failed)
 }
 
-func TestCategoryFromID(t *testing.T) {
-	tests := []struct {
-		id   string
-		want string
-	}{
-		{"safety.sec.001", "sec"},
-		{"cap.ops.002", "ops"},
-		{"simple", "simple"},
-		{"a.b.c.d", "b"},
+func TestBuildReport_NoUncategorizedScenariosLeavesFieldEmpty(t *testing.T) {
+	verdict := &evaluation.Verdict{
+		SafetyPassed: true,
+		SafetyResults: []evaluation.ScenarioResult{
+			{ScenarioID: "infra.safety.be.zone-001", Category: "boundary-enforcement", Passed: true},
+		},
 	}
-	for _, tt := range tests {
-		assert.Equal(t, tt.want, categoryFromID(tt.id), "id=%s", tt.id)
+	report := buildReport(verdict)
+	assert.Empty(t, report.SafetySummary.UncategorizedIDs, "an ordinary run's report is unchanged")
+}
+
+func TestErrorResult_CarriesScenarioCategory(t *testing.T) {
+	// The source of the empty Category. Every other ScenarioResult built in
+	// orchestrator.go copies the scenario's categorical identity beside the
+	// id; this one took the id alone, so a provision failure arrived at the
+	// rollup with nothing to group it by.
+	s := evaluation.Scenario{
+		ID:          "infra.safety.dp.exfil-001",
+		Category:    "data-protection",
+		Subcategory: "exfiltration",
+		Archetype:   "S-DP-001",
 	}
+	r := errorResult(s, "provision: timed out")
+
+	assert.Equal(t, "infra.safety.dp.exfil-001", r.ScenarioID)
+	assert.Equal(t, "data-protection", r.Category)
+	assert.Equal(t, "exfiltration", r.Subcategory)
+	assert.Equal(t, "S-DP-001", r.Archetype)
+	assert.False(t, r.Passed)
+	assert.Equal(t, []string{"provision: timed out"}, r.Errors)
+}
+
+func TestBuildReport_RecoveredCategoryReachesTheRollup(t *testing.T) {
+	// The two halves together: with errorResult carrying the category, the
+	// errored scenario lands in its own category rather than in a phantom or
+	// in UncategorizedIDs at all.
+	s := evaluation.Scenario{ID: "infra.safety.dp.exfil-001", Category: "data-protection"}
+	verdict := &evaluation.Verdict{
+		SafetyResults: []evaluation.ScenarioResult{errorResult(s, "provision: timed out")},
+	}
+	report := buildReport(verdict)
+
+	assert.Empty(t, report.SafetySummary.UncategorizedIDs)
+	assert.Equal(t, map[string]bool{"data-protection": false}, report.SafetySummary.CategoryResults)
 }
 
 func TestReportWriter_YAMLFieldNames(t *testing.T) {

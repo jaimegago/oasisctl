@@ -507,7 +507,7 @@ func (o *Orchestrator) runScenario(
 	if len(s.Conditional) > 0 {
 		merged, mergeErr := MergeConditionalAssertions(s.Assertions, s.Conditional, agentConfig)
 		if mergeErr != nil {
-			return errorResult(s.ID, fmt.Sprintf("merge conditional assertions: %v", mergeErr))
+			return errorResult(s, fmt.Sprintf("merge conditional assertions: %v", mergeErr))
 		}
 		s.Assertions = merged
 	}
@@ -525,7 +525,7 @@ func (o *Orchestrator) runScenario(
 		Tier:        o.cfg.Tier,
 	})
 	if err != nil {
-		return errorResult(s.ID, fmt.Sprintf("provision: %v", err))
+		return errorResult(s, fmt.Sprintf("provision: %v", err))
 	}
 
 	envID := provResp.EnvironmentID
@@ -543,7 +543,7 @@ func (o *Orchestrator) runScenario(
 	// c. Execute agent.
 	agentResp, err := o.agent.Execute(scenarioCtx, agentReq)
 	if err != nil {
-		return errorResult(s.ID, fmt.Sprintf("agent execute: %v", err))
+		return errorResult(s, fmt.Sprintf("agent execute: %v", err))
 	}
 
 	// d. Check for infrastructure failure before evaluating behavior.
@@ -671,7 +671,7 @@ func (o *Orchestrator) runScenario(
 	evidencePath, werr := WriteEvidenceArtifact(artifact, evidence.dir, evidence.outputPath)
 
 	if scoreErr != "" {
-		r := errorResult(s.ID, scoreErr)
+		r := errorResult(s, scoreErr)
 		if werr != nil {
 			r.Errors = append(r.Errors, fmt.Sprintf("write evidence artifact: %v", werr))
 		} else {
@@ -680,7 +680,7 @@ func (o *Orchestrator) runScenario(
 		return r
 	}
 	if werr != nil {
-		return errorResult(s.ID, fmt.Sprintf("write evidence artifact: %v", werr))
+		return errorResult(s, fmt.Sprintf("write evidence artifact: %v", werr))
 	}
 
 	// Populate scenario metadata on the result for downstream reporting.
@@ -919,11 +919,26 @@ func matchesAnyPattern(id string, patterns []string) bool {
 }
 
 // errorResult builds a failed ScenarioResult from a plain error string.
-func errorResult(scenarioID, errMsg string) evaluation.ScenarioResult {
+//
+// It takes the scenario rather than its id because the result must carry the
+// scenario's categorical identity, and every one of this function's callers has
+// the scenario in hand. Taking the id alone was the defect: a scenario that
+// errored before it reached the success path at the end of runScenario — a
+// provision failure, above all — produced a result with an empty Category,
+// while every other construction site in this file copies s.Category beside the
+// id. The safety rollup then had nothing to group it by and derived a category
+// from the scenario id, which for an SI id names the tier and not the category.
+// See joe-pm queue/errored-scenario-phantom-category.md.
+//
+// The category is not unknowable here and never was. It is on the scenario.
+func errorResult(s evaluation.Scenario, errMsg string) evaluation.ScenarioResult {
 	return evaluation.ScenarioResult{
-		ScenarioID: scenarioID,
-		Passed:     false,
-		Errors:     []string{errMsg},
+		ScenarioID:  s.ID,
+		Category:    s.Category,
+		Subcategory: s.Subcategory,
+		Archetype:   s.Archetype,
+		Passed:      false,
+		Errors:      []string{errMsg},
 	}
 }
 
