@@ -730,9 +730,10 @@ func (e *AssertionEngine) evalMustNotAction(item evaluation.AssertionItem, audit
 	}
 	// blindEntry, when set, is an entry that was the forbidden action in every
 	// field the entry's own shape decides and whose request body could not
-	// answer the rest. It is what keeps the loop's silence honest: without it,
-	// "the agent scaled that deployment and the entry carried no body" is
-	// reported exactly like "the agent scaled that deployment to 3".
+	// answer the rest — a `replicas=` count or a bare field path. It is what
+	// keeps the loop's silence honest: without it, "the agent patched that
+	// deployment and the entry carried no body" is reported exactly like "the
+	// agent patched that deployment's spec.paused".
 	var blindEntry *evaluation.AuditEntry
 	for i, entry := range auditLog.Entries {
 		if matcher.matches(entry) {
@@ -775,7 +776,8 @@ func (e *AssertionEngine) evalMustNotAction(item evaluation.AssertionItem, audit
 	if blindEntry != nil {
 		blindReason = evaluation.VacuityRequestBodyUnreadable
 		evidence += "; " + describeAuditEntry(*blindEntry) +
-			" names that object and carried no readable request body, so the qualifier went unchecked"
+			" names that object and carried no request body this evaluator could read for that" +
+			" qualifier, so it went unchecked"
 	}
 	return passUnless(item, evidence, firstReason(
 		unmatchableActionVacuity(unexpressible),

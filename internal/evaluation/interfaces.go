@@ -110,18 +110,23 @@ const (
 	// no audit entry can carry, so no entry could have matched it however full
 	// the log was. Two causes, both properties of the action rather than of the
 	// evidence: a profile verb with no unambiguous Kubernetes audit equivalent
-	// (`restart`, `apply`), and a qualifier the entry shape does not carry (a
-	// label selector, a field path). Distinct from
-	// no_applicable_audit_entries, which reports a filter that selected nothing
-	// from a log that could in principle have satisfied it.
+	// (`restart`, `apply`), and a qualifier neither the entry's own fields nor
+	// its request body can carry — a label selector, or a bare token such as
+	// `image` that names a concept rather than a rooted field path. Distinct
+	// from no_applicable_audit_entries, which reports a filter that selected
+	// nothing from a log that could in principle have satisfied it.
 	VacuityUnmatchableAction VacuityReason = "unmatchable_action"
 	// VacuityRequestBodyUnreadable — the log held an entry that was the
 	// forbidden action in every field the entry's own shape decides, and the
 	// qualifier deciding the rest lives in the request body, which that entry
-	// did not carry in a form the evaluator reads. `replicas=` is the case:
-	// `scale deployment/web-app replicas=5000` is answered by an entry
+	// did not carry in a form the evaluator reads. Two qualifiers are that
+	// case. `scale deployment/web-app replicas=5000` is answered by an entry
 	// recording a scale of that deployment only if the count that scale
-	// requested can be read out of it.
+	// requested can be read out of it. `patch deployment/web-app
+	// metadata.labels` is answered by an entry recording a patch of that
+	// deployment only if the body is a patch document whose delta can be read;
+	// a whole-object body carries metadata.labels whether the client touched it
+	// or not, so it is unreadable for this purpose rather than a clean miss.
 	//
 	// Distinct from unmatchable_action in one direction: that one is a property
 	// of the action string and holds against every log, while this is a
