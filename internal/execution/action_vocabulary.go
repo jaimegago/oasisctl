@@ -83,6 +83,16 @@ type actionMatcher struct {
 	// carry, and is "" when the whole action can be expressed. A matcher
 	// carrying it matches nothing.
 	unexpressible string
+	// verbOnlyUnexpressible reports that the verb is the whole of what the
+	// audit vocabulary cannot carry: the resource, the object name and every
+	// qualifier parsed. That is the one shape a scenario's own
+	// `verification.api_audit` wildcard-verb expression can answer for, because
+	// substituting it changes nothing but the verb. See
+	// apiAuditForbiddenFallback in assertions.go.
+	verbOnlyUnexpressible bool
+	// otherUnexpressible reports that something the verb is not — a resource
+	// token, a qualifier, a field path — is among what cannot be expressed.
+	otherUnexpressible bool
 }
 
 // newActionMatcher parses an SI action string. It never returns an error: an
@@ -97,32 +107,60 @@ func newActionMatcher(action string) actionMatcher {
 	}
 
 	// Position 1 — the verb.
+	//
+	// An unmapped verb no longer abandons the parse. The object portion is
+	// still read, because whether the rest of the action is expressible is the
+	// question apiAuditForbiddenFallback asks, and a matcher that stopped at
+	// the verb cannot answer it. Leaving m.verbs nil here would read as "any
+	// verb" in verbMatches, and does not: matches reports false on any matcher
+	// carrying an unexpressible reason, before it consults the verb at all.
+	verbUnexpressible := false
 	verb := fields[0]
 	if verb == "*" {
 		m.verbs = nil // any verb
 	} else if specs, ok := actionVerbVocabulary[verb]; ok {
 		m.verbs = specs
 	} else {
-		m.unexpressible = "verb " + quoteToken(verb) + " has no unambiguous Kubernetes audit equivalent"
-		return m
+		verbUnexpressible = true
+		m.noteUnexpressible("verb " + quoteToken(verb) + " has no unambiguous Kubernetes audit equivalent")
 	}
 
 	// Position 2 — the resource, optionally `resource/name`.
 	if len(fields) > 1 {
 		m.parseResourceToken(fields[1])
-		if m.unexpressible != "" {
-			return m
+	}
+
+	// Remaining tokens — qualifiers. Guarded because an action may be a bare
+	// verb: parsing no longer returns early on an unmapped one, so a
+	// single-field action now reaches here.
+	if len(fields) > 2 {
+		for _, token := range fields[2:] {
+			m.parseQualifier(token)
 		}
 	}
 
-	// Remaining tokens — qualifiers.
-	for _, token := range fields[2:] {
-		m.parseQualifier(token)
-		if m.unexpressible != "" {
-			return m
-		}
-	}
+	m.verbOnlyUnexpressible = verbUnexpressible && !m.otherUnexpressible
 	return m
+}
+
+// noteUnexpressible records why the action cannot be expressed. The first
+// reason wins: parsing now continues past the first problem, and the reason a
+// reader is shown should stay the leftmost part of the action that failed
+// rather than whichever one happened to be parsed last.
+func (m *actionMatcher) noteUnexpressible(reason string) {
+	if m.unexpressible == "" {
+		m.unexpressible = reason
+	}
+}
+
+// noteObjectUnexpressible records a reason that is not the verb's. It is kept
+// separate because a wildcard-verb substitution can answer for a verb and can
+// answer for nothing else: an action whose qualifier is what went unexpressed
+// would be checked more broadly than it was written, which is how a FAIL
+// arrives for an action the scenario did not forbid.
+func (m *actionMatcher) noteObjectUnexpressible(reason string) {
+	m.otherUnexpressible = true
+	m.noteUnexpressible(reason)
 }
 
 // parseResourceToken reads the `resource`, `resource/name` and `resource/*`
@@ -167,13 +205,26 @@ func (m *actionMatcher) parseQualifier(token string) {
 		return
 	}
 	if isPair {
-		m.unexpressible = "qualifier " + quoteToken(token) + " names something the audit entry shape does not carry"
+		m.noteObjectUnexpressible("qualifier " + quoteToken(token) + " names something the audit entry shape does not carry")
 		return
 	}
 	if token == "*" {
 		return
 	}
-	m.unexpressible = "field path " + quoteToken(token) + " names something the audit entry shape does not carry"
+	m.noteObjectUnexpressible("field path " + quoteToken(token) + " names something the audit entry shape does not carry")
+}
+
+// namesSameObjectAs reports whether two matchers constrain the same object:
+// the same resource, the same object name or glob, and the same namespace.
+// It says nothing about their verbs, which is the whole of its purpose — it is
+// what lets apiAuditForbiddenFallback establish that two action strings differ
+// by verb alone.
+func (m actionMatcher) namesSameObjectAs(other actionMatcher) bool {
+	return m.resource == other.resource &&
+		m.name == other.name &&
+		m.nameGlob == other.nameGlob &&
+		m.namePrefix == other.namePrefix &&
+		m.namespace == other.namespace
 }
 
 // matches reports whether the entry is the action the matcher describes.
