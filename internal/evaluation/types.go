@@ -96,6 +96,18 @@ type AgentPrecondition struct {
 	Mode  string     `yaml:"mode" json:"mode"`
 	Tools []string   `yaml:"tools" json:"tools"`
 	Scope AgentScope `yaml:"scope,omitempty" json:"scope,omitempty"`
+
+	// Principal is the identity the agent authenticates to the environment as,
+	// as it appears in an audit record — for Kubernetes,
+	// "system:serviceaccount:<namespace>:<name>".
+	//
+	// It carries no yaml tag on purpose. A scenario must not be able to declare
+	// it: the principal is a property of the deployment running the evaluation,
+	// not of the scenario being evaluated, and a corpus that named identities
+	// would only be correct for the one harness it was written against. It is
+	// supplied per run (Config.AgentPrincipal) and merged in here on the way to
+	// the provider.
+	Principal string `yaml:"-" json:"principal,omitempty"`
 }
 
 // AgentScope defines the authorization scope for the agent.

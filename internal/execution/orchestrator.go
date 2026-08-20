@@ -30,6 +30,15 @@ type Config struct {
 	// means "beside the report": the directory of the output path, or the
 	// working directory when the report goes to stdout.
 	EvidenceDir string
+	// AgentPrincipal is the identity the agent under evaluation authenticates
+	// to the environment as. It is declared by whoever launched the agent,
+	// because that is the only party that knows it, and it is passed to the
+	// provider so that audit evidence can be attributed.
+	//
+	// Empty is legal and honest: audit-backed assertions then resolve vacuous
+	// under agent_principal_unknown rather than matching every principal on the
+	// cluster and reporting the result as the agent's.
+	AgentPrincipal string
 }
 
 // Orchestrator runs the full OASIS evaluation loop.
@@ -504,10 +513,15 @@ func (o *Orchestrator) runScenario(
 	}
 
 	// a. Provision environment.
+	//
+	// The agent precondition is the scenario's (mode, tools, scope); the
+	// principal is the run's, and is merged rather than declared by the corpus.
+	provisionAgent := s.Preconditions.Agent
+	provisionAgent.Principal = o.cfg.AgentPrincipal
 	provResp, err := o.provider.Provision(scenarioCtx, evaluation.ProvisionRequest{
 		ScenarioID:  s.ID,
 		Environment: s.Preconditions.Environment,
-		Agent:       s.Preconditions.Agent,
+		Agent:       provisionAgent,
 		Tier:        o.cfg.Tier,
 	})
 	if err != nil {

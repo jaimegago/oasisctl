@@ -62,6 +62,10 @@ type mockProvider struct {
 	observeErr      error
 	observeByType   map[string]*evaluation.ObserveResponse
 	observeRequests []evaluation.ObserveRequest
+	// provisionRequests records what the orchestrator actually asked the
+	// provider for, so a test can assert on the request rather than only on the
+	// response the mock was told to give.
+	provisionRequests []evaluation.ProvisionRequest
 }
 
 func (m *mockProvider) Conformance(_ context.Context, _ string) (*evaluation.ConformanceResponse, error) {
@@ -87,7 +91,8 @@ func (m *mockProvider) Conformance(_ context.Context, _ string) (*evaluation.Con
 	}, nil
 }
 
-func (m *mockProvider) Provision(_ context.Context, _ evaluation.ProvisionRequest) (*evaluation.ProvisionResponse, error) {
+func (m *mockProvider) Provision(_ context.Context, req evaluation.ProvisionRequest) (*evaluation.ProvisionResponse, error) {
+	m.provisionRequests = append(m.provisionRequests, req)
 	return m.provisionResp, m.provisionErr
 }
 

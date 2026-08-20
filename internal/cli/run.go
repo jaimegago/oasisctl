@@ -22,27 +22,28 @@ import (
 
 func newRunCommand() *cobra.Command {
 	var (
-		configPath    string
-		profilePath   string
-		suitePath     string
-		agentURL      string
-		agentToken    string
-		agentAdapter  string
-		agentCommand  string
-		providerURL   string
-		tier          int
-		outputPath    string
-		evidenceDir   string
-		format        string
-		parallel      int
-		timeout       string
-		dryRun        bool
-		verbose       bool
-		safetyOnly    bool
-		categories    []string
-		subcategories []string
-		scenarioIDs   []string
-		openBrowser   bool
+		configPath     string
+		profilePath    string
+		suitePath      string
+		agentURL       string
+		agentToken     string
+		agentAdapter   string
+		agentCommand   string
+		providerURL    string
+		tier           int
+		outputPath     string
+		evidenceDir    string
+		agentPrincipal string
+		format         string
+		parallel       int
+		timeout        string
+		dryRun         bool
+		verbose        bool
+		safetyOnly     bool
+		categories     []string
+		subcategories  []string
+		scenarioIDs    []string
+		openBrowser    bool
 	)
 
 	cmd := &cobra.Command{
@@ -168,16 +169,17 @@ func newRunCommand() *cobra.Command {
 			// 5. Create orchestrator.
 			logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 			cfg := execution.Config{
-				Tier:          tier,
-				Parallel:      parallel,
-				Timeout:       timeoutDur,
-				DryRun:        dryRun,
-				Verbose:       verbose,
-				SafetyOnly:    safetyOnly,
-				Categories:    categories,
-				Subcategories: subcategories,
-				ScenarioIDs:   scenarioIDs,
-				EvidenceDir:   evidenceDir,
+				Tier:           tier,
+				Parallel:       parallel,
+				Timeout:        timeoutDur,
+				DryRun:         dryRun,
+				Verbose:        verbose,
+				SafetyOnly:     safetyOnly,
+				Categories:     categories,
+				Subcategories:  subcategories,
+				ScenarioIDs:    scenarioIDs,
+				EvidenceDir:    evidenceDir,
+				AgentPrincipal: agentPrincipal,
 			}
 			orch := execution.NewOrchestrator(loader, agentClient, providerClient, asserter, scorer, reporter, logger, cfg)
 
@@ -214,6 +216,7 @@ func newRunCommand() *cobra.Command {
 	cmd.Flags().IntVar(&tier, "tier", 0, "Claimed complexity tier (1, 2, or 3)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "Report output file path (default: stdout)")
 	cmd.Flags().StringVar(&evidenceDir, "evidence-dir", "", "Directory for per-scenario evidence artifacts (default: alongside --output, or the working directory)")
+	cmd.Flags().StringVar(&agentPrincipal, "agent-principal", "", "Identity the agent authenticates to the environment as, e.g. system:serviceaccount:default:my-agent. Declared by whoever launched the agent; without it, audit-backed assertions resolve vacuous rather than attributing the environment's own traffic to the agent")
 	cmd.Flags().StringVar(&format, "format", "yaml", "Report format: yaml, json, or html")
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "Max concurrent scenarios")
 	cmd.Flags().StringVar(&timeout, "timeout", "5m", "Per-scenario timeout")
