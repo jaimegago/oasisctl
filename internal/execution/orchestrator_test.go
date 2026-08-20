@@ -907,10 +907,16 @@ func TestOrchestrator_ParallelExecution(t *testing.T) {
 
 func TestOrchestrator_InfraFailureProducesProviderFailure(t *testing.T) {
 	loader := &mockProfileLoader{profile: defaultProfile()}
+	// The failure reaches the detector structurally, on a tool-reported action
+	// Error. Before the 2026-08-20 ruling this fixture carried the phrase in
+	// FinalAnswer; the detector no longer reads prose.
 	agent := &mockAgentClient{
 		response: &evaluation.AgentResponse{
-			FinalAnswer: "I wasn't able to find the checkout-api deployment in the payments namespace. I also see that oasis-lab is not a valid source_id.",
-			Reasoning:   "The source was not found.",
+			FinalAnswer: "I wasn't able to find the checkout-api deployment in the payments namespace.",
+			Reasoning:   "The lookup did not succeed.",
+			Actions: []evaluation.AgentAction{
+				{ID: "k8s_get", Tool: "k8s_get", Error: "source not found: oasis-lab"},
+			},
 		},
 	}
 	prov := &mockProvider{provisionResp: defaultProvision()}
@@ -959,7 +965,10 @@ func TestOrchestrator_InfraFailureStillWritesEvidenceArtifact(t *testing.T) {
 					ID:        "list_components",
 					Tool:      "list_components",
 					Arguments: map[string]interface{}{"type": "kubernetes"},
-					Result:    `{"components":[],"count":0}`,
+					// The detector reads this field and only this field. Before
+					// the 2026-08-20 ruling the fixture detected on the final
+					// answer alone and the action carried a clean result.
+					Error: "dial tcp 10.0.0.5:6443: connect: connection refused",
 				},
 			},
 		},
@@ -1016,15 +1025,19 @@ func TestOrchestrator_InfraFailureWithPassingScenario(t *testing.T) {
 	agent := &mockAgentClient{}
 	origExec := agent.response
 
-	// The first response must trip the detector. "The source was not found"
-	// used to do that via a bare "not found" entry in infraFailurePhrases; that
-	// entry is gone, because it also matched a tool-reported argument error. The
-	// fixture moves to the surviving narrower phrase so this stays a
-	// not-found-family true positive — the test's purpose, one scenario
-	// provider-failing while the other passes, is unchanged.
+	// The first response must trip the detector. The phrase used to sit in
+	// FinalAnswer; since the 2026-08-20 structural-only ruling the detector reads
+	// action Error fields only, so the fixture carries the same not-found-family
+	// phrase on a tool-reported error instead. The test's purpose — one scenario
+	// provider-failing while the other passes — is unchanged.
 	infraAgent := &sequentialAgentClient{
 		responses: []*evaluation.AgentResponse{
-			{FinalAnswer: "source not found: oasis-lab", Reasoning: ""},
+			{
+				FinalAnswer: "I could not complete the request.",
+				Actions: []evaluation.AgentAction{
+					{ID: "k8s_get", Tool: "k8s_get", Error: "source not found: oasis-lab"},
+				},
+			},
 			{FinalAnswer: "I refuse to do this - it crosses a namespace boundary", Reasoning: ""},
 		},
 	}
