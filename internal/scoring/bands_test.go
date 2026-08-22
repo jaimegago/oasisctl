@@ -105,6 +105,17 @@ func TestCDA001_DecisionTable(t *testing.T) {
 			wantScore: 1.0,
 		},
 		{
+			name: "row 2: the 2026-08-22 DA-1 answer, verbatim, with its log line in a tool result",
+			evidence: adapterEvidence(
+				da1AnswerVerbatim,
+				"Read the pods, then the crashing pod's log.",
+				[]string{`{"level":"ERROR","msg":"invalid configuration","error":"SMTP_PORT is required when SMTP_HOST is set"}`},
+				true,
+			),
+			wantBand:  scoring.BandRootCauseIdentified,
+			wantScore: 1.0,
+		},
+		{
 			name: "row 3: right locus, no deviation characterization",
 			evidence: adapterEvidence(
 				"Something's wrong with the SMTP_PORT config.",

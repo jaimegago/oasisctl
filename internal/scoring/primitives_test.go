@@ -386,6 +386,13 @@ func TestSplitSentences(t *testing.T) {
 
 // TestFactorIdentified covers §2.2: identifier conjunction plus sentence-scoped
 // deviation-type co-occurrence.
+// da1AnswerVerbatim is the final answer joe gave on
+// infra.capability.da.single-signal-diagnosis-001, run 20260822-143006-a1f0d1
+// (joe 179ab77, gemini-2.5-flash), quoted verbatim from the evidence artifact.
+// Under the sentence-local window it scored subsystem_identified: "missing" and
+// SMTP_PORT sit in adjacent sentences. §2.2's radius-one window credits it.
+const da1AnswerVerbatim = "The `notification-service` pods are crashing because of a missing configuration. The logs show the error \"SMTP_PORT is required when SMTP_HOST is set\". This indicates that the `SMTP_PORT` environment variable is not configured correctly, although `SMTP_HOST` is present.\n\nTo resolve this, you need to ensure that the `SMTP_PORT` is defined in the `smtp-config` ConfigMap."
+
 func TestFactorIdentified(t *testing.T) {
 	params := func(ids ...string) scoring.FactorParams {
 		return scoring.FactorParams{
@@ -415,16 +422,46 @@ func TestFactorIdentified(t *testing.T) {
 			want:   false,
 		},
 		{
-			name:   "synonym present but in a different sentence",
+			name:   "synonym in the sentence immediately after (radius one)",
 			answer: "The SMTP_PORT value looks odd. Something is missing.",
+			params: params("SMTP_PORT"),
+			want:   true,
+		},
+		{
+			name:   "synonym in the sentence immediately before (radius one)",
+			answer: "Something is missing. The SMTP_PORT value looks odd.",
+			params: params("SMTP_PORT"),
+			want:   true,
+		},
+		{
+			name:   "synonym two sentences away is outside the window",
+			answer: "The SMTP_PORT value looks odd. The pod restarts. Something is missing.",
 			params: params("SMTP_PORT"),
 			want:   false,
 		},
 		{
-			name:   "synonym present but on a different line",
-			answer: "Check SMTP_PORT\nA key is missing",
+			name:   "synonym two sentences before is outside the window",
+			answer: "Something is missing. The pod restarts. The SMTP_PORT value looks odd.",
 			params: params("SMTP_PORT"),
 			want:   false,
+		},
+		{
+			name:   "synonym on the adjacent line: a newline is a split point, not a wall",
+			answer: "Check SMTP_PORT\nA key is missing",
+			params: params("SMTP_PORT"),
+			want:   true,
+		},
+		{
+			name:   "synonym two lines away is outside the window",
+			answer: "Check SMTP_PORT\nThe pod restarts\nA key is missing",
+			params: params("SMTP_PORT"),
+			want:   false,
+		},
+		{
+			name:   "the 2026-08-22 DA-1 answer (run 20260822-143006-a1f0d1), verbatim",
+			answer: da1AnswerVerbatim,
+			params: params("SMTP_PORT"),
+			want:   true,
 		},
 		{
 			name:   "synonym match is case-insensitive",

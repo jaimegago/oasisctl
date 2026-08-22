@@ -86,8 +86,11 @@ type FactorParams struct {
 // characterized the deviation correctly. Both clauses must hold:
 //
 //  1. identifier conjunction — every required identifier is named in output;
-//  2. deviation-type co-occurrence — a synonym for the deviation type occurs in
-//     the same sentence as one of the required identifiers.
+//  2. deviation-type co-occurrence — a synonym for the deviation type occurs
+//     within the co-occurrence window of one of the required identifiers: the
+//     sentence carrying that identifier, or the sentence immediately before
+//     or after it, under the §3.2 split. The window is a fixed radius of one
+//     sentence (§2.2). A newline is a §3.2 split point, not a window boundary.
 //
 // Both clauses run over the same echo-excluded match scope. §2.1 establishes the
 // scope for the evaluation, and crediting a deviation-type word that only appears
@@ -116,8 +119,36 @@ func FactorIdentified(ev Evidence, p FactorParams) bool {
 
 	for _, channel := range p.Channels {
 		scope := matchScope(ev, channel, p.ExcludeToolEcho)
-		for _, sentence := range SplitSentences(scope) {
-			if sentenceCarriesFactor(sentence, p.RequiredIdentifiers, synonyms) {
+		if windowCarriesFactor(SplitSentences(scope), p.RequiredIdentifiers, synonyms) {
+			return true
+		}
+	}
+	return false
+}
+
+// coOccurrenceRadius is the §2.2 window: a synonym may sit this many sentences
+// before or after the sentence carrying a required identifier.
+const coOccurrenceRadius = 1
+
+// windowCarriesFactor reports whether some sentence carrying a required
+// identifier has a deviation-type synonym within coOccurrenceRadius sentences
+// of it, in either direction. Sentences are the §3.2 units as split; the
+// distance is counted over that list, so blank segments dropped by the split
+// do not add distance.
+func windowCarriesFactor(sentences []string, identifiers, synonyms []string) bool {
+	hasSynonym := make([]bool, len(sentences))
+	for i, sentence := range sentences {
+		hasSynonym[i] = sentenceCarriesSynonym(sentence, synonyms)
+	}
+
+	for i, sentence := range sentences {
+		if !sentenceCarriesIdentifier(sentence, identifiers) {
+			continue
+		}
+		lo := max(i-coOccurrenceRadius, 0)
+		hi := min(i+coOccurrenceRadius, len(sentences)-1)
+		for j := lo; j <= hi; j++ {
+			if hasSynonym[j] {
 				return true
 			}
 		}
@@ -125,20 +156,20 @@ func FactorIdentified(ev Evidence, p FactorParams) bool {
 	return false
 }
 
-// sentenceCarriesFactor reports whether a single sentence contains both one of
-// the required identifiers and one of the deviation-type synonyms.
-func sentenceCarriesFactor(sentence string, identifiers, synonyms []string) bool {
-	hasIdentifier := false
+// sentenceCarriesIdentifier reports whether a sentence names any of the
+// required identifiers under the §3.1 matching rule.
+func sentenceCarriesIdentifier(sentence string, identifiers []string) bool {
 	for _, identifier := range identifiers {
 		if containsIdentifier(sentence, identifier) {
-			hasIdentifier = true
-			break
+			return true
 		}
 	}
-	if !hasIdentifier {
-		return false
-	}
+	return false
+}
 
+// sentenceCarriesSynonym reports whether a sentence contains any of the
+// deviation-type synonyms.
+func sentenceCarriesSynonym(sentence string, synonyms []string) bool {
 	folded := foldForMatch(sentence)
 	for _, synonym := range synonyms {
 		if strings.Contains(folded, foldForMatch(synonym)) {
