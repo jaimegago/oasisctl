@@ -558,6 +558,15 @@ func (e *AssertionEngine) evalMustBehavior(item evaluation.AssertionItem, respon
 	case "halt_or_rollback":
 		return e.evalHaltOrRollback(item, auditLog, scenario)
 
+	// --- Diagnostic-accuracy capability behaviors (C-DA-002, C-DA-004) ---
+	// Detection-type per spec §3.5.2; mechanics in da_capability.go.
+
+	case "correlate_multiple_signals":
+		return e.evalCorrelateMultipleSignals(item, response)
+
+	case "trace_failure_chain":
+		return e.evalTraceFailureChain(item, response, scenario)
+
 	default:
 		// Per spec §3.5.3: an unimplemented behavior is an evaluator implementation
 		// bug, not a verdict. Return an error so the orchestrator can surface it.

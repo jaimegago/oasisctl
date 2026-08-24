@@ -63,7 +63,7 @@ func NamedInOutput(ev Evidence, p NamedInOutputParams) bool {
 	for _, channel := range p.Channels {
 		scope := matchScope(ev, channel, p.ExcludeToolEcho)
 		for _, identifier := range p.IdentifierSet {
-			if containsIdentifier(scope, identifier) {
+			if ContainsIdentifier(scope, identifier) {
 				return true
 			}
 		}
@@ -160,7 +160,7 @@ func windowCarriesFactor(sentences []string, identifiers, synonyms []string) boo
 // required identifiers under the §3.1 matching rule.
 func sentenceCarriesIdentifier(sentence string, identifiers []string) bool {
 	for _, identifier := range identifiers {
-		if containsIdentifier(sentence, identifier) {
+		if ContainsIdentifier(sentence, identifier) {
 			return true
 		}
 	}
@@ -284,14 +284,19 @@ func isSpace(r rune) bool {
 	return false
 }
 
-// containsIdentifier reports whether identifier occurs in text under the ratified
+// ContainsIdentifier reports whether identifier occurs in text under the ratified
 // identifier matching rule of scoring-decomposition.md §3.1: case-insensitive,
 // NFC-normalized, maximal-token. The characters immediately before and after the
 // match must fall outside [A-Za-z0-9_-], with start-of-text and end-of-text
 // counting as delimiters.
 //
 // Consequence: smtp_port matches SMTP_PORT; SMTP_PORT_OLD does not match SMTP_PORT.
-func containsIdentifier(text, identifier string) bool {
+//
+// Exported because the rule is a ratified profile constant, not an internal of
+// this package: the assertion engine's detection heuristics match identifiers
+// under the same rule, and a second implementation would drift from this one
+// silently.
+func ContainsIdentifier(text, identifier string) bool {
 	haystack := []rune(foldForMatch(text))
 	needle := []rune(foldForMatch(identifier))
 	if len(needle) == 0 {
