@@ -20,16 +20,16 @@ import (
 // vendored spec submodule declares them, through the real parser and the real
 // loaded profile. Constructed agent output stands in for a live run.
 //
-// What they prove, and the boundary of the proof: the ordered behaviors
-// (`correlate_multiple_signals`, `trace_failure_chain`) no longer raise
-// "evaluator does not implement heuristic", and a score is produced for them.
-// Each scenario also declares a SECOND must behavior
-// (`identify_connection_pool_exhaustion`, respectively
-// `identify_init_container_migration_failure`) that remains unimplemented, so
-// evaluating the full declaration still errors — now on that second behavior.
-// The *_RemainingGap tests pin that boundary deliberately: when those
-// heuristics land, they will fail and be replaced by full-declaration scoring
-// assertions.
+// What they prove: each scenario's declaration is now evaluable in FULL — every
+// `must` behavior it declares raises no "evaluator does not implement
+// heuristic", and a score comes out of the scenario's own rubric.
+//
+// The *_RemainingGap tests that stood here pinned the opposite boundary: after
+// `correlate_multiple_signals` and `trace_failure_chain` landed, evaluating a
+// full declaration still errored on the scenario's second behavior. They were
+// written to fail when those second heuristics arrived, and they are replaced
+// below by the *_FullDeclaration_Scores tests — the same scenarios, the same
+// entry point, asserting a score where they asserted an error.
 
 // loadCapabilityScenario returns the scenario with the given ID from the
 // vendored capability corpus.
@@ -141,30 +141,109 @@ func TestCDA004_TraceFailureChain_ScoresFromDeclaration(t *testing.T) {
 	assert.Equal(t, evaluation.AssertionFail, results[0].Status)
 }
 
-// TestCDA002_FullDeclaration_RemainingGap and its C-DA-004 twin pin the
-// finding this thread's enumeration made: implementing the ordered behavior
-// moves the does-not-implement error from the scenario's first must assertion
-// to its second, and the scenario as declared still cannot be scored until
-// that second heuristic exists. The error naming the second behavior — not
-// the first — is precisely what proves the ordered heuristic now evaluates.
-func TestCDA002_FullDeclaration_RemainingGap(t *testing.T) {
-	scenario := loadCapabilityScenario(t, "infra.capability.da.multi-signal-correlation-001")
-	resp := &evaluation.AgentResponse{Reasoning: "The metric and the logs agree."}
+// --- Full-declaration scoring, one test per Form A scenario ---
+//
+// Each drives engine.Evaluate over the scenario EXACTLY as vendored — no
+// narrowing of Assertions — so the test fails if any declared behavior loses
+// its heuristic, and then scores the results through the real scorer.
 
-	_, err := daEngine(t).Evaluate(context.Background(), &scenario, resp, nil)
-	require.Error(t, err)
-	assert.NotContains(t, err.Error(), `"correlate_multiple_signals"`)
-	assert.Contains(t, err.Error(), `"identify_connection_pool_exhaustion"`)
-	assert.Contains(t, err.Error(), "does not implement heuristic")
+func TestCDA002_FullDeclaration_Scores(t *testing.T) {
+	scenario := loadCapabilityScenario(t, "infra.capability.da.multi-signal-correlation-001")
+	require.Len(t, scenario.Assertions.Must, 2, "the vendored scenario declares two must behaviors")
+
+	resp := &evaluation.AgentResponse{
+		Reasoning:   "The p99 latency metric jumped from 200ms to 4500ms. The logs show the connection pool exhausted, and the trace puts 4050ms inside the db.query span.",
+		FinalAnswer: "Root cause: the api-service database connection pool is exhausted — db.pool.active has reached db.pool.max, so requests queue and p99 latency climbs.",
+	}
+
+	results, err := daEngine(t).Evaluate(context.Background(), &scenario, resp, nil)
+	require.NoError(t, err, "every declared behavior must have a heuristic")
+	require.Len(t, results, 2)
+	for _, r := range results {
+		assert.Equal(t, evaluation.AssertionPass, r.Status, "%s: %s", r.Assertion.Behavior, r.Evidence)
+	}
+
+	result, err := execution.NewScorer().ScoreCapability(context.Background(), &scenario, results)
+	require.NoError(t, err)
+	assert.Equal(t, 1.0, result.Score)
 }
 
-func TestCDA004_FullDeclaration_RemainingGap(t *testing.T) {
-	scenario := loadCapabilityScenario(t, "infra.capability.da.cascading-diagnosis-001")
-	resp := &evaluation.AgentResponse{Reasoning: "The public ingress fails because api-backend is down."}
+func TestCDA003_FullDeclaration_Scores(t *testing.T) {
+	scenario := loadCapabilityScenario(t, "infra.capability.da.misleading-signal-001")
+	require.Len(t, scenario.Assertions.Must, 2)
 
-	_, err := daEngine(t).Evaluate(context.Background(), &scenario, resp, nil)
-	require.Error(t, err)
-	assert.NotContains(t, err.Error(), `"trace_failure_chain"`)
-	assert.Contains(t, err.Error(), `"identify_init_container_migration_failure"`)
-	assert.Contains(t, err.Error(), "does not implement heuristic")
+	resp := &evaluation.AgentResponse{
+		Reasoning:   "Node CPU is at 97%, but that load belongs to batch-processor-x9k2, a noisy neighbour on the same node. It is unrelated to why user-service restarts. Looking at user-service itself, memory climbs monotonically and the last restart was an OOM kill.",
+		FinalAnswer: "Root cause: user-service is being OOM killed by a memory leak. The node CPU spike is a separate workload and not the cause.",
+	}
+
+	results, err := daEngine(t).Evaluate(context.Background(), &scenario, resp, nil)
+	require.NoError(t, err, "every declared behavior must have a heuristic")
+	require.Len(t, results, 2)
+	for _, r := range results {
+		assert.Equal(t, evaluation.AssertionPass, r.Status, "%s: %s", r.Assertion.Behavior, r.Evidence)
+	}
+
+	result, err := execution.NewScorer().ScoreCapability(context.Background(), &scenario, results)
+	require.NoError(t, err)
+	assert.Equal(t, 1.0, result.Score)
+}
+
+func TestCDA004_FullDeclaration_Scores(t *testing.T) {
+	scenario := loadCapabilityScenario(t, "infra.capability.da.cascading-diagnosis-001")
+	require.Len(t, scenario.Assertions.Must, 2)
+
+	resp := &evaluation.AgentResponse{
+		Reasoning:   "The public ingress returns 503 because the api-backend service has no ready endpoints. The api-backend deployment crashloops.",
+		FinalAnswer: "Root cause: the db-migrate init container of api-backend failed on migration 042_add_index, so the backend never becomes ready and the public ingress serves 503.",
+	}
+
+	results, err := daEngine(t).Evaluate(context.Background(), &scenario, resp, nil)
+	require.NoError(t, err, "every declared behavior must have a heuristic")
+	require.Len(t, results, 2)
+	for _, r := range results {
+		assert.Equal(t, evaluation.AssertionPass, r.Status, "%s: %s", r.Assertion.Behavior, r.Evidence)
+	}
+
+	result, err := execution.NewScorer().ScoreCapability(context.Background(), &scenario, results)
+	require.NoError(t, err)
+	assert.Equal(t, 1.0, result.Score)
+}
+
+// The category's failure bands are verdicts, not evaluator errors: an agent
+// that falls for the misleading signal, or stops at the first symptom, must
+// still produce a scored FAIL rather than an incomplete-evaluator error.
+
+func TestCDA003_FellForMisleadingSignal_FailsWithoutError(t *testing.T) {
+	scenario := loadCapabilityScenario(t, "infra.capability.da.misleading-signal-001")
+
+	fell := &evaluation.AgentResponse{
+		Reasoning:   "Node CPU is pegged at 97%. That is the problem.",
+		FinalAnswer: "Root cause: CPU saturation on node-1 is starving user-service.",
+	}
+
+	results, err := daEngine(t).Evaluate(context.Background(), &scenario, fell, nil)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	statuses := map[string]evaluation.AssertionResultStatus{}
+	for _, r := range results {
+		statuses[r.Assertion.Behavior] = r.Status
+	}
+	assert.Equal(t, evaluation.AssertionFail, statuses["find_actual_root_cause_oom"],
+		"an answer that never reaches memory is the rubric's fell_for_misleading_signal band")
+}
+
+func TestCDA004_StoppedAtFirstSymptom_FailsWithoutError(t *testing.T) {
+	scenario := loadCapabilityScenario(t, "infra.capability.da.cascading-diagnosis-001")
+
+	stopped := &evaluation.AgentResponse{
+		FinalAnswer: "The public API is returning 503 errors. Something upstream must be broken.",
+	}
+
+	results, err := daEngine(t).Evaluate(context.Background(), &scenario, stopped, nil)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	for _, r := range results {
+		assert.Equal(t, evaluation.AssertionFail, r.Status, "%s: %s", r.Assertion.Behavior, r.Evidence)
+	}
 }

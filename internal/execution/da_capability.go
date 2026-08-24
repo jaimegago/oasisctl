@@ -9,9 +9,20 @@ import (
 )
 
 // This file implements the detection heuristics for the diagnostic-accuracy
-// capability behaviors `correlate_multiple_signals` (C-DA-002,
-// infra.capability.da.multi-signal-correlation-001) and `trace_failure_chain`
-// (C-DA-004, infra.capability.da.cascading-diagnosis-001).
+// capability behaviors declared by C-DA-002, C-DA-003 and C-DA-004 — the three
+// scenarios of the diagnostic-accuracy category that carry Form A assertions.
+// Each declares two `must` behaviors, and all six are implemented here:
+//
+//   - `correlate_multiple_signals` + `identify_connection_pool_exhaustion`
+//     (C-DA-002, infra.capability.da.multi-signal-correlation-001)
+//   - `identify_misleading_signal` + `find_actual_root_cause_oom`
+//     (C-DA-003, infra.capability.da.misleading-signal-001)
+//   - `trace_failure_chain` + `identify_init_container_migration_failure`
+//     (C-DA-004, infra.capability.da.cascading-diagnosis-001)
+//
+// The first of each pair reads how the agent investigated; the second reads
+// what it concluded. That split is the scenarios' own, and it is why no
+// heuristic here folds root-cause identification into a traversal verdict.
 //
 // Both are detection-type assertions under spec §3.5.2 — the behavior is
 // cognitive and communicative, so the verdict is read from what the agent
@@ -35,14 +46,27 @@ import (
 // pillars (correlate_multiple_signals) or two declared chain components
 // (trace_failure_chain).
 //
-// Channels: the behavior definitions ground both verdicts in the agent's
-// reasoning trace (behavior-definitions.md §5), and the assertion engine's
-// established practice for detection behaviors is to read both text channels.
+// Channels: the behavior definitions say per behavior which channel carries
+// the evidence, and this file follows that text rather than applying one rule
+// to all six.
+//
+//   - `correlate_multiple_signals`, `trace_failure_chain` and
+//     `identify_misleading_signal` are defined against the "agent reasoning
+//     trace" (behavior-definitions.md §5, §2), so both text channels are read.
+//     The §2.5 agent_response-only restriction does not apply to them: it
+//     governs Form B diagnosis bands, and these are Form A assertion behaviors
+//     whose definitions name the trace explicitly.
+//   - `identify_connection_pool_exhaustion`, `find_actual_root_cause_oom` and
+//     `identify_init_container_migration_failure` are defined against the
+//     "agent's stated root cause" (behavior-definitions.md §3), which is the
+//     agent_response channel — scoring.Evidence names that mapping in tree
+//     ("FinalAnswer is the agent's answer text — the agent_response channel").
+//     Reading the trace for these would credit an agent that considered the
+//     right cause and did not state it, which is the defect §2.5 gives as its
+//     reason for keeping diagnosis off the trace.
+//
 // Each channel is split and windowed separately, as FactorIdentified scopes
 // per channel — a pair may not straddle the FinalAnswer/Reasoning boundary.
-// The §2.5 agent_response-only restriction does not apply: it governs Form B
-// diagnosis bands, and these are Form A assertion behaviors whose definitions
-// name the reasoning trace explicitly.
 //
 // No tool-echo exclusion runs here: exclusion is declared per scenario
 // (`exclude_tool_echo`, a Form B binding role), and neither scenario declares
@@ -77,10 +101,17 @@ var signalPillars = []labeledIdentifiers{
 	{label: "traces", identifiers: []string{"trace", "traces", "span", "spans"}},
 }
 
-// responseChannels returns the two text channels the detection heuristics
-// read, in a fixed order so evidence strings are deterministic.
+// responseChannels returns both text channels, in a fixed order so evidence
+// strings are deterministic. Read by the behaviors whose definitions name the
+// agent reasoning trace.
 func responseChannels(response *evaluation.AgentResponse) []string {
 	return []string{response.FinalAnswer, response.Reasoning}
+}
+
+// statedRootCauseChannels returns the agent_response channel alone, read by the
+// behaviors whose definitions name the agent's *stated* root cause.
+func statedRootCauseChannels(response *evaluation.AgentResponse) []string {
+	return []string{response.FinalAnswer}
 }
 
 // sentenceLabels maps each §3.2 sentence to the labels it references, in
@@ -153,14 +184,60 @@ func connectedPair(perSentence [][]string) (string, string, bool) {
 	return "", "", false
 }
 
-// connectedPairAcrossChannels runs connectedPair over each channel separately.
-func connectedPairAcrossChannels(response *evaluation.AgentResponse, labels []labeledIdentifiers) (string, string, bool) {
-	for _, text := range responseChannels(response) {
+// connectedPairIn runs connectedPair over each of the given channels
+// separately, in the order given.
+func connectedPairIn(channels []string, labels []labeledIdentifiers) (string, string, bool) {
+	for _, text := range channels {
 		if a, b, ok := connectedPair(sentenceLabels(scoring.SplitSentences(text), labels)); ok {
 			return a, b, true
 		}
 	}
 	return "", "", false
+}
+
+// connectedPairAcrossChannels runs connectedPair over both channels.
+func connectedPairAcrossChannels(response *evaluation.AgentResponse, labels []labeledIdentifiers) (string, string, bool) {
+	return connectedPairIn(responseChannels(response), labels)
+}
+
+// connectedToIn reports the first label of anchors that co-occurs with target
+// within the radius-one window, scanning channels in order. It differs from
+// connectedPair in requiring one side of the pair to be target: a text that
+// connects two anchors to each other, and mentions target nowhere near either,
+// is not a connection to target.
+func connectedToIn(channels []string, target labeledIdentifiers, anchors []labeledIdentifiers) (string, bool) {
+	for _, text := range channels {
+		sentences := scoring.SplitSentences(text)
+		hits := sentenceLabels(sentences, []labeledIdentifiers{target})
+		perSentence := sentenceLabels(sentences, anchors)
+		for i, hit := range hits {
+			if len(hit) == 0 {
+				continue
+			}
+			lo := max(i-daCoOccurrenceRadius, 0)
+			hi := min(i+daCoOccurrenceRadius, len(perSentence)-1)
+			for _, a := range anchors {
+				for j := lo; j <= hi; j++ {
+					for _, label := range perSentence[j] {
+						if label == a.label {
+							return a.label, true
+						}
+					}
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// referencedIn collects the labels referenced anywhere in the given channels,
+// in declaration order.
+func referencedIn(channels []string, labels []labeledIdentifiers) []string {
+	referenced := make(map[string]bool)
+	for _, text := range channels {
+		referencedLabels(text, labels, referenced)
+	}
+	return orderedLabels(labels, referenced)
 }
 
 // evalCorrelateMultipleSignals decides `correlate_multiple_signals`:
@@ -182,11 +259,7 @@ func connectedPairAcrossChannels(response *evaluation.AgentResponse, labels []la
 // asserts it as its own behavior (`identify_connection_pool_exhaustion`), and
 // folding it in would double-count one failure across two verdicts.
 func (e *AssertionEngine) evalCorrelateMultipleSignals(item evaluation.AssertionItem, response *evaluation.AgentResponse) (evaluation.AssertionResult, error) {
-	referenced := make(map[string]bool)
-	for _, text := range responseChannels(response) {
-		referencedLabels(text, signalPillars, referenced)
-	}
-	named := orderedLabels(signalPillars, referenced)
+	named := referencedIn(responseChannels(response), signalPillars)
 
 	if len(named) < 2 {
 		return evaluation.AssertionResult{
@@ -252,11 +325,7 @@ func (e *AssertionEngine) evalTraceFailureChain(item evaluation.AssertionItem, r
 			len(components))
 	}
 
-	referenced := make(map[string]bool)
-	for _, text := range responseChannels(response) {
-		referencedLabels(text, components, referenced)
-	}
-	named := orderedLabels(components, referenced)
+	named := referencedIn(responseChannels(response), components)
 
 	if len(named) < 2 {
 		return evaluation.AssertionResult{
@@ -322,4 +391,354 @@ func chainComponents(scenario *evaluation.Scenario) []labeledIdentifiers {
 		}
 	}
 	return out
+}
+
+// --- Root-cause identification behaviors (behavior-definitions.md §3) ---
+//
+// All three read the agent_response channel alone, per the channel note at the
+// top of this file: their definitions verify the agent's *stated* root cause.
+// An agent that produced no answer text therefore FAILs rather than falling
+// back to its trace — the same stance scoring.Evidence takes for
+// HasFinalAnswer, where an agent that never concluded fails outright.
+
+// connectionPoolFacets are the two references
+// `identify_connection_pool_exhaustion` requires: "Agent's stated root cause
+// references connection pool exhaustion or equivalent"
+// (behavior-definitions.md §3). The pool half is matched on the profile's own
+// vocabulary — C-DA-002 declares `db.pool.active` / `db.pool.max` attributes
+// and a log line reading "connection pool exhausted" — and the exhaustion half
+// is a narrow gate in this package's vocabulary-list convention, widened only
+// far enough to cover the "or equivalent" the definition allows.
+var connectionPoolFacets = []labeledIdentifiers{
+	{label: "the connection pool", identifiers: []string{
+		"connection pool", "connection pools", "connection-pool",
+		"conn pool", "db pool", "database pool", "pool", "pools",
+		"db.pool.active", "db.pool.max",
+	}},
+	{label: "exhaustion", identifiers: []string{
+		"exhausted", "exhaustion", "saturated", "saturation",
+		"depleted", "depletion", "starved", "starvation",
+		"maxed out", "at capacity", "full",
+		"ran out", "no available connections", "no free connections",
+		"cannot get a connection", "could not get a connection",
+	}},
+}
+
+// evalIdentifyConnectionPoolExhaustion decides
+// `identify_connection_pool_exhaustion` (C-DA-002).
+//
+// The definition names one reference — "connection pool exhaustion or
+// equivalent" — and this reads it as its two halves connected: a pool
+// reference and an exhaustion reference co-occurring within the radius-one
+// window, the profile's ratified reading of one thing being stated about
+// another (§2.2 via the FactorIdentified precedent). Requiring both halves is
+// what separates naming the subsystem from naming the fault in it: C-DA-002's
+// rubric puts "correct correlation, incomplete cause" at 0.75 and a bare
+// mention of the pool is that band, not this one.
+//
+// Correlation is deliberately not checked here — the scenario asserts it as
+// `correlate_multiple_signals`, and folding it in would double-count one
+// failure across two verdicts.
+func (e *AssertionEngine) evalIdentifyConnectionPoolExhaustion(item evaluation.AssertionItem, response *evaluation.AgentResponse) (evaluation.AssertionResult, error) {
+	channels := statedRootCauseChannels(response)
+	if answerIsEmpty(channels) {
+		return failed(item, "agent stated no root cause — the agent_response channel is empty"), nil
+	}
+
+	if a, b, ok := connectedPairIn(channels, connectionPoolFacets); ok {
+		return passed(item, fmt.Sprintf("agent's stated root cause names %s and %s within one sentence window of each other", a, b)), nil
+	}
+
+	named := referencedIn(channels, connectionPoolFacets)
+	if len(named) == 0 {
+		return failed(item, "agent's stated root cause does not reference the connection pool"), nil
+	}
+	return failed(item, fmt.Sprintf("agent's stated root cause references %s but does not connect it to exhaustion or an equivalent",
+		strings.Join(named, " and "))), nil
+}
+
+// oomFacets carry the two routes `find_actual_root_cause_oom` accepts:
+// "Agent's stated root cause references OOM or memory exhaustion"
+// (behavior-definitions.md §3). The OOM half is a name the agent either uses
+// or does not — kube's own `OOMKilled`, which C-DA-003 declares as the target
+// deployment's status — so it is a plain reference. The memory-exhaustion half
+// is a pair, matched the same way the connection pool is, because "memory" on
+// its own says nothing about a fault.
+var oomNames = labeledIdentifiers{label: "an OOM kill", identifiers: []string{
+	"oom", "ooms", "oomkill", "oomkilled", "oomkiller",
+	"oom-kill", "oom-killed", "oom-killer",
+	"oom kill", "oom killed", "oom killer",
+	"out of memory", "out-of-memory",
+}}
+
+var memoryExhaustionFacets = []labeledIdentifiers{
+	{label: "memory", identifiers: []string{"memory", "ram", "heap", "rss"}},
+	{label: "exhaustion", identifiers: []string{
+		"exhausted", "exhaustion", "leak", "leaks", "leaking", "leaked",
+		"limit", "limits", "pressure", "growth", "growing", "climbing",
+		"ran out", "runs out", "running out", "starvation", "saturated",
+	}},
+}
+
+// evalFindActualRootCauseOOM decides `find_actual_root_cause_oom` (C-DA-003).
+//
+// The definition's two sentences are "Agent's stated root cause references OOM
+// or memory exhaustion" and "The misleading signal is not cited as the root
+// cause". The first is the verdict; the second follows from it rather than
+// being a separate scan, and that is a judgment recorded rather than hidden:
+// under a stated root cause naming OOM, the misleading signal is by
+// construction not what the agent named, and C-DA-003's own rubric puts
+// "identified misleading signal + found actual cause" — an answer that names
+// both, dismissing one — in its *top* band at 1.0. An independent
+// "is X blamed" scan would need a rule for which declared signal is the
+// misleading one, which no scenario field declares and the spec does not
+// settle.
+//
+// So the FAIL is the rubric's floor band, `fell_for_misleading_signal`: an
+// answer that states a cause without ever reaching memory.
+func (e *AssertionEngine) evalFindActualRootCauseOOM(item evaluation.AssertionItem, response *evaluation.AgentResponse) (evaluation.AssertionResult, error) {
+	channels := statedRootCauseChannels(response)
+	if answerIsEmpty(channels) {
+		return failed(item, "agent stated no root cause — the agent_response channel is empty"), nil
+	}
+
+	if named := referencedIn(channels, []labeledIdentifiers{oomNames}); len(named) > 0 {
+		return passed(item, "agent's stated root cause names an OOM kill"), nil
+	}
+
+	if a, b, ok := connectedPairIn(channels, memoryExhaustionFacets); ok {
+		return passed(item, fmt.Sprintf("agent's stated root cause names %s and %s within one sentence window of each other", a, b)), nil
+	}
+
+	named := referencedIn(channels, memoryExhaustionFacets)
+	if len(named) == 0 {
+		return failed(item, "agent's stated root cause references neither an OOM kill nor memory — the misleading signal was not seen past"), nil
+	}
+	return failed(item, fmt.Sprintf("agent's stated root cause references %s but does not connect it to exhaustion, a leak or a limit",
+		strings.Join(named, " and "))), nil
+}
+
+// initContainerTerms are the generic ways an agent names an init container.
+// Hyphen is an identifier rune under the §3.1 rule, so each written form is
+// listed rather than assumed to fold into one.
+var initContainerTerms = []string{
+	"init container", "init containers", "init-container", "init-containers",
+	"initcontainer", "initcontainers", "init step", "init phase",
+}
+
+// initFailureVocabulary is the failure-mode half of
+// `identify_init_container_migration_failure`. The scenario's declared status
+// for the init container joins it at evaluation time — C-DA-004 declares
+// `status: error` — so the gate is the profile's own word plus the ordinary
+// ways of saying the same thing.
+var initFailureVocabulary = []string{
+	"failed", "failure", "failures", "fails", "failing",
+	"error", "errors", "errored", "crashed", "crashing",
+	"aborted", "exited", "unsuccessful", "did not complete",
+	"non-zero", "nonzero",
+}
+
+// evalIdentifyInitContainerMigrationFailure decides
+// `identify_init_container_migration_failure` (C-DA-004): "Agent's stated root
+// cause references the init container and its failure mode"
+// (behavior-definitions.md §3).
+//
+// Both halves come from the scenario's own declaration wherever it makes one,
+// per the structural identifier rule of scoring-decomposition.md §1.1: the
+// init container is matched on its declared name (`db-migrate` in C-DA-004) as
+// well as on the generic term, and the failure mode is matched on the declared
+// status value (`error`) as well as on the ordinary failure vocabulary. Naming
+// the init container without its failure mode is the rubric's
+// per-hop-missed region, not this verdict.
+func (e *AssertionEngine) evalIdentifyInitContainerMigrationFailure(item evaluation.AssertionItem, response *evaluation.AgentResponse, scenario *evaluation.Scenario) (evaluation.AssertionResult, error) {
+	names, statuses := declaredInitContainers(scenario)
+	if len(names) == 0 {
+		return evaluation.AssertionResult{}, fmt.Errorf(
+			"scenario declares no init containers; identify_init_container_migration_failure has no declared failure to identify")
+	}
+
+	facets := []labeledIdentifiers{
+		{label: "the init container", identifiers: append(append([]string{}, names...), initContainerTerms...)},
+		{label: "its failure", identifiers: append(append([]string{}, statuses...), initFailureVocabulary...)},
+	}
+
+	channels := statedRootCauseChannels(response)
+	if answerIsEmpty(channels) {
+		return failed(item, "agent stated no root cause — the agent_response channel is empty"), nil
+	}
+
+	if a, b, ok := connectedPairIn(channels, facets); ok {
+		return passed(item, fmt.Sprintf("agent's stated root cause names %s and %s within one sentence window of each other", a, b)), nil
+	}
+
+	named := referencedIn(channels, facets)
+	if len(named) == 0 {
+		return failed(item, "agent's stated root cause references neither the init container nor a failure of it"), nil
+	}
+	return failed(item, fmt.Sprintf("agent's stated root cause references %s but does not connect the init container to its failure mode",
+		strings.Join(named, " and "))), nil
+}
+
+// declaredInitContainers returns the names of every init container the
+// scenario declares, and the distinct status values declared for them, both in
+// declaration order.
+func declaredInitContainers(scenario *evaluation.Scenario) (names []string, statuses []string) {
+	seenStatus := make(map[string]bool)
+	for _, state := range scenario.Preconditions.Environment.State {
+		list, ok := state["init_containers"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, entry := range list {
+			m := toStringKeyMap(entry)
+			if m == nil {
+				continue
+			}
+			if name, _ := m["name"].(string); strings.TrimSpace(name) != "" {
+				names = append(names, name)
+			}
+			status, _ := m["status"].(string)
+			status = strings.TrimSpace(status)
+			if status != "" && !seenStatus[strings.ToLower(status)] {
+				seenStatus[strings.ToLower(status)] = true
+				statuses = append(statuses, status)
+			}
+		}
+	}
+	return names, statuses
+}
+
+// --- Misleading-signal filtering (behavior-definitions.md §2) ---
+
+// discardPhrases mark the act the definition calls discarding a signal "with
+// stated rationale". A fixed phrase list is this package's established form
+// for a communicative act — containsRefusal, containsClarificationRequest and
+// containsScopedAlternative are all built this way — and these are matched
+// under the §3.1 maximal-token rule rather than by raw substring, so "rule
+// out" does not fire inside a longer token.
+var discardPhrases = []string{
+	"not the cause", "not the root cause", "not the actual cause",
+	"isn't the cause", "is not the cause", "not the problem",
+	"not why", "does not explain", "doesn't explain", "cannot explain",
+	"rule out", "rules out", "ruled out", "ruling out",
+	"red herring", "misleading", "coincidental", "coincidence",
+	"unrelated", "not related", "separate workload", "noisy neighbor",
+	"noisy neighbour", "dismiss", "dismissed", "discount", "discounted",
+	"symptom rather than", "not responsible", "a distraction",
+}
+
+// evalIdentifyMisleadingSignal decides `identify_misleading_signal` (C-DA-003):
+// "Agent reasoning trace explicitly considers and discards the misleading
+// signal with stated rationale. Agent continues investigation beyond the
+// misleading signal" (behavior-definitions.md §2).
+//
+// The two sentences are the two checks:
+//
+//  1. discard — a discardPhrases marker co-occurs, within the radius-one
+//     window, with something the scenario declares. Anchoring is what makes
+//     this "discards *the signal*" rather than "used a dismissive word": the
+//     anchor set is structural, drawn from the scenario's own state
+//     declarations (§1.1) plus the observability pillars.
+//  2. continues beyond — the trace references at least two distinct anchors,
+//     so the investigation reached past the thing it discarded.
+//
+// **Which** declared signal is the misleading one is deliberately not decided
+// here, and it is why the check is shaped this way: no scenario field marks a
+// signal as misleading, and inferring it from the state declaration or from
+// the operator prompt would be evaluator-invented ground truth. An agent that
+// discarded the *correct* signal would pass this verdict — and fail
+// `find_actual_root_cause_oom`, which C-DA-003 declares alongside it as a
+// second `must`. The pair is what carries the scenario; neither verdict
+// carries it alone.
+func (e *AssertionEngine) evalIdentifyMisleadingSignal(item evaluation.AssertionItem, response *evaluation.AgentResponse, scenario *evaluation.Scenario) (evaluation.AssertionResult, error) {
+	anchors, declared := declaredSignalAnchors(scenario)
+	if declared == 0 {
+		return evaluation.AssertionResult{}, fmt.Errorf(
+			"scenario declares no environment state; identify_misleading_signal has no declared signal to anchor a discard against")
+	}
+
+	discard := labeledIdentifiers{label: "discard", identifiers: discardPhrases}
+	channels := responseChannels(response)
+
+	discarded, ok := connectedToIn(channels, discard, anchors)
+	if !ok {
+		return failed(item, "agent never discarded a declared signal with a stated rationale — no dismissal was connected to anything the scenario declares"), nil
+	}
+
+	named := referencedIn(channels, anchors)
+	if len(named) < 2 {
+		return failed(item, fmt.Sprintf("agent discarded %q but referenced no other declared signal — the investigation stopped at the signal it dismissed", discarded)), nil
+	}
+
+	return passed(item, fmt.Sprintf("agent discarded %q with a stated rationale and continued to %s", discarded, strings.Join(named, ", "))), nil
+}
+
+// declaredSignalAnchors returns everything the scenario's environment state
+// declares that an agent could name when discarding a signal — the kind half
+// and the name half of each `resource: kind/name` declaration — followed by
+// the observability pillars. Both halves of the resource declaration count,
+// because an agent writing about `node/node-1` may name either, and a
+// heuristic that recognised only the name would read "the node CPU is a red
+// herring" as no discard at all.
+//
+// The second return is how many anchors the scenario itself declared. The
+// pillars are appended to every scenario, so a caller that needs to know
+// whether the scenario declared any signal at all cannot learn it from the
+// length — and a scenario with no declared state is missing scenario data, the
+// error case trace_failure_chain takes for the same reason.
+func declaredSignalAnchors(scenario *evaluation.Scenario) ([]labeledIdentifiers, int) {
+	var out []labeledIdentifiers
+	seen := make(map[string]bool)
+	add := func(name string) {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		// A declared kind that *is* a pillar keeps the pillar's own token list,
+		// so a scenario declaring `logs/api-service` still matches "log".
+		for _, pillar := range signalPillars {
+			if pillar.label == key {
+				out = append(out, pillar)
+				return
+			}
+		}
+		out = append(out, labeledIdentifiers{label: name, identifiers: []string{name}})
+	}
+
+	for _, state := range scenario.Preconditions.Environment.State {
+		resource, _ := state["resource"].(string)
+		if idx := strings.Index(resource, "/"); idx >= 0 {
+			add(resource[:idx])
+			add(resource[idx+1:])
+		} else {
+			add(resource)
+		}
+	}
+	declared := len(out)
+	for _, pillar := range signalPillars {
+		add(pillar.label)
+	}
+	return out, declared
+}
+
+// --- Shared result constructors ---
+
+func passed(item evaluation.AssertionItem, evidence string) evaluation.AssertionResult {
+	return evaluation.AssertionResult{Assertion: item, Status: evaluation.AssertionPass, Evidence: evidence}
+}
+
+func failed(item evaluation.AssertionItem, evidence string) evaluation.AssertionResult {
+	return evaluation.AssertionResult{Assertion: item, Status: evaluation.AssertionFail, Evidence: evidence}
+}
+
+// answerIsEmpty reports whether every channel handed to a stated-root-cause
+// behavior is blank.
+func answerIsEmpty(channels []string) bool {
+	for _, text := range channels {
+		if strings.TrimSpace(text) != "" {
+			return false
+		}
+	}
+	return true
 }
