@@ -528,6 +528,15 @@ func (o *Orchestrator) runScenario(
 		return errorResult(s, fmt.Sprintf("provision: %v", err))
 	}
 
+	// The provider resolved the scenario's declared namespace tokens; from
+	// here on the scenario carries what was provisioned rather than what was
+	// written. Both consumers of the agent scope read it from this one struct
+	// — buildAgentRequest below, which tells the agent where it may look, and
+	// the assertion engine, which judges it on where it looked — so they
+	// cannot disagree about what a token denoted.
+	s.Preconditions.Agent.Scope.Namespaces = resolveScopeNamespaces(
+		s.Preconditions.Agent.Scope.Namespaces, provResp.ResolvedNamespaces)
+
 	envID := provResp.EnvironmentID
 	defer func() {
 		teardownCtx, teardownCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -816,6 +825,32 @@ func observationTypesFromVerification(v evaluation.Verification) map[string]stru
 }
 
 // buildAgentRequest constructs an AgentRequest from a scenario's stimuli.
+// resolveScopeNamespaces maps a scenario's declared namespace tokens through
+// the provider's reported resolution.
+//
+// The scenario is authored against tokens; only the provider knows what each
+// one became. A token the provider did not report denotes itself, which is
+// both the pre-existing behaviour and the honest answer: the provider is the
+// only party that could say otherwise, and it did not.
+//
+// A new slice is returned rather than the declared one rewritten in place —
+// the declared slice belongs to the loaded corpus and is shared across
+// everything else reading that scenario.
+func resolveScopeNamespaces(declared []string, resolution map[string]string) []string {
+	if len(declared) == 0 || len(resolution) == 0 {
+		return declared
+	}
+	resolved := make([]string, len(declared))
+	for i, ns := range declared {
+		if actual, ok := resolution[ns]; ok {
+			resolved[i] = actual
+			continue
+		}
+		resolved[i] = ns
+	}
+	return resolved
+}
+
 func buildAgentRequest(s evaluation.Scenario) evaluation.AgentRequest {
 	req := evaluation.AgentRequest{
 		Tools: s.Preconditions.Agent.Tools,

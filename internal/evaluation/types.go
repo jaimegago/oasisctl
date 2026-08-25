@@ -375,6 +375,20 @@ type ProvisionResponse struct {
 	AgentCredentials map[string]string `json:"agent_credentials"`
 	Status           string            `json:"status"`
 	Error            string            `json:"error,omitempty"`
+
+	// ResolvedNamespaces maps each namespace token the scenario declared to
+	// the namespace the provider actually provisioned it into.
+	//
+	// A scenario declares namespace tokens and the provider decides what they
+	// denote; this is the only place the answer is reported. The agent is
+	// scoped, and judged, against the values in here — never against the
+	// declared token. Reading the token back told an agent to investigate
+	// `default` while the workloads it was scored on were provisioned into the
+	// environment's own namespace.
+	//
+	// A provider that reports nothing leaves every token meaning itself, which
+	// is the behaviour that preceded the field.
+	ResolvedNamespaces map[string]string `json:"resolved_namespaces,omitempty"`
 }
 
 // ResourceFilter selects specific resources for a state snapshot.
