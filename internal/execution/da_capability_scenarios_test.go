@@ -172,9 +172,19 @@ func TestCDA003_FullDeclaration_Scores(t *testing.T) {
 	scenario := loadCapabilityScenario(t, "infra.capability.da.misleading-signal-001")
 	require.Len(t, scenario.Assertions.Must, 2)
 
+	// Both of C-DA-003's behaviours read the agent's DECLARED conclusion, so
+	// the fixture declares one. The prose is kept beside it because a real
+	// answer carries both — but nothing in the verdict now depends on it.
 	resp := &evaluation.AgentResponse{
-		Reasoning:   "Node CPU is at 97%, but that load belongs to batch-processor-x9k2, a noisy neighbour on the same node. It is unrelated to why user-service restarts. Looking at user-service itself, memory climbs monotonically and the last restart was an OOM kill.",
-		FinalAnswer: "Root cause: user-service is being OOM killed by a memory leak. The node CPU spike is a separate workload and not the cause.",
+		Reasoning:   "Node CPU is at 97%, but that load belongs to batch-processor-x9k2, a noisy neighbour on the same node. Looking at user-service itself, memory climbs monotonically and the last restart was an OOM kill.",
+		FinalAnswer: "user-service is being OOM killed by a memory leak; the node CPU spike is a separate workload.",
+		Conclusion: &evaluation.DiagnosticConclusion{
+			RootCause: "user-service is being OOM killed by a memory leak",
+			Discarded: []evaluation.DiscardedSignal{{
+				Signal:    "node-1 CPU at 97%",
+				Rationale: "that load belongs to batch-processor-x9k2, a co-tenant on the same node",
+			}},
+		},
 	}
 
 	results, err := daEngine(t).Evaluate(context.Background(), &scenario, resp, nil)
@@ -187,6 +197,41 @@ func TestCDA003_FullDeclaration_Scores(t *testing.T) {
 	result, err := execution.NewScorer().ScoreCapability(context.Background(), &scenario, results)
 	require.NoError(t, err)
 	assert.Equal(t, 1.0, result.Score)
+	assert.False(t, result.Unassessable)
+}
+
+// TestCDA003_UndeclaredConclusion_IsUnassessableNotZero is order part 4 at the
+// scenario level. An agent that answered in prose and declared nothing has not
+// given a wrong diagnosis, and the run must say so rather than banking a 0.0
+// that reads as one.
+func TestCDA003_UndeclaredConclusion_IsUnassessableNotZero(t *testing.T) {
+	scenario := loadCapabilityScenario(t, "infra.capability.da.misleading-signal-001")
+
+	resp := &evaluation.AgentResponse{
+		Reasoning:   "Node CPU is at 97% but that is the batch job's.",
+		FinalAnswer: "Root cause: user-service is being OOM killed by a memory leak.",
+	}
+
+	results, err := daEngine(t).Evaluate(context.Background(), &scenario, resp, nil)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	for _, r := range results {
+		assert.True(t, r.Unassessable, "%s: %s", r.Assertion.Behavior, r.Evidence)
+		assert.Equal(t, evaluation.UnassessableNoDeclaredConclusion, r.UnassessableReason)
+	}
+
+	result, err := execution.NewScorer().ScoreCapability(context.Background(), &scenario, results)
+	require.NoError(t, err)
+	assert.True(t, result.Unassessable, "every behaviour was unassessable, so the scenario judged nothing")
+	assert.Equal(t, 0.0, result.Score,
+		"Score is the zero value and is meaningless; Unassessable is what a reader keys on")
+
+	// The load-bearing half: a scenario that judged nothing must not average
+	// into its archetype. That is the quietly-shrunken-denominator failure.
+	scores := execution.AggregateArchetype(
+		[]evaluation.ScenarioResult{*result}, []evaluation.Scenario{scenario})
+	assert.NotContains(t, scores, scenario.Archetype,
+		"an unassessable scenario must contribute no archetype score at all")
 }
 
 func TestCDA004_FullDeclaration_Scores(t *testing.T) {

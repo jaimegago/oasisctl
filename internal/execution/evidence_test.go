@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -304,4 +305,64 @@ func TestEvidenceFileName(t *testing.T) {
 	assert.Equal(t, "evidence-infra.capability.da.single-signal-diagnosis-001.json",
 		EvidenceFileName("infra.capability.da.single-signal-diagnosis-001"))
 	assert.Equal(t, "evidence-.._.._etc_passwd.json", EvidenceFileName("../../etc/passwd"))
+}
+
+// TestEvidenceArtifact_DeclaredConclusion is the far end of the pipe. The
+// evaluator's verdicts on the diagnostic-accuracy behaviours are now computed
+// from the declaration, and spec/05-reporting.md §1.2 requires the artifact to
+// replay the evaluation as a pure function — so an artifact that dropped the
+// declaration could not reproduce its own verdicts.
+func TestEvidenceArtifact_DeclaredConclusion(t *testing.T) {
+	t.Run("a declared conclusion is recorded with its discards", func(t *testing.T) {
+		artifact := BuildEvidenceArtifact("s1", &evaluation.AgentResponse{
+			FinalAnswer: "user-service is OOM killed",
+			Conclusion: &evaluation.DiagnosticConclusion{
+				RootCause: "a memory leak exhausting the limit",
+				Discarded: []evaluation.DiscardedSignal{
+					{Signal: "node-1 CPU", Rationale: "the batch job's load"},
+				},
+			},
+		}, nil, nil)
+
+		if artifact.DeclaredConclusion == nil {
+			t.Fatal("DeclaredConclusion = nil, want the declaration")
+		}
+		if artifact.DeclaredConclusion.RootCause != "a memory leak exhausting the limit" {
+			t.Errorf("RootCause = %q", artifact.DeclaredConclusion.RootCause)
+		}
+		if len(artifact.DeclaredConclusion.Discarded) != 1 ||
+			artifact.DeclaredConclusion.Discarded[0].Rationale != "the batch job's load" {
+			t.Errorf("Discarded = %+v", artifact.DeclaredConclusion.Discarded)
+		}
+	})
+
+	// The three states must stay three ON DISK. A file is what a later reader
+	// scores from, and JSON is where "declared and empty" quietly becomes
+	// "declared nothing" if the encoding does not keep them apart.
+	t.Run("the three states are distinct in the serialized artifact", func(t *testing.T) {
+		declaredEmpty := BuildEvidenceArtifact("s1", &evaluation.AgentResponse{
+			Conclusion: &evaluation.DiagnosticConclusion{RootCause: "an OOM kill"},
+		}, nil, nil)
+		encoded, err := json.Marshal(declaredEmpty)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !strings.Contains(string(encoded), `"discarded":[]`) {
+			t.Errorf(`declared-and-empty did not serialize "discarded":[]; got %s`, encoded)
+		}
+		if strings.Contains(string(encoded), `"declared_conclusion":null`) {
+			t.Error("declared-and-empty serialized a null conclusion; it declared one")
+		}
+
+		absent := BuildEvidenceArtifact("s1", &evaluation.AgentResponse{
+			FinalAnswer: "Root cause: an OOM kill.",
+		}, nil, nil)
+		encoded, err = json.Marshal(absent)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !strings.Contains(string(encoded), `"declared_conclusion":null`) {
+			t.Errorf(`an undeclared conclusion must serialize as null; got %s`, encoded)
+		}
+	})
 }

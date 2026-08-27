@@ -192,3 +192,85 @@ func TestExecute_ObservedModel(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// TestExecute_DeclaredConclusion pins the decode half of the pipe the declared
+// conclusion travels: what an adapter reports must reach the domain type, and
+// the three states an adapter can be in must stay three.
+func TestExecute_DeclaredConclusion(t *testing.T) {
+	tests := []struct {
+		name          string
+		body          string
+		wantNil       bool
+		wantRootCause string
+		wantDiscarded int
+	}{
+		{
+			name:          "a declared conclusion reaches the domain type",
+			body:          `{"actions":[],"reasoning":"r","final_answer":"f","root_cause":"an OOM kill","discarded":[{"signal":"node-1 CPU","rationale":"the batch job's load"}],"conclusion_declared":true}`,
+			wantRootCause: "an OOM kill",
+			wantDiscarded: 1,
+		},
+		{
+			// The distinction the whole mechanism rests on. `[]` under a
+			// declaration is an ANSWER — "I ruled nothing out" — and it must
+			// not arrive as nil, which would make it an absence.
+			name:          "declared with nothing discarded is not an absence",
+			body:          `{"actions":[],"reasoning":"r","final_answer":"f","root_cause":"an OOM kill","discarded":[],"conclusion_declared":true}`,
+			wantRootCause: "an OOM kill",
+			wantDiscarded: 0,
+		},
+		{
+			// An agent that would not commit but said what it ruled out has
+			// declared something. It is not nil, and its RootCause is empty.
+			name:          "discards without a committed cause still declare",
+			body:          `{"actions":[],"reasoning":"r","final_answer":"f","discarded":[{"signal":"cpu","rationale":"unrelated"}],"conclusion_declared":true}`,
+			wantRootCause: "",
+			wantDiscarded: 1,
+		},
+		{
+			name:    "an adapter that reports nothing yields nil",
+			body:    `{"actions":[],"reasoning":"r","final_answer":"f"}`,
+			wantNil: true,
+		},
+		{
+			name:    "an explicit false with empty fields yields nil",
+			body:    `{"actions":[],"reasoning":"r","final_answer":"f","root_cause":"","discarded":[],"conclusion_declared":false}`,
+			wantNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			client := NewHTTPClient(server.URL, "")
+			resp, err := client.Execute(context.Background(), evaluation.AgentRequest{Prompt: "p"})
+			if err != nil {
+				t.Fatalf("execute failed: %v", err)
+			}
+
+			if tt.wantNil {
+				if resp.Conclusion != nil {
+					t.Fatalf("Conclusion = %+v, want nil", resp.Conclusion)
+				}
+				return
+			}
+			if resp.Conclusion == nil {
+				t.Fatal("Conclusion = nil, want a declaration")
+			}
+			if resp.Conclusion.RootCause != tt.wantRootCause {
+				t.Errorf("RootCause = %q, want %q", resp.Conclusion.RootCause, tt.wantRootCause)
+			}
+			if len(resp.Conclusion.Discarded) != tt.wantDiscarded {
+				t.Errorf("Discarded = %+v, want %d entries", resp.Conclusion.Discarded, tt.wantDiscarded)
+			}
+			if resp.Conclusion.Discarded == nil {
+				t.Error("Discarded is nil; a declared conclusion carries a list, empty or not")
+			}
+		})
+	}
+}

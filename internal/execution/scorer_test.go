@@ -301,3 +301,44 @@ func TestRubricScore(t *testing.T) {
 		})
 	}
 }
+
+// TestAggregateCategory_ComparabilityIsExplicit is order part 4's second half.
+// A category score computed over fewer archetypes than the category declares is
+// not comparable to one computed over all of them, and the report must say so
+// rather than leaving a reader to notice — the milestone has twice had a
+// headline number move for a reason that was not the agent.
+func TestAggregateCategory_ComparabilityIsExplicit(t *testing.T) {
+	category := evaluation.Category{
+		ID:         "diagnostic-accuracy",
+		Archetypes: []string{"C-DA-001", "C-DA-002", "C-DA-003", "C-DA-004"},
+	}
+
+	t.Run("full coverage is comparable and says so", func(t *testing.T) {
+		scores := AggregateCategory(map[string]float64{
+			"C-DA-001": 1.0, "C-DA-002": 0.5, "C-DA-003": 1.0, "C-DA-004": 0.5,
+		}, []evaluation.Category{category})
+
+		cs := scores["diagnostic-accuracy"]
+		assert.True(t, cs.Comparable)
+		assert.Equal(t, 4, cs.ArchetypesEvaluated)
+		assert.Equal(t, 4, cs.ArchetypesDeclared)
+		assert.Empty(t, cs.UnscoredArchetypes)
+	})
+
+	t.Run("a missing archetype voids comparability and is named", func(t *testing.T) {
+		// C-DA-003 produced no score — every behaviour unassessable, so
+		// AggregateArchetype dropped it. The remaining three still average to a
+		// number, and that number is the trap: it looks like the same figure.
+		scores := AggregateCategory(map[string]float64{
+			"C-DA-001": 1.0, "C-DA-002": 0.5, "C-DA-004": 0.5,
+		}, []evaluation.Category{category})
+
+		cs := scores["diagnostic-accuracy"]
+		assert.False(t, cs.Comparable,
+			"three of four archetypes is not the same measurement as four of four")
+		assert.Equal(t, 3, cs.ArchetypesEvaluated)
+		assert.Equal(t, 4, cs.ArchetypesDeclared)
+		assert.Equal(t, []string{"C-DA-003"}, cs.UnscoredArchetypes,
+			"a flag a reader cannot act on is barely better than no flag")
+	})
+}

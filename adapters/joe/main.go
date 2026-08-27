@@ -39,6 +39,34 @@ type AgentResponse struct {
 	// agent that reports no model produces an absent field rather than an empty
 	// string that would read downstream as a real observation.
 	Model string `json:"model,omitempty"`
+	// RootCause, Discarded and ConclusionDeclared carry the diagnostic
+	// conclusion the agent declared on its terminal turn, forwarded from joe's
+	// task response (joe D-0159). They exist because an evaluator deciding
+	// whether an answer named a cause, or dismissed a signal, otherwise has
+	// only the prose — and deciding it from prose measures vocabulary rather
+	// than reasoning.
+	//
+	// Reporting one is an adapter CAPABILITY, exactly as Model is: an agent
+	// whose adapter sends nothing here still evaluates, and its behaviours are
+	// reported unassessable rather than scored zero.
+	//
+	// Discarded is NOT omitempty and is built non-nil, so it crosses the wire
+	// as `[]` rather than disappearing. An absent list is ambiguous between
+	// "ruled nothing out" and "declared nothing" — an answer and an absence —
+	// and ConclusionDeclared is what separates them.
+	RootCause          string            `json:"root_cause,omitempty"`
+	Discarded          []DiscardedSignal `json:"discarded"`
+	ConclusionDeclared bool              `json:"conclusion_declared,omitempty"`
+}
+
+// DiscardedSignal is one signal the agent declared it ruled out, with the
+// rationale it gave. Both halves travel separately because the act declared is
+// discarding a signal WITH stated rationale: a signal named with no reason is a
+// different, weaker thing, and an evaluator that requires the rationale must be
+// able to see that it is missing.
+type DiscardedSignal struct {
+	Signal    string `json:"signal"`
+	Rationale string `json:"rationale,omitempty"`
 }
 
 // AgentAction is one tool call in oasisctl's wire format. Result carries the
@@ -96,6 +124,20 @@ type JoeResponse struct {
 	// joe also reports a sibling `provider` (the adapter family). It is
 	// deliberately not carried this slice — see the slice ledger.
 	Model string `json:"model"`
+	// RootCause / Discarded / ConclusionDeclared mirror joe's declared
+	// diagnostic conclusion (joe D-0159, taskTurn.root_cause / .discarded /
+	// .conclusion_declared). An older joe sends none of them; all three then
+	// decode to their zero values and travel onward as an undeclared
+	// conclusion, which is the truth about that agent rather than a defect.
+	RootCause          string               `json:"root_cause"`
+	Discarded          []JoeDiscardedSignal `json:"discarded"`
+	ConclusionDeclared bool                 `json:"conclusion_declared"`
+}
+
+// JoeDiscardedSignal mirrors joe's taskDiscardedSignal.
+type JoeDiscardedSignal struct {
+	Signal    string `json:"signal"`
+	Rationale string `json:"rationale"`
 }
 
 // JoeStep mirrors joe's taskStep (internal/api/tasks.go). Tool calls are nested
@@ -192,6 +234,19 @@ func translateResponse(jr *JoeResponse) *AgentResponse {
 		Actions:     []AgentAction{},
 		FinalAnswer: jr.FinalAnswer,
 		Model:       jr.Model,
+		// Built non-nil unconditionally: the field must reach oasisctl as `[]`
+		// and never as null, or the absent-list ambiguity the declaration
+		// exists to remove comes back silently at the far end of the pipe.
+		Discarded:          make([]DiscardedSignal, 0, len(jr.Discarded)),
+		RootCause:          jr.RootCause,
+		ConclusionDeclared: jr.ConclusionDeclared,
+	}
+	for _, d := range jr.Discarded {
+		// A conversion rather than a field-by-field literal: the two types are
+		// deliberately field-identical, and the conversion is what makes a
+		// later divergence a compile error here instead of a silently dropped
+		// field on the way to the evaluator.
+		resp.Discarded = append(resp.Discarded, DiscardedSignal(d))
 	}
 
 	var reasoningParts []string

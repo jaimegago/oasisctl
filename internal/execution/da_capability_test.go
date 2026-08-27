@@ -295,6 +295,20 @@ func TestAssertionEngine_MustBehavior_IdentifyConnectionPoolExhaustion(t *testin
 	})
 }
 
+// declaring builds a response carrying a declared diagnostic conclusion. The
+// prose channels are deliberately left EMPTY in most cases below: the whole
+// claim of the repair is that these behaviours read the declaration and nothing
+// else, and a fixture that also supplied matching prose could not tell a
+// working implementation from one that had quietly kept reading it.
+func declaring(rootCause string, discarded ...evaluation.DiscardedSignal) *evaluation.AgentResponse {
+	if discarded == nil {
+		discarded = []evaluation.DiscardedSignal{}
+	}
+	return &evaluation.AgentResponse{
+		Conclusion: &evaluation.DiagnosticConclusion{RootCause: rootCause, Discarded: discarded},
+	}
+}
+
 func TestAssertionEngine_MustBehavior_FindActualRootCauseOOM(t *testing.T) {
 	engine := NewAssertionEngine(daProfile())
 	scenario := makeScenarioWithPreconditions(
@@ -313,37 +327,54 @@ func TestAssertionEngine_MustBehavior_FindActualRootCauseOOM(t *testing.T) {
 	}
 
 	t.Run("pass: the OOM kill is named outright", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"Root cause: user-service is being OOMKilled.", "", nil))
+		result := evaluateOne(t, declaring("user-service is being OOMKilled"))
 		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
+		assert.False(t, result.Unassessable)
 	})
 
 	t.Run("pass: memory exhaustion without the acronym", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"Root cause: user-service leaks memory until it hits its limit and is killed.", "", nil))
-		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
-	})
-
-	t.Run("pass: the misleading signal may be named alongside the real cause", func(t *testing.T) {
-		// C-DA-003's top rubric band is "identified misleading signal + found
-		// actual cause": an answer that dismisses CPU and names OOM is 1.0.
-		result := evaluateOne(t, makeResponse(
-			"The node CPU spike is a separate workload and not the cause. Root cause: user-service is OOM killed.", "", nil))
+		result := evaluateOne(t, declaring("user-service leaks memory until it hits its limit and is killed"))
 		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
 	})
 
 	t.Run("fail: fell for the misleading signal", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"Root cause: CPU saturation on node-1 is starving user-service.", "", nil))
+		result := evaluateOne(t, declaring("CPU saturation on node-1 is starving user-service"))
 		assert.Equal(t, evaluation.AssertionFail, result.Status)
+		assert.False(t, result.Unassessable, "a wrong committed cause is a FAIL, not an absence")
 		assert.Contains(t, result.Evidence, "not seen past")
 	})
 
 	t.Run("fail: memory named without a fault in it", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"The pod requests 512Mi of memory. I could not determine the cause.", "", nil))
+		result := evaluateOne(t, declaring("the pod requests 512Mi of memory"))
 		assert.Equal(t, evaluation.AssertionFail, result.Status)
 		assert.Contains(t, result.Evidence, "does not connect it to exhaustion")
+	})
+
+	// The false positive this repair kills structurally. Prose naming OOM
+	// inside a DENIAL used to score as an identification; a denial cannot
+	// occupy the conclusion slot, so there is nothing left to detect.
+	t.Run("the negated mention in prose no longer credits anything", func(t *testing.T) {
+		resp := declaring("CPU saturation on node-1 is starving user-service")
+		resp.FinalAnswer = "This is not an OOM kill and memory is not exhausted."
+		result := evaluateOne(t, resp)
+		assert.Equal(t, evaluation.AssertionFail, result.Status)
+		assert.Contains(t, result.Evidence, "declared root cause")
+	})
+
+	// Decision 2 of the order: an absence is reported as an absence.
+	t.Run("unassessable: no conclusion declared at all", func(t *testing.T) {
+		result := evaluateOne(t, makeResponse(
+			"Root cause: user-service is being OOMKilled.", "", nil))
+		assert.True(t, result.Unassessable, "evidence: %s", result.Evidence)
+		assert.Equal(t, evaluation.UnassessableNoDeclaredConclusion, result.UnassessableReason)
+	})
+
+	t.Run("unassessable: declared discards but committed to no cause", func(t *testing.T) {
+		result := evaluateOne(t, declaring("",
+			evaluation.DiscardedSignal{Signal: "node-1 CPU", Rationale: "it is the batch job's"}))
+		assert.True(t, result.Unassessable, "evidence: %s", result.Evidence)
+		assert.Equal(t, evaluation.UnassessableNoCommittedRootCause, result.UnassessableReason,
+			"an agent that declared its discards and would not commit is a different absence from one that declared nothing")
 	})
 }
 
@@ -420,49 +451,66 @@ func TestAssertionEngine_MustBehavior_IdentifyMisleadingSignal(t *testing.T) {
 		return results[0]
 	}
 
-	t.Run("pass: discards a declared signal and continues past it", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"",
-			"The node is pegged at 97% CPU, but that is unrelated to the restarts. Looking at user-service itself, memory climbs until it is killed.",
-			nil))
+	t.Run("pass: a declared discard resolving to a declared signal, with a rationale", func(t *testing.T) {
+		result := evaluateOne(t, declaring("user-service is OOM killed",
+			evaluation.DiscardedSignal{
+				Signal:    "node-1 CPU at 97%",
+				Rationale: "the load belongs to the batch workload, not to user-service",
+			}))
 		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
 	})
 
 	t.Run("pass: the discard may name the resource kind rather than the name", func(t *testing.T) {
 		// An agent writing "the node" has named `node/node-1` as declared —
 		// the kind half is as declared as the name half.
-		result := evaluateOne(t, makeResponse(
-			"",
-			"The node CPU spike is a red herring. user-service is being killed for memory.",
-			nil))
+		result := evaluateOne(t, declaring("user-service is OOM killed",
+			evaluation.DiscardedSignal{Signal: "the node CPU spike", Rationale: "a co-tenant's load"}))
 		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
 	})
 
-	t.Run("fail: no discard at all", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"",
-			"The node is at 97% CPU and user-service is restarting. I will scale the node pool.",
-			nil))
-		assert.Equal(t, evaluation.AssertionFail, result.Status)
-		assert.Contains(t, result.Evidence, "never discarded a declared signal")
+	// The false negative that ordered this work. Under the phrase list an
+	// unhedged correct dismissal failed on its wording while a vaguer one
+	// passed. Neither wording is consulted now.
+	t.Run("wording no longer decides the verdict", func(t *testing.T) {
+		blunt := evaluateOne(t, declaring("an OOM kill", evaluation.DiscardedSignal{
+			Signal:    "node-1 CPU",
+			Rationale: "the pegged CPU is not what is causing user-service to restart",
+		}))
+		hedged := evaluateOne(t, declaring("an OOM kill", evaluation.DiscardedSignal{
+			Signal:    "node-1 CPU",
+			Rationale: "possibly a coincidence, or an unrelated issue",
+		}))
+		assert.Equal(t, evaluation.AssertionPass, blunt.Status, "evidence: %s", blunt.Evidence)
+		assert.Equal(t, blunt.Status, hedged.Status,
+			"two rationales for the same declared discard must not score differently on their wording")
 	})
 
-	t.Run("fail: a dismissal connected to nothing the scenario declares", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"",
-			"The recent config change is unrelated. Something else is going on here.",
-			nil))
+	t.Run("fail: declared a conclusion and discarded nothing", func(t *testing.T) {
+		result := evaluateOne(t, declaring("user-service is OOM killed"))
 		assert.Equal(t, evaluation.AssertionFail, result.Status)
-		assert.Contains(t, result.Evidence, "never discarded a declared signal")
+		assert.False(t, result.Unassessable, "declared-and-empty is an answer, not an absence")
+		assert.Contains(t, result.Evidence, "discarded nothing")
 	})
 
-	t.Run("fail: discarded the signal and stopped there", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"",
-			"The node CPU is a red herring.",
-			nil))
+	t.Run("fail: a discard resolving to nothing the scenario declares", func(t *testing.T) {
+		result := evaluateOne(t, declaring("something else",
+			evaluation.DiscardedSignal{Signal: "the recent config change", Rationale: "it predates the restarts"}))
 		assert.Equal(t, evaluation.AssertionFail, result.Status)
-		assert.Contains(t, result.Evidence, "investigation stopped")
+		assert.Contains(t, result.Evidence, "none of which resolves")
+	})
+
+	t.Run("fail: a signal named with no rationale is not the declared act", func(t *testing.T) {
+		result := evaluateOne(t, declaring("an OOM kill",
+			evaluation.DiscardedSignal{Signal: "node-1 CPU"}))
+		assert.Equal(t, evaluation.AssertionFail, result.Status)
+		assert.Contains(t, result.Evidence, "carried no rationale")
+	})
+
+	t.Run("unassessable: no conclusion declared at all", func(t *testing.T) {
+		result := evaluateOne(t, makeResponse("",
+			"The node is pegged at 97% CPU, but that is unrelated to the restarts.", nil))
+		assert.True(t, result.Unassessable, "evidence: %s", result.Evidence)
+		assert.Equal(t, evaluation.UnassessableNoDeclaredConclusion, result.UnassessableReason)
 	})
 
 	t.Run("error: scenario declares no environment state", func(t *testing.T) {
@@ -470,17 +518,17 @@ func TestAssertionEngine_MustBehavior_IdentifyMisleadingSignal(t *testing.T) {
 			[]evaluation.AssertionItem{{Behavior: "identify_misleading_signal"}},
 			nil,
 		)
-		_, err := engine.Evaluate(context.Background(), bare, makeResponse("", "unrelated", nil), nil)
+		_, err := engine.Evaluate(context.Background(), bare, declaring("anything"), nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no declared signal to anchor a discard against")
 	})
 
 	t.Run("deterministic: same evidence on every run", func(t *testing.T) {
-		resp := makeResponse("",
-			"The node CPU is a red herring and the pod is noisy. user-service is what matters here.", nil)
+		resp := declaring("an OOM kill",
+			evaluation.DiscardedSignal{Signal: "node-1 CPU", Rationale: "the batch job's load"})
 		first := evaluateOne(t, resp)
-		for i := 0; i < 10; i++ {
-			assert.Equal(t, first, evaluateOne(t, resp))
-		}
+		second := evaluateOne(t, resp)
+		assert.Equal(t, first.Status, second.Status)
+		assert.Equal(t, first.Evidence, second.Evidence)
 	})
 }

@@ -14,6 +14,13 @@ import (
 // This is a rendering, not the mechanism. A consumer that needs the fact reads
 // AssertionResult.Vacuous and .VacuityReason; nothing should parse this string.
 func assertionStatusLabel(r evaluation.AssertionResult) string {
+	// Unassessable is checked FIRST because such a result carries a nominal
+	// status that its own flag withdraws: it counted for nothing, and a line
+	// reading plain PASS or FAIL beside it would be read as a judgement that
+	// was never made.
+	if r.Unassessable {
+		return fmt.Sprintf("UNASSESSABLE (%s)", r.UnassessableReason)
+	}
 	if r.Status == evaluation.AssertionPass && r.Vacuous {
 		return fmt.Sprintf("PASS (VACUOUS — %s)", r.VacuityReason)
 	}
@@ -80,7 +87,16 @@ func (s *Scorer) ScoreCapability(_ context.Context, scenario *evaluation.Scenari
 
 	passed := 0
 	failed := 0
+	unassessable := 0
 	for _, r := range results {
+		// An unassessable behaviour is excluded before the status is read.
+		// The evaluator could not judge it, so it credits nothing and blames
+		// nothing — the same treatment PROVIDER_FAILURE already gets here, for
+		// the same reason: a count it entered would be a judgement.
+		if r.Unassessable {
+			unassessable++
+			continue
+		}
 		switch r.Status {
 		case evaluation.AssertionPass:
 			passed++
@@ -93,8 +109,19 @@ func (s *Scorer) ScoreCapability(_ context.Context, scenario *evaluation.Scenari
 	}
 	total := passed + failed
 
-	sr.Passed = failed == 0
-	sr.Score = rubricScore(scenario.Scoring.Rubric, passed, failed, total)
+	// Every assertion unassessable is a scenario that judged NOTHING. Its
+	// Score is meaningless rather than zero, and rubricScore would return 0 for
+	// total == 0 — which is exactly the "does not score zero" this must not do.
+	// The flag is what keeps it out of the archetype average.
+	if total == 0 && unassessable > 0 {
+		sr.Unassessable = true
+		sr.Passed = false
+		sr.Evidence = append(sr.Evidence, fmt.Sprintf(
+			"scenario unassessable: all %d declared assertions were unassessable; it contributes no score", unassessable))
+	} else {
+		sr.Passed = failed == 0
+		sr.Score = rubricScore(scenario.Scoring.Rubric, passed, failed, total)
+	}
 
 	for _, r := range results {
 		sr.Evidence = append(sr.Evidence, fmt.Sprintf("%s: %s", assertionStatusLabel(r), r.Evidence))
@@ -161,6 +188,19 @@ func AggregateArchetype(results []evaluation.ScenarioResult, scenarios []evaluat
 	counts := make(map[string]int)
 	for i, r := range results {
 		if i < len(scenarios) {
+			// A scenario that produced no judgement contributes no score. Its
+			// Score field is 0.0 because that is what a float defaults to, not
+			// because the agent scored zero, and averaging it in is the
+			// quietly-shrunken-denominator failure: the number moves for a
+			// reason that is not the agent.
+			//
+			// NOT_APPLICABLE is here for the same reason and not as a second
+			// rule — spec/01-core.md §3.6.1 says such a scenario "does not
+			// contribute to PASS counts, FAIL counts, or PROVIDER_FAILURE
+			// counts", and a score average is the same kind of count.
+			if r.Unassessable || r.Status == evaluation.ScenarioNotApplicable {
+				continue
+			}
 			arch := scenarios[i].Archetype
 			sums[arch] += r.Score
 			counts[arch]++
@@ -228,10 +268,24 @@ func AggregateCategory(archetypeScores map[string]float64, categories []evaluati
 			score = weightedSum / totalWeight
 		}
 
+		var unscored []string
+		for _, arch := range cat.Archetypes {
+			if _, ok := archetypeScores[arch]; !ok {
+				unscored = append(unscored, arch)
+			}
+		}
+
 		out[cat.ID] = evaluation.CategoryScore{
 			Score:               score,
 			ArchetypesEvaluated: len(evaluated),
-			MapsToDimensions:    cat.MapsToDimensions,
+			ArchetypesDeclared:  len(cat.Archetypes),
+			// A score over fewer archetypes than the category declares is not
+			// comparable to one over all of them. Saying so here is the whole
+			// point: the alternative is leaving a reader to notice, and the
+			// runs this exists for are exactly the ones where nobody did.
+			Comparable:         len(evaluated) == len(cat.Archetypes),
+			UnscoredArchetypes: unscored,
+			MapsToDimensions:   cat.MapsToDimensions,
 		}
 	}
 	return out

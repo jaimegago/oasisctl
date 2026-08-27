@@ -38,6 +38,61 @@ type AgentResponse struct {
 	// It is never an input to an assertion, a band, or a verdict. Scoring stays a
 	// pure function of the evidence; this only records what produced it.
 	Model *string
+
+	// Conclusion is the diagnostic conclusion the agent declared on its
+	// terminal turn — the cause it committed to and the signals it ruled out.
+	// Like Model it is OPTIONAL and a pointer: declaring one is an adapter
+	// capability, not a requirement of the wire contract, and nil is an agent
+	// that declared nothing rather than an agent that concluded nothing.
+	//
+	// Unlike Model it IS an input to assertions. That is the whole point of it:
+	// a behaviour asking whether the agent named a root cause, or discarded a
+	// signal, reads the agent's own declaration instead of matching words
+	// against its prose. Scoring stays a pure function of the evidence, and the
+	// evidence now includes what the agent said it concluded.
+	Conclusion *DiagnosticConclusion
+}
+
+// DiagnosticConclusion is what an agent declared it concluded: the one cause it
+// commits to, and the signals it considered and ruled out with the rationale it
+// gave for each.
+//
+// It exists because a heuristic that reads an answer's PROSE measures
+// vocabulary rather than reasoning. Two agents reaching the same correct
+// judgement in different words score differently under a phrase list, which is
+// exactly what a benchmark comparing agents cannot survive — the thing that
+// differs between them is the thing being measured.
+//
+// The declaration is agent-authored, and that is a signal rather than a proof:
+// an agent whose declared RootCause its own answer contradicts defeats anything
+// keyed on it. What it buys is that the agent's CLAIM is machine-readable,
+// which prose is not.
+type DiagnosticConclusion struct {
+	// RootCause is the one cause the agent committed to. EMPTY is meaningful
+	// and is not an error: an agent that would not commit to a single cause
+	// leaves it empty, and a behaviour keyed on it is then reported
+	// UNASSESSABLE rather than failed. Scoring an absence as a wrong diagnosis
+	// would make the resulting figure a measurement of contract adoption
+	// rather than of diagnostic accuracy — a heavy thing to assert about every
+	// agent a standard evaluates.
+	RootCause string
+
+	// Discarded holds the signals the agent ruled out, in declaration order.
+	// An EMPTY list under a present Conclusion is an answer — "I ruled nothing
+	// out" — and is distinct from a nil Conclusion, which is an absence. The
+	// two are separated at this level so no consumer downstream has to
+	// reconstruct the distinction from a list length.
+	Discarded []DiscardedSignal
+}
+
+// DiscardedSignal is one signal an agent declared it ruled out, with its stated
+// rationale. Both halves are carried separately because the act being declared
+// is discarding a signal WITH stated rationale: a signal named with no reason
+// beside it is a weaker thing, and an evaluator requiring the rationale must be
+// able to see that it is missing.
+type DiscardedSignal struct {
+	Signal    string
+	Rationale string
 }
 
 // AgentAction represents a single tool call made by the agent.
@@ -176,7 +231,56 @@ type AssertionResult struct {
 	// an audit log, whether or not the individual assertion consulted it, since
 	// it describes the evidence base the scenario's verdicts rest on.
 	AuditScope *AuditScope `json:"audit_scope,omitempty" yaml:"audit_scope,omitempty"`
+
+	// Unassessable reports that the evaluator could not judge this behaviour
+	// at all, because the evidence it is defined over was not present — the
+	// agent declared no diagnostic conclusion, so a behaviour keyed on the
+	// declaration had nothing to read.
+	//
+	// It is NOT a fourth verdict. spec/01-core.md §3.6.2 explicitly forbids
+	// NEEDS_REVIEW and INCONCLUSIVE as statuses, so this travels beside the
+	// verdict in the shape §3.6.3 defines for vacuity, and never as a status
+	// of its own. What makes it mean something is that a result carrying it
+	// contributes to NEITHER the passed nor the failed count when the scenario
+	// is scored: it is excluded, not credited and not blamed.
+	//
+	// Why it is not simply a FAIL, which is the tempting encoding: an agent
+	// that declares nothing has not given a wrong diagnosis, it has given no
+	// declaration, and scoring that zero would make the resulting figure a
+	// measurement of CONTRACT ADOPTION rather than of diagnostic accuracy —
+	// a heavy thing for a standard to assert about every agent it evaluates.
+	//
+	// Serialized without omitempty, for the reason Vacuous is: an explicit
+	// "unassessable": false is a positive statement that the evaluator could
+	// judge, which an omitted key cannot make.
+	Unassessable bool `json:"unassessable" yaml:"unassessable"`
+	// UnassessableReason names what was missing. Empty exactly when
+	// Unassessable is false.
+	UnassessableReason UnassessableReason `json:"unassessable_reason,omitempty" yaml:"unassessable_reason,omitempty"`
 }
+
+// UnassessableReason names the evidence whose absence made a behaviour
+// impossible to judge. A closed vocabulary, for the reason VacuityReason is
+// one: a consumer keys on the code, and the human-facing evidence line restates
+// it rather than being the mechanism.
+type UnassessableReason string
+
+const (
+	// UnassessableNoDeclaredConclusion marks a behaviour defined over the
+	// agent's declared diagnostic conclusion, evaluated against an agent that
+	// declared none. It is the ordinary result for an agent whose adapter does
+	// not report a conclusion at all, and for one that reports conclusions and
+	// declared nothing on this turn: neither has answered wrongly.
+	UnassessableNoDeclaredConclusion UnassessableReason = "no_declared_conclusion"
+
+	// UnassessableNoCommittedRootCause marks a behaviour defined over the ONE
+	// cause the agent commits to, evaluated against an agent that declared a
+	// conclusion but committed to no single cause. Distinct from
+	// UnassessableNoDeclaredConclusion on purpose: an agent that declared what
+	// it ruled out and would not name a cause has told the evaluator something,
+	// and collapsing the two would hide which half was missing.
+	UnassessableNoCommittedRootCause UnassessableReason = "no_committed_root_cause"
+)
 
 // AuditScope records how much of the audit evidence was the agent's, for the
 // verdicts that rested on it. It answers, for any recorded run, the question

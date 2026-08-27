@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -822,4 +823,75 @@ func TestFetchVersionFromStatus_Unreachable(t *testing.T) {
 	if got != "" {
 		t.Errorf("expected empty version on unreachable host, got %q", got)
 	}
+}
+
+// TestTranslateResponse_DeclaredConclusion pins the adapter's link in the pipe
+// the declared conclusion travels from joe to the evaluator (joe D-0159). The
+// adapter is a translator: what joe declared must arrive unchanged, and the
+// three states joe can be in must stay three.
+func TestTranslateResponse_DeclaredConclusion(t *testing.T) {
+	t.Run("a declaration is carried through with its discards", func(t *testing.T) {
+		body := `{
+          "steps": [],
+          "final_answer": "user-service is OOM killed",
+          "root_cause": "a memory leak exhausting the memory limit",
+          "discarded": [
+            {"signal": "node-1 CPU at 97%", "rationale": "it is the batch workload's"},
+            {"signal": "the recent deploy", "rationale": "it predates the restarts"}
+          ],
+          "conclusion_declared": true
+        }`
+		got := translateResponse(decodeJoe(t, body))
+
+		if got.RootCause != "a memory leak exhausting the memory limit" {
+			t.Errorf("RootCause = %q", got.RootCause)
+		}
+		if !got.ConclusionDeclared {
+			t.Error("ConclusionDeclared = false, want true")
+		}
+		if len(got.Discarded) != 2 {
+			t.Fatalf("Discarded = %+v, want two entries", got.Discarded)
+		}
+		if got.Discarded[0].Signal != "node-1 CPU at 97%" || got.Discarded[0].Rationale != "it is the batch workload's" {
+			t.Errorf("Discarded[0] = %+v", got.Discarded[0])
+		}
+		// Declaration order is the agent's and is not sorted or deduplicated.
+		if got.Discarded[1].Signal != "the recent deploy" {
+			t.Errorf("Discarded[1] = %+v; declaration order must survive", got.Discarded[1])
+		}
+	})
+
+	t.Run("discarded is always a list on the wire, never null", func(t *testing.T) {
+		for name, body := range map[string]string{
+			"declared with nothing discarded": `{"steps":[],"final_answer":"f","root_cause":"an OOM kill","discarded":[],"conclusion_declared":true}`,
+			"an older joe that declares none": `{"steps":[],"final_answer":"f"}`,
+		} {
+			t.Run(name, func(t *testing.T) {
+				got := translateResponse(decodeJoe(t, body))
+				if got.Discarded == nil {
+					t.Fatal("Discarded is nil; the field must reach oasisctl as [] and never as null")
+				}
+				encoded, err := json.Marshal(got)
+				if err != nil {
+					t.Fatalf("marshal: %v", err)
+				}
+				if !bytes.Contains(encoded, []byte(`"discarded":[]`)) {
+					t.Errorf(`serialized response does not carry "discarded":[]; got %s`, encoded)
+				}
+			})
+		}
+	})
+
+	// An older joe sends none of the three fields. That is an agent which
+	// declares nothing, which is the truth about it rather than a defect, and
+	// the evaluator reports its diagnostic behaviours unassessable.
+	t.Run("an older joe declares nothing and translates cleanly", func(t *testing.T) {
+		got := translateResponse(decodeJoe(t, `{"steps":[],"final_answer":"f"}`))
+		if got.ConclusionDeclared {
+			t.Error("ConclusionDeclared = true for a joe that sent no such field")
+		}
+		if got.RootCause != "" {
+			t.Errorf("RootCause = %q, want empty", got.RootCause)
+		}
+	})
 }

@@ -56,6 +56,17 @@ type agentResponseBody struct {
 	// not reporting one — field absent, field empty — arrive here identically
 	// and are collapsed to a nil *string exactly once, below.
 	Model string `json:"model"`
+	// RootCause, Discarded and ConclusionDeclared are the diagnostic
+	// conclusion an adapter may report for the execution. Declaring one is an
+	// adapter CAPABILITY like Model: an adapter that sends none of them leaves
+	// all three at their zero values, which collapse to a nil Conclusion below
+	// and are reported as an absence rather than scored.
+	RootCause string `json:"root_cause"`
+	Discarded []struct {
+		Signal    string `json:"signal"`
+		Rationale string `json:"rationale"`
+	} `json:"discarded"`
+	ConclusionDeclared bool `json:"conclusion_declared"`
 }
 
 // Execute sends a request to the agent and returns its response.
@@ -108,6 +119,27 @@ func (c *HTTPClient) Execute(ctx context.Context, req evaluation.AgentRequest) (
 	if respBody.Model != "" {
 		model := respBody.Model
 		agentResp.Model = &model
+	}
+	// The one place a reported conclusion becomes an optional value. An adapter
+	// that declares nothing yields nil, which every behaviour keyed on the
+	// declaration reports as UNASSESSABLE — never as a wrong diagnosis.
+	//
+	// The gate is ConclusionDeclared and NOT the emptiness of the fields, which
+	// is the whole point of the flag travelling separately: an agent that
+	// declared a conclusion and ruled nothing out has answered, and an agent
+	// that declared nothing has not, and both arrive here with an empty list.
+	if respBody.ConclusionDeclared || respBody.RootCause != "" || len(respBody.Discarded) > 0 {
+		conclusion := &evaluation.DiagnosticConclusion{
+			RootCause: respBody.RootCause,
+			Discarded: make([]evaluation.DiscardedSignal, 0, len(respBody.Discarded)),
+		}
+		for _, d := range respBody.Discarded {
+			conclusion.Discarded = append(conclusion.Discarded, evaluation.DiscardedSignal{
+				Signal:    d.Signal,
+				Rationale: d.Rationale,
+			})
+		}
+		agentResp.Conclusion = conclusion
 	}
 	for _, a := range respBody.Actions {
 		agentResp.Actions = append(agentResp.Actions, evaluation.AgentAction{

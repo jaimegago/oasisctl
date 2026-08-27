@@ -52,6 +52,53 @@ type EvidenceArtifact struct {
 	// Only RecordAssertionVacuity moves the field off null, so the distinction
 	// cannot be produced by accident.
 	VacuousAssertions []EvidenceVacuity `json:"vacuous_assertions"`
+
+	// DeclaredConclusion is the diagnostic conclusion the agent declared on its
+	// terminal turn: the cause it committed to, and the signals it ruled out
+	// with the rationale it gave for each.
+	//
+	// It is in the artifact because the artifact must replay the evaluation as
+	// a pure function (spec/05-reporting.md §1.2), and behaviours in the
+	// diagnostic-accuracy category are now decided from the declaration rather
+	// than from the answer's prose. An artifact that dropped it could not
+	// reproduce its own verdicts.
+	//
+	// A pointer serialized WITHOUT omitempty, so the three states stay
+	// distinct on disk exactly as they are in memory:
+	//
+	//   null           — the agent declared no conclusion. Behaviours keyed on
+	//                    it are reported unassessable, never scored zero.
+	//   {..., []}      — the agent declared a conclusion and ruled nothing out.
+	//                    That is an ANSWER, and it can fail an assertion.
+	//   {..., [...]}   — the agent declared a conclusion and what it ruled out.
+	//
+	// The first and second are the distinction the whole mechanism rests on,
+	// and a JSON null is what keeps them apart in a file a later reader scores
+	// from.
+	DeclaredConclusion *EvidenceConclusion `json:"declared_conclusion"`
+}
+
+// EvidenceConclusion is the artifact's record of a declared diagnostic
+// conclusion.
+type EvidenceConclusion struct {
+	// RootCause is the one cause the agent committed to. Empty is meaningful:
+	// an agent that declared discards but would commit to no single cause is a
+	// real, reportable state, and a behaviour keyed on the root cause is
+	// unassessable for it.
+	RootCause string `json:"root_cause"`
+	// Discarded is serialized without omitempty for the same reason the outer
+	// pointer is: `[]` says the agent ruled nothing out, and an absent field
+	// would not distinguish that from the agent having declared nothing.
+	Discarded []EvidenceDiscardedSignal `json:"discarded"`
+}
+
+// EvidenceDiscardedSignal is one signal the agent declared it ruled out, with
+// the rationale it gave. The rationale is held separately rather than folded
+// into the signal because the act being declared is discarding a signal WITH
+// stated rationale — a scorer that requires one must be able to see it missing.
+type EvidenceDiscardedSignal struct {
+	Signal    string `json:"signal"`
+	Rationale string `json:"rationale"`
 }
 
 // EvidenceVacuity is one assertion whose PASS rested on an absence, named in
@@ -125,6 +172,21 @@ func BuildEvidenceArtifact(
 	if resp != nil {
 		artifact.FinalAnswer = resp.FinalAnswer
 		artifact.ReasoningTrace = resp.Reasoning
+		if c := resp.Conclusion; c != nil {
+			declared := &EvidenceConclusion{
+				RootCause: c.RootCause,
+				// Non-nil unconditionally: `[]` and null mean different things
+				// here, and only one of them is "ruled nothing out".
+				Discarded: make([]EvidenceDiscardedSignal, 0, len(c.Discarded)),
+			}
+			for _, d := range c.Discarded {
+				declared.Discarded = append(declared.Discarded, EvidenceDiscardedSignal{
+					Signal:    d.Signal,
+					Rationale: d.Rationale,
+				})
+			}
+			artifact.DeclaredConclusion = declared
+		}
 		for _, a := range resp.Actions {
 			artifact.Actions = append(artifact.Actions, EvidenceAction{
 				ID:         a.ID,

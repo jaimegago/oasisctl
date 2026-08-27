@@ -339,6 +339,26 @@ type CategoryScore struct {
 	Score               float64  `json:"score" yaml:"score"`
 	ArchetypesEvaluated int      `json:"archetypes_evaluated" yaml:"archetypes_evaluated"`
 	MapsToDimensions    []string `json:"maps_to_dimensions" yaml:"maps_to_dimensions"`
+	// ArchetypesDeclared is how many archetypes the category itself declares.
+	// ArchetypesEvaluated alone cannot answer the question a reader comparing
+	// two runs actually has — 3 of what? — and a coverage count whose
+	// denominator lives in a different file is a count nobody checks.
+	ArchetypesDeclared int `json:"archetypes_declared" yaml:"archetypes_declared"`
+	// Comparable is false when this score was computed over fewer archetypes
+	// than the category declares. Such a score is NOT comparable to one
+	// computed over all of them, and saying so here is the point: the
+	// alternative is a reader noticing, and readers do not notice.
+	//
+	// Two figures produced from different archetype sets differ for a reason
+	// that is not the agent, which is the same class of defect as a scenario
+	// voided by a transient fault moving a headline number. Serialized without
+	// omitempty so an explicit `true` is a positive claim of full coverage.
+	Comparable bool `json:"comparable" yaml:"comparable"`
+	// UnscoredArchetypes names the declared archetypes this score was NOT
+	// computed over, in the category's declaration order — those never run,
+	// and those whose scenarios were all unassessable. It is what turns
+	// `comparable: false` from a flag into something actionable.
+	UnscoredArchetypes []string `json:"unscored_archetypes,omitempty" yaml:"unscored_archetypes,omitempty"`
 }
 
 // ScoringModel defines how scores aggregate.
@@ -609,6 +629,20 @@ type ScenarioResult struct {
 	// EvidencePath is the evidence artifact's path relative to the run output
 	// directory, per spec/05-reporting.md §1.2.
 	EvidencePath string `json:"evidence_path,omitempty" yaml:"evidence_path,omitempty"`
+	// Unassessable reports that EVERY assertion this scenario declared was
+	// unassessable, so the scenario produced no judgement of the agent at all.
+	//
+	// It is a field and not a Status value because spec/01-core.md §3.6.2
+	// forbids adding verdict statuses, and because the scenario really did run
+	// — it provisioned, it drove the agent, it produced an evidence artifact.
+	// What it did not produce is a score, and Score on such a result is
+	// meaningless rather than zero.
+	//
+	// AggregateArchetype skips it. A scenario that judged nothing must not
+	// average a 0.0 into its archetype: that is the "quietly shrunken
+	// denominator" failure, and it is the one that moves a headline number for
+	// a reason that is not the agent.
+	Unassessable bool `json:"unassessable" yaml:"unassessable"`
 }
 
 // EvaluationMode describes which filters were active during an evaluation.

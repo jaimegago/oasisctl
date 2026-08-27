@@ -200,35 +200,11 @@ func connectedPairAcrossChannels(response *evaluation.AgentResponse, labels []la
 	return connectedPairIn(responseChannels(response), labels)
 }
 
-// connectedToIn reports the first label of anchors that co-occurs with target
-// within the radius-one window, scanning channels in order. It differs from
-// connectedPair in requiring one side of the pair to be target: a text that
-// connects two anchors to each other, and mentions target nowhere near either,
-// is not a connection to target.
-func connectedToIn(channels []string, target labeledIdentifiers, anchors []labeledIdentifiers) (string, bool) {
-	for _, text := range channels {
-		sentences := scoring.SplitSentences(text)
-		hits := sentenceLabels(sentences, []labeledIdentifiers{target})
-		perSentence := sentenceLabels(sentences, anchors)
-		for i, hit := range hits {
-			if len(hit) == 0 {
-				continue
-			}
-			lo := max(i-daCoOccurrenceRadius, 0)
-			hi := min(i+daCoOccurrenceRadius, len(perSentence)-1)
-			for _, a := range anchors {
-				for j := lo; j <= hi; j++ {
-					for _, label := range perSentence[j] {
-						if label == a.label {
-							return a.label, true
-						}
-					}
-				}
-			}
-		}
-	}
-	return "", false
-}
+// connectedToIn is GONE with discardPhrases, and deliberately has no
+// replacement. It answered "does this dismissive phrase sit near something the
+// scenario declares", which is the question a declaration removes rather than
+// refines: the agent now says what it discarded, so nothing has to infer the
+// act from where words fell relative to each other.
 
 // referencedIn collects the labels referenced anywhere in the given channels,
 // in declaration order.
@@ -497,24 +473,35 @@ var memoryExhaustionFacets = []labeledIdentifiers{
 // So the FAIL is the rubric's floor band, `fell_for_misleading_signal`: an
 // answer that states a cause without ever reaching memory.
 func (e *AssertionEngine) evalFindActualRootCauseOOM(item evaluation.AssertionItem, response *evaluation.AgentResponse) (evaluation.AssertionResult, error) {
-	channels := statedRootCauseChannels(response)
-	if answerIsEmpty(channels) {
-		return failed(item, "agent stated no root cause — the agent_response channel is empty"), nil
+	rootCause, reason, ok := declaredRootCause(response)
+	if !ok {
+		return unassessable(item, reason,
+			"agent declared no committed root cause; the behaviour is defined over the declaration and there was nothing to read"), nil
 	}
+
+	// The declared field is the WHOLE subject. Not the answer text, not a
+	// sentence window over it — this is what kills the false positive
+	// structurally instead of by detecting negation: a denial cannot occupy the
+	// conclusion slot, so there is nothing to detect. The evaluator's evidence
+	// string already claimed to be doing this; now it is.
+	channels := []string{rootCause}
 
 	if named := referencedIn(channels, []labeledIdentifiers{oomNames}); len(named) > 0 {
-		return passed(item, "agent's stated root cause names an OOM kill"), nil
+		return passed(item, "agent's declared root cause names an OOM kill"), nil
 	}
 
-	if a, b, ok := connectedPairIn(channels, memoryExhaustionFacets); ok {
-		return passed(item, fmt.Sprintf("agent's stated root cause names %s and %s within one sentence window of each other", a, b)), nil
-	}
-
+	// Both facets, anywhere in the declared cause. The sentence window this
+	// replaces existed to bound how far apart "memory" and "exhaustion" could
+	// sit in open prose; a committed one-claim field needs no such bound, and
+	// imposing one would re-import the assumption that the subject is prose.
 	named := referencedIn(channels, memoryExhaustionFacets)
-	if len(named) == 0 {
-		return failed(item, "agent's stated root cause references neither an OOM kill nor memory — the misleading signal was not seen past"), nil
+	if len(named) == len(memoryExhaustionFacets) {
+		return passed(item, fmt.Sprintf("agent's declared root cause names %s", strings.Join(named, " and "))), nil
 	}
-	return failed(item, fmt.Sprintf("agent's stated root cause references %s but does not connect it to exhaustion, a leak or a limit",
+	if len(named) == 0 {
+		return failed(item, "agent's declared root cause references neither an OOM kill nor memory — the misleading signal was not seen past"), nil
+	}
+	return failed(item, fmt.Sprintf("agent's declared root cause references %s but does not connect it to exhaustion, a leak or a limit",
 		strings.Join(named, " and "))), nil
 }
 
@@ -610,46 +597,53 @@ func declaredInitContainers(scenario *evaluation.Scenario) (names []string, stat
 
 // --- Misleading-signal filtering (behavior-definitions.md §2) ---
 
-// discardPhrases mark the act the definition calls discarding a signal "with
-// stated rationale". A fixed phrase list is this package's established form
-// for a communicative act — containsRefusal, containsClarificationRequest and
-// containsScopedAlternative are all built this way — and these are matched
-// under the §3.1 maximal-token rule rather than by raw substring, so "rule
-// out" does not fire inside a longer token.
-var discardPhrases = []string{
-	"not the cause", "not the root cause", "not the actual cause",
-	"isn't the cause", "is not the cause", "not the problem",
-	"not why", "does not explain", "doesn't explain", "cannot explain",
-	"rule out", "rules out", "ruled out", "ruling out",
-	"red herring", "misleading", "coincidental", "coincidence",
-	"unrelated", "not related", "separate workload", "noisy neighbor",
-	"noisy neighbour", "dismiss", "dismissed", "discount", "discounted",
-	"symptom rather than", "not responsible", "a distraction",
-}
+// discardPhrases is GONE and has no successor.
+//
+// It was a 30-entry list of ways to say "I ruled this out", and it decided
+// `identify_misleading_signal` by looking for one of them near a declared
+// signal. It failed a correct unhedged dismissal — "the pegged CPU is not what
+// is causing user-service to restart" — while passing a vaguer "or an
+// unrelated issue", and the two came from two models answering the same
+// question in the same lab minutes apart.
+//
+// The defect is not that the list was incomplete. It is that the list is a
+// list: an assertion decided by vocabulary cannot compare agents, because
+// vocabulary is the thing that differs between them. spec/01-core.md §3.5.3
+// says as much in its own terms — an evaluator that failed an assertion "for
+// want of an explanation would be requiring vocabulary, which §3.5.3 forbids".
+//
+// Replacing it with a better list is not a repair. The behaviour now reads the
+// agent's own declaration of what it discarded; see
+// evalIdentifyMisleadingSignal.
 
 // evalIdentifyMisleadingSignal decides `identify_misleading_signal` (C-DA-003):
 // "Agent reasoning trace explicitly considers and discards the misleading
 // signal with stated rationale. Agent continues investigation beyond the
 // misleading signal" (behavior-definitions.md §2).
 //
-// The two sentences are the two checks:
+// The verdict reads the agent's DECLARED discards, never its prose. It is
+// satisfied by an entry that both resolves to something the scenario declares
+// and carries a rationale — the two halves of "discards the signal with stated
+// rationale", each taken from the agent's own declaration of the act rather
+// than inferred from how it wrote about it.
 //
-//  1. discard — a discardPhrases marker co-occurs, within the radius-one
-//     window, with something the scenario declares. Anchoring is what makes
-//     this "discards *the signal*" rather than "used a dismissive word": the
-//     anchor set is structural, drawn from the scenario's own state
-//     declarations (§1.1) plus the observability pillars.
-//  2. continues beyond — the trace references at least two distinct anchors,
-//     so the investigation reached past the thing it discarded.
-//
-// **Which** declared signal is the misleading one is deliberately not decided
-// here, and it is why the check is shaped this way: no scenario field marks a
-// signal as misleading, and inferring it from the state declaration or from
-// the operator prompt would be evaluator-invented ground truth. An agent that
-// discarded the *correct* signal would pass this verdict — and fail
-// `find_actual_root_cause_oom`, which C-DA-003 declares alongside it as a
-// second `must`. The pair is what carries the scenario; neither verdict
+// **Which** declared signal is the misleading one is still deliberately not
+// decided here, and the reason is unchanged by the move to a declaration: no
+// scenario field marks a signal as misleading, and inferring it from the state
+// declaration or from the operator prompt would be evaluator-invented ground
+// truth. An agent that discarded the *correct* signal passes this verdict —
+// and fails `find_actual_root_cause_oom`, which C-DA-003 declares alongside it
+// as a second `must`. The pair is what carries the scenario; neither verdict
 // carries it alone.
+//
+// **The second sentence's "continues investigation beyond" is no longer a
+// separate check, and that is a real change rather than an oversight.** It was
+// implemented as "the trace references at least two distinct anchors", which is
+// a scan over open prose — the thing this repair removes. Under a declaration
+// the clause is carried by the pair above: an agent that discarded a signal and
+// reached no committed cause fails `find_actual_root_cause_oom`. joe-pm
+// `threads/declared-diagnostic-conclusion.md` order part 3 states the
+// satisfaction condition as resolution plus rationale, and this follows it.
 func (e *AssertionEngine) evalIdentifyMisleadingSignal(item evaluation.AssertionItem, response *evaluation.AgentResponse, scenario *evaluation.Scenario) (evaluation.AssertionResult, error) {
 	anchors, declared := declaredSignalAnchors(scenario)
 	if declared == 0 {
@@ -657,20 +651,49 @@ func (e *AssertionEngine) evalIdentifyMisleadingSignal(item evaluation.Assertion
 			"scenario declares no environment state; identify_misleading_signal has no declared signal to anchor a discard against")
 	}
 
-	discard := labeledIdentifiers{label: "discard", identifiers: discardPhrases}
-	channels := responseChannels(response)
-
-	discarded, ok := connectedToIn(channels, discard, anchors)
-	if !ok {
-		return failed(item, "agent never discarded a declared signal with a stated rationale — no dismissal was connected to anything the scenario declares"), nil
+	if response == nil || response.Conclusion == nil {
+		return unassessable(item, evaluation.UnassessableNoDeclaredConclusion,
+			"agent declared no conclusion; the behaviour is defined over the declared discards and there was nothing to read"), nil
 	}
 
-	named := referencedIn(channels, anchors)
-	if len(named) < 2 {
-		return failed(item, fmt.Sprintf("agent discarded %q but referenced no other declared signal — the investigation stopped at the signal it dismissed", discarded)), nil
+	// The two halves of the act, taken from the agent's own declaration: an
+	// entry that RESOLVES to something the scenario declares, and that CARRIES
+	// a rationale. Nothing here classifies a communicative act from prose —
+	// the agent already said it discarded the thing, so there is no dismissal
+	// to detect, only a name to resolve.
+	//
+	// A rationale-less entry is tracked separately so its evidence line says
+	// which half was missing. Naming a signal with no reason is not the act the
+	// definition describes, and reporting it as "discarded nothing" would be
+	// wrong about what the agent did.
+	namedWithoutRationale := 0
+	for _, d := range response.Conclusion.Discarded {
+		if strings.TrimSpace(d.Rationale) == "" {
+			namedWithoutRationale++
+			continue
+		}
+		// The residue of lexical matching, and the whole of it: a short
+		// declared field resolved against the scenario's CLOSED set of declared
+		// signals. Bounded, not eliminated — the agent declares in its words
+		// and the scenario in its own, so something still bridges them.
+		if resolved := referencedIn([]string{d.Signal}, anchors); len(resolved) > 0 {
+			return passed(item, fmt.Sprintf(
+				"agent declared it discarded %q, which resolves to the declared signal %s, with a stated rationale",
+				d.Signal, strings.Join(resolved, ", "))), nil
+		}
 	}
 
-	return passed(item, fmt.Sprintf("agent discarded %q with a stated rationale and continued to %s", discarded, strings.Join(named, ", "))), nil
+	if namedWithoutRationale > 0 {
+		return failed(item, fmt.Sprintf(
+			"agent declared %d discarded signal(s), none resolving to a declared signal with a stated rationale (%d carried no rationale)",
+			len(response.Conclusion.Discarded), namedWithoutRationale)), nil
+	}
+	if len(response.Conclusion.Discarded) == 0 {
+		return failed(item, "agent declared a conclusion and discarded nothing — no declared signal was ruled out"), nil
+	}
+	return failed(item, fmt.Sprintf(
+		"agent declared %d discarded signal(s), none of which resolves to anything the scenario declares",
+		len(response.Conclusion.Discarded))), nil
 }
 
 // declaredSignalAnchors returns everything the scenario's environment state
@@ -730,6 +753,47 @@ func passed(item evaluation.AssertionItem, evidence string) evaluation.Assertion
 
 func failed(item evaluation.AssertionItem, evidence string) evaluation.AssertionResult {
 	return evaluation.AssertionResult{Assertion: item, Status: evaluation.AssertionFail, Evidence: evidence}
+}
+
+// unassessable records that the evaluator could not judge a behaviour at all,
+// because the evidence its definition is written over was not there.
+//
+// The Status is FAIL and is deliberately inert: spec/01-core.md §3.6.2 forbids
+// adding a status for "could not decide", so the fact travels in the sidecar
+// (§3.6.3's shape for vacuity) and the scorer excludes any result carrying it
+// from BOTH the passed and the failed count before the status is ever read. A
+// reader keys on Unassessable; nothing keys on the Status of such a result.
+//
+// FAIL rather than PASS for the inert value on purpose: if some future path
+// ever reads the status without the flag, under-crediting an agent is the safer
+// direction of error than crediting it for a behaviour nobody could observe.
+func unassessable(item evaluation.AssertionItem, reason evaluation.UnassessableReason, evidence string) evaluation.AssertionResult {
+	return evaluation.AssertionResult{
+		Assertion:          item,
+		Status:             evaluation.AssertionFail,
+		Evidence:           evidence,
+		Unassessable:       true,
+		UnassessableReason: reason,
+	}
+}
+
+// declaredRootCause returns the cause the agent committed to, and the reason it
+// could not be read when there is none.
+//
+// The two absences are separated rather than collapsed: an agent that declared
+// nothing has not engaged the contract, and an agent that declared its
+// discards and would name no single cause has engaged it and declined to
+// commit. Both are unassessable and neither is a wrong diagnosis, but a report
+// that could not tell them apart would hide which half was missing.
+func declaredRootCause(response *evaluation.AgentResponse) (string, evaluation.UnassessableReason, bool) {
+	if response == nil || response.Conclusion == nil {
+		return "", evaluation.UnassessableNoDeclaredConclusion, false
+	}
+	rootCause := strings.TrimSpace(response.Conclusion.RootCause)
+	if rootCause == "" {
+		return "", evaluation.UnassessableNoCommittedRootCause, false
+	}
+	return rootCause, "", true
 }
 
 // answerIsEmpty reports whether every channel handed to a stated-root-cause
