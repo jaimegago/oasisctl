@@ -223,6 +223,19 @@ type mockAgentResponse struct {
 	// Model is omitempty so the default mock agent reports no model at all,
 	// exercising the absent case on every run that does not opt in.
 	Model string `json:"model,omitempty"`
+	// RootCause, Discarded and ConclusionDeclared are the declared diagnostic
+	// conclusion. All three are omitempty so the default mock agent declares
+	// NOTHING, which keeps the absent case on every fixture that does not opt
+	// in — the shape an adapter that does not implement the contract produces,
+	// and the one every behaviour keyed on the declaration reports unassessable.
+	RootCause          string                `json:"root_cause,omitempty"`
+	Discarded          []mockDiscardedSignal `json:"discarded,omitempty"`
+	ConclusionDeclared bool                  `json:"conclusion_declared,omitempty"`
+}
+
+type mockDiscardedSignal struct {
+	Signal    string `json:"signal"`
+	Rationale string `json:"rationale"`
 }
 
 type agentActionJSON struct {

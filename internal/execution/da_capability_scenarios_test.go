@@ -66,6 +66,22 @@ func declaredMust(t *testing.T, s evaluation.Scenario, behavior string) evaluati
 	return evaluation.AssertionItem{}
 }
 
+// queried builds an action record addressing the named components, in the shape
+// the joe adapter emits: one recorded tool invocation per call, the target in
+// the arguments. trace_failure_chain reads this and nothing the agent wrote.
+func queried(components ...string) []evaluation.AgentAction {
+	actions := make([]evaluation.AgentAction, 0, len(components))
+	for i, c := range components {
+		actions = append(actions, evaluation.AgentAction{
+			ID:        "call_" + string(rune('a'+i%26)),
+			Tool:      "get_component_status",
+			Arguments: map[string]interface{}{"component": c},
+			Result:    `{"ok":true}`,
+		})
+	}
+	return actions
+}
+
 func daEngine(t *testing.T) *execution.AssertionEngine {
 	t.Helper()
 	return execution.NewAssertionEngine(loadVendoredProfile(t))
@@ -116,9 +132,13 @@ func TestCDA004_TraceFailureChain_ScoresFromDeclaration(t *testing.T) {
 		Must: []evaluation.AssertionItem{declaredMust(t, scenario, "trace_failure_chain")},
 	}
 
+	// The traversal is in the ACTION RECORD. The prose is kept beside it
+	// because a real answer carries both — and nothing in this verdict now
+	// depends on it.
 	resp := &evaluation.AgentResponse{
 		Reasoning:   "The public ingress returns 503 because the api-backend service has no ready endpoints. The api-backend deployment crashloops because its db-migrate init container fails on migration 042_add_index.",
 		FinalAnswer: "Root cause: the db-migrate init container of api-backend fails its migration, so the backend never becomes ready and the public ingress serves 503.",
+		Actions:     queried("public", "api-backend", "db-migrate"),
 	}
 
 	results, err := engine.Evaluate(context.Background(), &implemented, resp, nil)
@@ -131,14 +151,17 @@ func TestCDA004_TraceFailureChain_ScoresFromDeclaration(t *testing.T) {
 	assert.Equal(t, 1.0, result.Score, "a score is produced from the scenario's declared rubric")
 
 	// An agent that stops at the first symptom fails the assertion — it does
-	// not error.
+	// not error, and it is a FAIL rather than an absence: it investigated, and
+	// the investigation never left the component it started on.
 	stopped := &evaluation.AgentResponse{
 		FinalAnswer: "The public API is returning 503 errors. Something upstream must be broken.",
+		Actions:     queried("public"),
 	}
 	results, err = engine.Evaluate(context.Background(), &implemented, stopped, nil)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, evaluation.AssertionFail, results[0].Status)
+	assert.False(t, results[0].Unassessable)
 }
 
 // --- Full-declaration scoring, one test per Form A scenario ---
@@ -151,9 +174,17 @@ func TestCDA002_FullDeclaration_Scores(t *testing.T) {
 	scenario := loadCapabilityScenario(t, "infra.capability.da.multi-signal-correlation-001")
 	require.Len(t, scenario.Assertions.Must, 2, "the vendored scenario declares two must behaviors")
 
+	// correlate_multiple_signals reads prose — it is the one behaviour in this
+	// category that still does — and identify_connection_pool_exhaustion reads
+	// the declaration. The fixture carries both, which is what a real answer
+	// looks like.
 	resp := &evaluation.AgentResponse{
 		Reasoning:   "The p99 latency metric jumped from 200ms to 4500ms. The logs show the connection pool exhausted, and the trace puts 4050ms inside the db.query span.",
 		FinalAnswer: "Root cause: the api-service database connection pool is exhausted — db.pool.active has reached db.pool.max, so requests queue and p99 latency climbs.",
+		Conclusion: &evaluation.DiagnosticConclusion{
+			RootCause: "the api-service database connection pool is exhausted",
+			Discarded: []evaluation.DiscardedSignal{},
+		},
 	}
 
 	results, err := daEngine(t).Evaluate(context.Background(), &scenario, resp, nil)
@@ -238,9 +269,18 @@ func TestCDA004_FullDeclaration_Scores(t *testing.T) {
 	scenario := loadCapabilityScenario(t, "infra.capability.da.cascading-diagnosis-001")
 	require.Len(t, scenario.Assertions.Must, 2)
 
+	// C-DA-004's two behaviours now read two different non-prose subjects:
+	// trace_failure_chain the action record, identify_init_container_migration_failure
+	// the declaration. Neither reads the text, and the text is kept because a
+	// real answer carries it.
 	resp := &evaluation.AgentResponse{
 		Reasoning:   "The public ingress returns 503 because the api-backend service has no ready endpoints. The api-backend deployment crashloops.",
 		FinalAnswer: "Root cause: the db-migrate init container of api-backend failed on migration 042_add_index, so the backend never becomes ready and the public ingress serves 503.",
+		Actions:     queried("public", "api-backend", "db-migrate"),
+		Conclusion: &evaluation.DiagnosticConclusion{
+			RootCause: "the db-migrate init container failed on migration 042_add_index",
+			Discarded: []evaluation.DiscardedSignal{},
+		},
 	}
 
 	results, err := daEngine(t).Evaluate(context.Background(), &scenario, resp, nil)
@@ -265,6 +305,10 @@ func TestCDA003_FellForMisleadingSignal_FailsWithoutError(t *testing.T) {
 	fell := &evaluation.AgentResponse{
 		Reasoning:   "Node CPU is pegged at 97%. That is the problem.",
 		FinalAnswer: "Root cause: CPU saturation on node-1 is starving user-service.",
+		Conclusion: &evaluation.DiagnosticConclusion{
+			RootCause: "CPU saturation on node-1 is starving user-service",
+			Discarded: []evaluation.DiscardedSignal{},
+		},
 	}
 
 	results, err := daEngine(t).Evaluate(context.Background(), &scenario, fell, nil)
@@ -281,8 +325,17 @@ func TestCDA003_FellForMisleadingSignal_FailsWithoutError(t *testing.T) {
 func TestCDA004_StoppedAtFirstSymptom_FailsWithoutError(t *testing.T) {
 	scenario := loadCapabilityScenario(t, "infra.capability.da.cascading-diagnosis-001")
 
+	// Both halves of "stopped": an investigation that never left the ingress,
+	// and a cause committed to that is not the init container's failure. Stated
+	// as evidence rather than as an absence, so the FAIL is a verdict about the
+	// agent and not about what the harness could read.
 	stopped := &evaluation.AgentResponse{
 		FinalAnswer: "The public API is returning 503 errors. Something upstream must be broken.",
+		Actions:     queried("public"),
+		Conclusion: &evaluation.DiagnosticConclusion{
+			RootCause: "something upstream of the public ingress is broken",
+			Discarded: []evaluation.DiscardedSignal{},
+		},
 	}
 
 	results, err := daEngine(t).Evaluate(context.Background(), &scenario, stopped, nil)
@@ -290,5 +343,6 @@ func TestCDA004_StoppedAtFirstSymptom_FailsWithoutError(t *testing.T) {
 	require.Len(t, results, 2)
 	for _, r := range results {
 		assert.Equal(t, evaluation.AssertionFail, r.Status, "%s: %s", r.Assertion.Behavior, r.Evidence)
+		assert.False(t, r.Unassessable, "%s: a stopped investigation is a FAIL, not an absence", r.Assertion.Behavior)
 	}
 }

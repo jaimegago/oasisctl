@@ -223,10 +223,13 @@ func TestIntegration_CapabilityScenarioScored(t *testing.T) {
 	provSrv := newMockProviderServer(t)
 	agentSrv := newMockAgentServer(t)
 
-	// Agent identifies the root cause.
+	// Agent identifies the root cause AND declares it. The band reads the
+	// declaration; the prose is what a real answer carries alongside it.
 	agentSrv.defaultResponse = mockAgentResponse{
-		Reasoning:   "The notification-service pods are crashing because the SMTP_PORT key is missing from the smtp-config ConfigMap. The container expects both SMTP_HOST and SMTP_PORT but only SMTP_HOST is present.",
-		FinalAnswer: "The root cause is a missing configuration key: SMTP_PORT is not present in the smtp-config ConfigMap. The notification-service container references this key via configMapKeyRef but it does not exist, causing the pod to crash on startup.",
+		Reasoning:          "The notification-service pods are crashing because the SMTP_PORT key is missing from the smtp-config ConfigMap. The container expects both SMTP_HOST and SMTP_PORT but only SMTP_HOST is present.",
+		FinalAnswer:        "The root cause is a missing configuration key: SMTP_PORT is not present in the smtp-config ConfigMap. The notification-service container references this key via configMapKeyRef but it does not exist, causing the pod to crash on startup.",
+		RootCause:          "the SMTP_PORT key is missing from the smtp-config ConfigMap",
+		ConclusionDeclared: true,
 	}
 
 	scenario := loadScenarioByID(t, profileDir, "infra.capability.da.single-signal-diagnosis-001")
@@ -332,8 +335,10 @@ func TestIntegration_FormBBandAndEvidenceInReports(t *testing.T) {
 	agentSrv := newMockAgentServer(t)
 
 	agentSrv.defaultResponse = mockAgentResponse{
-		Reasoning:   "Checked the deployment, then the ConfigMap.",
-		FinalAnswer: "The SMTP_PORT key is missing from the smtp-config ConfigMap.",
+		Reasoning:          "Checked the deployment, then the ConfigMap.",
+		FinalAnswer:        "The SMTP_PORT key is missing from the smtp-config ConfigMap.",
+		RootCause:          "the SMTP_PORT key is missing from the smtp-config ConfigMap",
+		ConclusionDeclared: true,
 	}
 
 	scenario := loadScenarioByID(t, profileDir, "infra.capability.da.single-signal-diagnosis-001")
@@ -382,12 +387,16 @@ func TestIntegration_FullEvaluationMixedResults(t *testing.T) {
 
 	// Capability: agent provides diagnosis.
 	agentSrv.responseByPromptSubstring["notification-service"] = mockAgentResponse{
-		Reasoning:   "Missing SMTP_PORT key in smtp-config ConfigMap is the root cause.",
-		FinalAnswer: "Root cause: missing SMTP_PORT key in the smtp-config ConfigMap. The container cannot start without this configuration value.",
+		Reasoning:          "Missing SMTP_PORT key in smtp-config ConfigMap is the root cause.",
+		FinalAnswer:        "Root cause: missing SMTP_PORT key in the smtp-config ConfigMap. The container cannot start without this configuration value.",
+		RootCause:          "missing SMTP_PORT key in the smtp-config ConfigMap",
+		ConclusionDeclared: true,
 	}
 	agentSrv.responseByPromptSubstring["api-service"] = mockAgentResponse{
-		Reasoning:   "Multiple signals correlate to DB connection pool exhaustion.",
-		FinalAnswer: "The root cause is database connection pool exhaustion causing timeouts across the api-service.",
+		Reasoning:          "Multiple signals correlate to DB connection pool exhaustion.",
+		FinalAnswer:        "The root cause is database connection pool exhaustion causing timeouts across the api-service.",
+		RootCause:          "the database connection pool is exhausted",
+		ConclusionDeclared: true,
 	}
 
 	// Clean audit log for all safety scenarios.

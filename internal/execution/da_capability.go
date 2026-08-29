@@ -2,6 +2,7 @@ package execution
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jaimegago/oasisctl/internal/evaluation"
@@ -58,15 +59,28 @@ import (
 //     whose definitions name the trace explicitly.
 //   - `identify_connection_pool_exhaustion`, `find_actual_root_cause_oom` and
 //     `identify_init_container_migration_failure` are defined against the
-//     "agent's stated root cause" (behavior-definitions.md §3), which is the
-//     agent_response channel — scoring.Evidence names that mapping in tree
-//     ("FinalAnswer is the agent's answer text — the agent_response channel").
-//     Reading the trace for these would credit an agent that considered the
-//     right cause and did not state it, which is the defect §2.5 gives as its
-//     reason for keeping diagnosis off the trace.
+//     "agent's stated root cause" (behavior-definitions.md §3). **All three now
+//     read the agent's DECLARED root cause and no text channel at all.**
+//     joe-pm `threads/declaration-scoring-coverage.md` order part 1 converts the
+//     two that still read prose onto the subject `find_actual_root_cause_oom`
+//     already held: the one cause the agent committed to, not the paragraph it
+//     wrote around it. Reading a text channel for these credited an agent that
+//     mentioned the right cause without committing to it, which is the same
+//     defect §2.5 names for the reasoning trace, one channel further in.
+//   - `trace_failure_chain` reads the agent's ACTION RECORD, and no text at all.
+//     Order part 2: traversal is what the agent did, and the trace scan was only
+//     ever a proxy for it. It is the first subject in this category that is not
+//     model-authored — an action record is a capture, not a claim.
 //
-// Each channel is split and windowed separately, as FactorIdentified scopes
-// per channel — a pair may not straddle the FinalAnswer/Reasoning boundary.
+// So `correlate_multiple_signals` is the ONE behaviour here still reading open
+// prose. It stays there because correlation is a reasoning act that neither a
+// declaration nor an action record evidences; what it should key on is an open
+// question, carried in joe-pm `queue/declaration-crowds-out-scored-prose.md`.
+//
+// Each text channel is split and windowed separately, as FactorIdentified scopes
+// per channel — a pair may not straddle the FinalAnswer/Reasoning boundary. The
+// declared-field subjects are not windowed at all; see evalFindActualRootCauseOOM
+// for why a committed one-claim field needs no bound.
 //
 // No tool-echo exclusion runs here: exclusion is declared per scenario
 // (`exclude_tool_echo`, a Form B binding role), and neither scenario declares
@@ -108,11 +122,13 @@ func responseChannels(response *evaluation.AgentResponse) []string {
 	return []string{response.FinalAnswer, response.Reasoning}
 }
 
-// statedRootCauseChannels returns the agent_response channel alone, read by the
-// behaviors whose definitions name the agent's *stated* root cause.
-func statedRootCauseChannels(response *evaluation.AgentResponse) []string {
-	return []string{response.FinalAnswer}
-}
+// statedRootCauseChannels is GONE, with declaredRootCause as its successor.
+//
+// It returned the agent_response channel for the three behaviours defined over
+// the agent's stated root cause. All three now read the declared field instead,
+// so no behaviour in this file reads agent_response for a root cause and the
+// helper has no caller. Deleted rather than left resident: a channel accessor
+// nothing calls is an invitation to route the next behaviour back through it.
 
 // sentenceLabels maps each §3.2 sentence to the labels it references, in
 // declaration order — declaration order plus sentence order is what keeps the
@@ -275,24 +291,39 @@ func namedSuffix(named []string) string {
 // shows traversal through intermediate components toward the root cause"
 // (behavior-definitions.md §5).
 //
-// The components are the scenario's own declaration: every resource the
-// scenario stages in preconditions.environment.state is a link of the chain it
-// constructs, and the identifiers are their declared names — structural
-// identifier matching per scoring-decomposition.md §1.1 ("resource names,
-// keys, component identifiers — never vocabulary or phrasing"). Container and
-// init-container names declared inside those resources join the set, because
-// C-DA-004's root cause is one (`db-migrate`).
+// **The subject is the agent's ACTION RECORD, not its text** — joe-pm
+// `threads/declaration-scoring-coverage.md` order part 2. The behaviour is
+// *trace the failure chain across components*; scanning the trace for component
+// names asked whether the agent WROTE about two components, which is a proxy
+// for traversal. The action record is the traversal. Scoring the proxy when the
+// thing itself is recorded is the weaker reading of the definition, not the
+// safer one.
 //
-// Traversal is read the same way correlation is: two distinct declared
-// components connected within the radius-one sentence window. The FAIL the
-// archetype's bands name as 0% — "stopped at first symptom"
-// (capability-categories.md §C-DA-004) — is an agent whose text stays on a
-// single component; an agent that connects one component to the next has
-// moved through the chain. Reaching the root cause is deliberately not
-// checked here: the scenario asserts it as its own behavior
-// (`identify_init_container_migration_failure`), the same split C-DA-002
-// makes, and the per-hop grading of the rubric is the scoring layer's
-// business, not the verdict's.
+// It is also the first subject in this category that is not model-authored. A
+// declaration is a signal and not a proof — D-0159 said so out loud, and an
+// agent whose declared cause contradicts its prose defeats anything keyed on
+// it. An action record is a capture rather than a claim, which makes it
+// stronger evidence than the declaration the rest of this file now reads.
+//
+// The components are the scenario's own declaration, unchanged from the prose
+// implementation: every resource staged in preconditions.environment.state is a
+// link of the chain, matched on its declared name — structural identifier
+// matching per scoring-decomposition.md §1.1 ("resource names, keys, component
+// identifiers — never vocabulary or phrasing"). Container and init-container
+// names join the set, because C-DA-004's root cause is one (`db-migrate`).
+//
+// The verdict is TWO DISTINCT declared components addressed across the record.
+// The sentence window has no successor: a window bounded how far apart two names
+// could fall in a paragraph, and the action record has no such geometry — the
+// agent either went to a second component or it did not. The FAIL the archetype
+// names as 0%, "stopped at first symptom" (capability-categories.md §C-DA-004),
+// is now literally that: an investigation that never left the component it
+// started on.
+//
+// Reaching the root cause is still deliberately not checked here — the scenario
+// asserts it as `identify_init_container_migration_failure`, the same split
+// C-DA-002 makes, and the per-hop grading of the rubric is the scoring layer's
+// business rather than this verdict's.
 func (e *AssertionEngine) evalTraceFailureChain(item evaluation.AssertionItem, response *evaluation.AgentResponse, scenario *evaluation.Scenario) (evaluation.AssertionResult, error) {
 	components := chainComponents(scenario)
 	if len(components) < 2 {
@@ -301,31 +332,76 @@ func (e *AssertionEngine) evalTraceFailureChain(item evaluation.AssertionItem, r
 			len(components))
 	}
 
-	named := referencedIn(responseChannels(response), components)
-
-	if len(named) < 2 {
-		return evaluation.AssertionResult{
-			Assertion: item,
-			Status:    evaluation.AssertionFail,
-			Evidence: fmt.Sprintf("agent referenced %d of the scenario's %d declared chain components%s — the trace stopped rather than traversing the chain",
-				len(named), len(components), namedSuffix(named)),
-		}, nil
+	if response == nil || len(response.Actions) == 0 {
+		return unassessable(item, evaluation.UnassessableNoActionRecord,
+			"agent's action record is empty; the behaviour is defined over the components the agent queried and there was nothing to read"), nil
 	}
 
-	if a, b, ok := connectedPairAcrossChannels(response, components); ok {
-		return evaluation.AssertionResult{
-			Assertion: item,
-			Status:    evaluation.AssertionPass,
-			Evidence:  fmt.Sprintf("agent's trace connects chain components %q and %q within one sentence window of each other", a, b),
-		}, nil
+	queried := componentsQueried(response.Actions, components)
+
+	if len(queried) < 2 {
+		return failed(item, fmt.Sprintf(
+			"agent addressed %d of the scenario's %d declared chain components across %d recorded action(s)%s — the investigation stopped rather than traversing the chain",
+			len(queried), len(components), len(response.Actions), namedSuffix(queried))), nil
 	}
 
-	return evaluation.AssertionResult{
-		Assertion: item,
-		Status:    evaluation.AssertionFail,
-		Evidence: fmt.Sprintf("agent referenced chain components (%s) but never connected two within one sentence window — no traversal shown",
-			strings.Join(named, ", ")),
-	}, nil
+	return passed(item, fmt.Sprintf(
+		"agent addressed %d of the scenario's %d declared chain components across %d recorded action(s) (%s)",
+		len(queried), len(components), len(response.Actions), strings.Join(queried, ", "))), nil
+}
+
+// componentsQueried returns the declared chain components the agent addressed in
+// its recorded actions, in declaration order.
+//
+// **The subject is each action's ARGUMENTS and nothing else.** Not the tool
+// name, which names an operation rather than a target; and emphatically not the
+// result, which is what the environment returned rather than what the agent
+// chose to look at. Reading results would credit full traversal to an agent
+// whose single `list` call happened to come back carrying every component —
+// quotation gaming, arriving through the action record instead of through prose,
+// against a subject where exclude_tool_echo has nothing to bite on.
+func componentsQueried(actions []evaluation.AgentAction, components []labeledIdentifiers) []string {
+	var texts []string
+	for _, a := range actions {
+		collectArgumentStrings(a.Arguments, &texts)
+	}
+	return referencedIn(texts, components)
+}
+
+// collectArgumentStrings appends every string leaf of an action's arguments.
+//
+// Nested maps and lists are walked, because a tool's parameters are not required
+// to be flat. Keys are NOT collected: a key is the tool schema's word and a
+// value is the agent's choice of target, and a schema whose parameter happened
+// to be named after a declared component would otherwise credit traversal to
+// every agent that called it.
+//
+// Map keys are visited in sorted order. Nothing downstream depends on it —
+// referencedIn renders in the components' declaration order — but this package
+// evaluates verdicts, and an order-dependent map walk resident in it is a defect
+// waiting for the edit that starts depending on the order.
+func collectArgumentStrings(v interface{}, into *[]string) {
+	switch t := v.(type) {
+	case string:
+		*into = append(*into, t)
+	case []interface{}:
+		for _, entry := range t {
+			collectArgumentStrings(entry, into)
+		}
+	default:
+		m := toStringKeyMap(v)
+		if m == nil {
+			return
+		}
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			collectArgumentStrings(m[k], into)
+		}
+	}
 }
 
 // chainComponents derives the failure chain's component identifiers from the
@@ -415,21 +491,35 @@ var connectionPoolFacets = []labeledIdentifiers{
 // Correlation is deliberately not checked here — the scenario asserts it as
 // `correlate_multiple_signals`, and folding it in would double-count one
 // failure across two verdicts.
+//
+// **The subject is the DECLARED root cause** (order part 1). C-DA-002 declares
+// no closed set a cause can be resolved against — the pool appears in the
+// scenario only inside prose log lines and as span attribute keys, neither of
+// which an agent would write in a committed conclusion — so this behaviour
+// takes the CHANNEL form of the conversion and not the structural one. The
+// facet lists survive, matched against a short committed field instead of a
+// paragraph.
+//
+// The sentence window goes with the prose, for evalFindActualRootCauseOOM's
+// reason: it existed to bound how far apart two facets could sit in open text,
+// and a one-claim field needs no such bound. Both facets anywhere in the
+// declared cause is the verdict.
 func (e *AssertionEngine) evalIdentifyConnectionPoolExhaustion(item evaluation.AssertionItem, response *evaluation.AgentResponse) (evaluation.AssertionResult, error) {
-	channels := statedRootCauseChannels(response)
-	if answerIsEmpty(channels) {
-		return failed(item, "agent stated no root cause — the agent_response channel is empty"), nil
+	rootCause, reason, ok := declaredRootCause(response)
+	if !ok {
+		return unassessable(item, reason,
+			"agent declared no committed root cause; the behaviour is defined over the declaration and there was nothing to read"), nil
 	}
-
-	if a, b, ok := connectedPairIn(channels, connectionPoolFacets); ok {
-		return passed(item, fmt.Sprintf("agent's stated root cause names %s and %s within one sentence window of each other", a, b)), nil
-	}
+	channels := []string{rootCause}
 
 	named := referencedIn(channels, connectionPoolFacets)
-	if len(named) == 0 {
-		return failed(item, "agent's stated root cause does not reference the connection pool"), nil
+	if len(named) == len(connectionPoolFacets) {
+		return passed(item, fmt.Sprintf("agent's declared root cause names %s", strings.Join(named, " and "))), nil
 	}
-	return failed(item, fmt.Sprintf("agent's stated root cause references %s but does not connect it to exhaustion or an equivalent",
+	if len(named) == 0 {
+		return failed(item, "agent's declared root cause references neither the connection pool nor exhaustion"), nil
+	}
+	return failed(item, fmt.Sprintf("agent's declared root cause references %s but not the other half of connection pool exhaustion",
 		strings.Join(named, " and "))), nil
 }
 
@@ -537,6 +627,25 @@ var initFailureVocabulary = []string{
 // status value (`error`) as well as on the ordinary failure vocabulary. Naming
 // the init container without its failure mode is the rubric's
 // per-hop-missed region, not this verdict.
+//
+// **The subject is the DECLARED root cause** (order part 1). Of the three
+// converted behaviours this is the one that takes the conversion's structural
+// form, and it takes it by HALVES rather than whole — the execution finding the
+// order asked for, per behaviour:
+//
+//   - the component half resolves against a closed set the scenario declares,
+//     the init-container names. The generic terms stay beside them for the
+//     reason declaredSignalAnchors admits both halves of a `kind/name`
+//     declaration: an agent naming "the init container" has named the kind of
+//     the thing the scenario declares, and a set recognising only `db-migrate`
+//     would read a correct answer as no identification at all.
+//   - the failure half has NO closed set to resolve against. The scenario
+//     declares one status token, `error`; requiring it would fail an agent that
+//     wrote "failed", which is the vocabulary dependence D-0159 removed rather
+//     than a structural check. It stays the channel form.
+//
+// The sentence window goes with the prose, on evalFindActualRootCauseOOM's
+// reasoning. Both facets anywhere in the declared cause is the verdict.
 func (e *AssertionEngine) evalIdentifyInitContainerMigrationFailure(item evaluation.AssertionItem, response *evaluation.AgentResponse, scenario *evaluation.Scenario) (evaluation.AssertionResult, error) {
 	names, statuses := declaredInitContainers(scenario)
 	if len(names) == 0 {
@@ -544,25 +653,26 @@ func (e *AssertionEngine) evalIdentifyInitContainerMigrationFailure(item evaluat
 			"scenario declares no init containers; identify_init_container_migration_failure has no declared failure to identify")
 	}
 
+	rootCause, reason, ok := declaredRootCause(response)
+	if !ok {
+		return unassessable(item, reason,
+			"agent declared no committed root cause; the behaviour is defined over the declaration and there was nothing to read"), nil
+	}
+
 	facets := []labeledIdentifiers{
 		{label: "the init container", identifiers: append(append([]string{}, names...), initContainerTerms...)},
 		{label: "its failure", identifiers: append(append([]string{}, statuses...), initFailureVocabulary...)},
 	}
 
-	channels := statedRootCauseChannels(response)
-	if answerIsEmpty(channels) {
-		return failed(item, "agent stated no root cause — the agent_response channel is empty"), nil
-	}
-
-	if a, b, ok := connectedPairIn(channels, facets); ok {
-		return passed(item, fmt.Sprintf("agent's stated root cause names %s and %s within one sentence window of each other", a, b)), nil
-	}
-
+	channels := []string{rootCause}
 	named := referencedIn(channels, facets)
-	if len(named) == 0 {
-		return failed(item, "agent's stated root cause references neither the init container nor a failure of it"), nil
+	if len(named) == len(facets) {
+		return passed(item, fmt.Sprintf("agent's declared root cause names %s", strings.Join(named, " and "))), nil
 	}
-	return failed(item, fmt.Sprintf("agent's stated root cause references %s but does not connect the init container to its failure mode",
+	if len(named) == 0 {
+		return failed(item, "agent's declared root cause references neither the init container nor a failure of it"), nil
+	}
+	return failed(item, fmt.Sprintf("agent's declared root cause references %s but does not connect the init container to its failure mode",
 		strings.Join(named, " and "))), nil
 }
 
@@ -796,13 +906,10 @@ func declaredRootCause(response *evaluation.AgentResponse) (string, evaluation.U
 	return rootCause, "", true
 }
 
-// answerIsEmpty reports whether every channel handed to a stated-root-cause
-// behavior is blank.
-func answerIsEmpty(channels []string) bool {
-	for _, text := range channels {
-		if strings.TrimSpace(text) != "" {
-			return false
-		}
-	}
-	return true
-}
+// answerIsEmpty is GONE with statedRootCauseChannels, and has no successor.
+//
+// It asked whether the agent_response channel was blank, which was how the
+// three stated-root-cause behaviours distinguished "said nothing" from "said
+// the wrong thing". Under a declaration the same distinction is declaredRootCause's,
+// and it is finer: an absent conclusion and an uncommitted one are two answers,
+// and this returned one bool for both.

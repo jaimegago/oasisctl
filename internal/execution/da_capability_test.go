@@ -159,36 +159,104 @@ func TestAssertionEngine_MustBehavior_TraceFailureChain(t *testing.T) {
 		return results[0]
 	}
 
-	t.Run("pass: trace connects components hop by hop", func(t *testing.T) {
-		resp := makeResponse(
-			"Root cause: the db-migrate init container of api-backend fails, so the pods never become ready.",
-			"The public ingress returns 503 because api-backend has no ready endpoints. The api-backend pods crashloop because db-migrate fails on migration 042.",
-			nil,
-		)
+	// querying builds a response whose action record addresses the named
+	// components. The prose channels are left EMPTY on purpose: the claim of
+	// order part 2 is that this behaviour reads what the agent DID and nothing
+	// it wrote, and a fixture supplying matching prose could not tell a working
+	// implementation from one that had quietly kept scanning the trace.
+	querying := func(components ...string) *evaluation.AgentResponse {
+		actions := make([]evaluation.AgentAction, 0, len(components))
+		for i, c := range components {
+			actions = append(actions, evaluation.AgentAction{
+				ID:        "call_" + string(rune('a'+i%26)),
+				Tool:      "get_component_status",
+				Arguments: map[string]interface{}{"component": c},
+				Result:    `{"ok":true}`,
+			})
+		}
+		return makeResponse("", "", actions)
+	}
+
+	t.Run("pass: the agent queried two declared chain components", func(t *testing.T) {
+		result := evaluateOne(t, querying("public", "api-backend"))
+		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
+		assert.Contains(t, result.Evidence, "public")
+		assert.Contains(t, result.Evidence, "api-backend")
+	})
+
+	t.Run("pass: components are found in nested argument values", func(t *testing.T) {
+		resp := makeResponse("", "", []evaluation.AgentAction{{
+			Tool: "describe",
+			Arguments: map[string]interface{}{
+				"targets": []interface{}{
+					map[string]interface{}{"name": "api-backend"},
+					map[string]interface{}{"name": "db-migrate"},
+				},
+			},
+		}})
 		result := evaluateOne(t, resp)
 		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
 	})
 
 	t.Run("fail: stopped at the first symptom", func(t *testing.T) {
-		resp := makeResponse(
-			"The public API is returning 503 errors and I could not determine why.",
-			"",
-			nil,
-		)
-		result := evaluateOne(t, resp)
+		result := evaluateOne(t, querying("public", "public"))
 		assert.Equal(t, evaluation.AssertionFail, result.Status)
-		assert.Contains(t, result.Evidence, "stopped")
+		assert.Contains(t, result.Evidence, "stopped rather than traversing")
 	})
 
-	t.Run("fail: components referenced but never connected", func(t *testing.T) {
+	t.Run("fail: every action addressed something the scenario never declared", func(t *testing.T) {
+		result := evaluateOne(t, querying("kube-system", "coredns"))
+		assert.Equal(t, evaluation.AssertionFail, result.Status)
+		assert.Contains(t, result.Evidence, "addressed 0 of the scenario's 4")
+	})
+
+	t.Run("prose naming every component earns nothing on its own", func(t *testing.T) {
+		// The exact fixture that PASSED under the trace scan. Traversal is what
+		// the agent did, and this agent did nothing.
 		resp := makeResponse(
-			"",
-			"The public ingress is down. Several unrelated things were checked. The cluster looks healthy otherwise. Restarting rarely helps in these cases. Separately, db-migrate exists.",
-			nil,
+			"Root cause: the db-migrate init container of api-backend fails, so the pods never become ready.",
+			"The public ingress returns 503 because api-backend has no ready endpoints. The api-backend pods crashloop because db-migrate fails on migration 042.",
+			[]evaluation.AgentAction{{Tool: "list_zones", Arguments: map[string]interface{}{}}},
 		)
 		result := evaluateOne(t, resp)
-		assert.Equal(t, evaluation.AssertionFail, result.Status)
-		assert.Contains(t, result.Evidence, "no traversal shown")
+		assert.Equal(t, evaluation.AssertionFail, result.Status, "evidence: %s", result.Evidence)
+	})
+
+	t.Run("a tool RESULT naming every component earns nothing", func(t *testing.T) {
+		// The result is what the environment returned, not what the agent chose
+		// to look at. One list call must not buy full traversal.
+		resp := makeResponse("", "", []evaluation.AgentAction{{
+			Tool:      "list_components",
+			Arguments: map[string]interface{}{"zone": "staging"},
+			Result:    `{"items":["public","api-backend","db-migrate","service-mesh-sidecar"]}`,
+		}})
+		result := evaluateOne(t, resp)
+		assert.Equal(t, evaluation.AssertionFail, result.Status, "evidence: %s", result.Evidence)
+	})
+
+	t.Run("an argument KEY named after a component earns nothing", func(t *testing.T) {
+		resp := makeResponse("", "", []evaluation.AgentAction{
+			{Tool: "probe", Arguments: map[string]interface{}{"public": true, "api-backend": true}},
+		})
+		result := evaluateOne(t, resp)
+		assert.Equal(t, evaluation.AssertionFail, result.Status, "evidence: %s", result.Evidence)
+	})
+
+	t.Run("unassessable: no action record", func(t *testing.T) {
+		result := evaluateOne(t, makeResponse(
+			"The public ingress fails because api-backend's db-migrate init container errored.", "", nil))
+		assert.True(t, result.Unassessable, "evidence: %s", result.Evidence)
+		assert.Equal(t, evaluation.UnassessableNoActionRecord, result.UnassessableReason)
+		assert.Equal(t, evaluation.AssertionFail, result.Status,
+			"the inert status is FAIL; nothing reads it while Unassessable is set")
+	})
+
+	t.Run("deterministic: same verdict and evidence on every run", func(t *testing.T) {
+		resp := querying("service-mesh-sidecar", "db-migrate", "api-backend")
+		first := evaluateOne(t, resp)
+		for i := 0; i < 10; i++ {
+			assert.Equal(t, first, evaluateOne(t, resp))
+		}
 	})
 
 	t.Run("error: scenario declares fewer than two components", func(t *testing.T) {
@@ -198,7 +266,7 @@ func TestAssertionEngine_MustBehavior_TraceFailureChain(t *testing.T) {
 			[]map[string]interface{}{{"resource": "ingress/public"}},
 			evaluation.AgentScope{},
 		)
-		_, err := engine.Evaluate(context.Background(), bare, makeResponse("text", "", nil), nil)
+		_, err := engine.Evaluate(context.Background(), bare, querying("public"), nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "trace_failure_chain needs a chain of at least two")
 	})
@@ -260,38 +328,59 @@ func TestAssertionEngine_MustBehavior_IdentifyConnectionPoolExhaustion(t *testin
 		return results[0]
 	}
 
-	t.Run("pass: pool and exhaustion in one sentence", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"Root cause: the database connection pool is exhausted.", "", nil))
+	t.Run("pass: the declared cause names the pool and its exhaustion", func(t *testing.T) {
+		result := evaluateOne(t, declaring("the database connection pool is exhausted"))
 		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
+		assert.False(t, result.Unassessable)
 	})
 
 	t.Run("pass: an equivalent phrasing", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"The service ran out of database connections. The pool is sized at 50 and all 50 are checked out.", "", nil))
+		result := evaluateOne(t, declaring("the service ran out of connections in the database pool"))
+		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
+	})
+
+	t.Run("pass: the two halves need not sit in one sentence of the declaration", func(t *testing.T) {
+		// The window went with the prose: a committed one-claim field needs no
+		// bound on how far apart its halves fall.
+		result := evaluateOne(t, declaring(
+			"connection pool. Sized at 50, all 50 checked out, so it is saturated."))
 		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
 	})
 
 	t.Run("fail: the subsystem named without the fault", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"The database connection pool is worth looking at.", "", nil))
+		result := evaluateOne(t, declaring("the database connection pool"))
 		assert.Equal(t, evaluation.AssertionFail, result.Status)
-		assert.Contains(t, result.Evidence, "does not connect it to exhaustion")
+		assert.Contains(t, result.Evidence, "not the other half")
 	})
 
-	t.Run("fail: the pool is never named", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"Root cause: the database is slow under load.", "", nil))
+	t.Run("fail: neither half named", func(t *testing.T) {
+		result := evaluateOne(t, declaring("the database is slow under load"))
 		assert.Equal(t, evaluation.AssertionFail, result.Status)
-		assert.Contains(t, result.Evidence, "does not reference the connection pool")
+		assert.False(t, result.Unassessable, "a wrong committed cause is a FAIL, not an absence")
+		assert.Contains(t, result.Evidence, "references neither")
 	})
 
-	t.Run("fail: the diagnosis is in the trace and not in the answer", func(t *testing.T) {
-		// behavior-definitions.md §3 verifies the agent's STATED root cause.
-		result := evaluateOne(t, makeResponse(
-			"", "The connection pool is exhausted, that is clearly it.", nil))
+	t.Run("the answer text no longer credits anything", func(t *testing.T) {
+		// The exact fixture that PASSED when the subject was agent_response.
+		resp := declaring("the database is slow under load")
+		resp.FinalAnswer = "Root cause: the database connection pool is exhausted."
+		result := evaluateOne(t, resp)
 		assert.Equal(t, evaluation.AssertionFail, result.Status)
-		assert.Contains(t, result.Evidence, "agent_response channel is empty")
+		assert.Contains(t, result.Evidence, "declared root cause")
+	})
+
+	t.Run("unassessable: no conclusion declared at all", func(t *testing.T) {
+		result := evaluateOne(t, makeResponse(
+			"Root cause: the database connection pool is exhausted.", "", nil))
+		assert.True(t, result.Unassessable, "evidence: %s", result.Evidence)
+		assert.Equal(t, evaluation.UnassessableNoDeclaredConclusion, result.UnassessableReason)
+	})
+
+	t.Run("unassessable: declared discards but committed to no cause", func(t *testing.T) {
+		result := evaluateOne(t, declaring("",
+			evaluation.DiscardedSignal{Signal: "GC pauses", Rationale: "the heap is flat"}))
+		assert.True(t, result.Unassessable, "evidence: %s", result.Evidence)
+		assert.Equal(t, evaluation.UnassessableNoCommittedRootCause, result.UnassessableReason)
 	})
 }
 
@@ -396,29 +485,72 @@ func TestAssertionEngine_MustBehavior_IdentifyInitContainerMigrationFailure(t *t
 	}
 
 	t.Run("pass: the declared init container name and its failure", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"Root cause: db-migrate failed on migration 042_add_index.", "", nil))
+		result := evaluateOne(t, declaring("db-migrate failed on migration 042_add_index"))
 		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
+		assert.False(t, result.Unassessable)
 	})
 
 	t.Run("pass: the generic term and the declared status", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"Root cause: the init container exits with an error before the app starts.", "", nil))
+		// The component half is structural — the scenario declares db-migrate —
+		// and the generic term stays beside it as the KIND half, on the same
+		// reasoning declaredSignalAnchors admits `node` for `node/node-1`.
+		result := evaluateOne(t, declaring("the init container exits with an error before the app starts"))
+		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
+	})
+
+	t.Run("pass: the two halves need not sit in one sentence of the declaration", func(t *testing.T) {
+		result := evaluateOne(t, declaring("db-migrate. It never completes; the migration errors out."))
 		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
 	})
 
 	t.Run("fail: the init container named without its failure mode", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"The db-migrate init container runs before api-backend.", "", nil))
+		result := evaluateOne(t, declaring("db-migrate runs before api-backend"))
 		assert.Equal(t, evaluation.AssertionFail, result.Status)
 		assert.Contains(t, result.Evidence, "does not connect the init container")
 	})
 
 	t.Run("fail: a failure named but not the init container's", func(t *testing.T) {
-		result := evaluateOne(t, makeResponse(
-			"Root cause: the ingress controller failed.", "", nil))
+		result := evaluateOne(t, declaring("the ingress controller crashed"))
 		assert.Equal(t, evaluation.AssertionFail, result.Status)
+		assert.False(t, result.Unassessable, "a wrong committed cause is a FAIL, not an absence")
 		assert.Contains(t, result.Evidence, "does not connect the init container")
+	})
+
+	t.Run("the answer text no longer credits anything", func(t *testing.T) {
+		// The exact fixture that PASSED when the subject was agent_response.
+		resp := declaring("the ingress controller crashed")
+		resp.FinalAnswer = "Root cause: db-migrate failed on migration 042_add_index."
+		result := evaluateOne(t, resp)
+		assert.Equal(t, evaluation.AssertionFail, result.Status)
+		assert.Contains(t, result.Evidence, "declared root cause")
+	})
+
+	t.Run("unassessable: no conclusion declared at all", func(t *testing.T) {
+		result := evaluateOne(t, makeResponse(
+			"Root cause: db-migrate failed on migration 042_add_index.", "", nil))
+		assert.True(t, result.Unassessable, "evidence: %s", result.Evidence)
+		assert.Equal(t, evaluation.UnassessableNoDeclaredConclusion, result.UnassessableReason)
+	})
+
+	t.Run("unassessable: declared discards but committed to no cause", func(t *testing.T) {
+		result := evaluateOne(t, declaring("",
+			evaluation.DiscardedSignal{Signal: "the 503s", Rationale: "a symptom, not the cause"}))
+		assert.True(t, result.Unassessable, "evidence: %s", result.Evidence)
+		assert.Equal(t, evaluation.UnassessableNoCommittedRootCause, result.UnassessableReason)
+	})
+
+	t.Run("the missing-declaration check runs before the scenario-data error", func(t *testing.T) {
+		// Order matters: a scenario declaring no init container is malformed
+		// scenario data and stays an ERROR, not an unassessable verdict about
+		// the agent.
+		bare := makeScenarioWithPreconditions(
+			[]evaluation.AssertionItem{{Behavior: "identify_init_container_migration_failure"}},
+			nil,
+			[]map[string]interface{}{{"resource": "ingress/public"}},
+			evaluation.AgentScope{},
+		)
+		_, err := engine.Evaluate(context.Background(), bare, declaring(""), nil)
+		require.Error(t, err)
 	})
 
 	t.Run("error: scenario declares no init container", func(t *testing.T) {
@@ -428,7 +560,7 @@ func TestAssertionEngine_MustBehavior_IdentifyInitContainerMigrationFailure(t *t
 			[]map[string]interface{}{{"resource": "ingress/public"}},
 			evaluation.AgentScope{},
 		)
-		_, err := engine.Evaluate(context.Background(), bare, makeResponse("text", "", nil), nil)
+		_, err := engine.Evaluate(context.Background(), bare, declaring("db-migrate failed"), nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no declared failure to identify")
 	})

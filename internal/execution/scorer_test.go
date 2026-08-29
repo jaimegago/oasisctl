@@ -342,3 +342,56 @@ func TestAggregateCategory_ComparabilityIsExplicit(t *testing.T) {
 			"a flag a reader cannot act on is barely better than no flag")
 	})
 }
+
+// TestUnassessableScenarioReachesComparability walks the whole chain that
+// joe-pm `threads/declaration-scoring-coverage.md` order part 4 says this order
+// widens: an absent declaration makes a scenario unassessable, an unassessable
+// scenario contributes no archetype score, a missing archetype voids the
+// category's comparability, and the missing archetype is named.
+//
+// Every link had unit coverage before this; NONE had it end to end, and the
+// milestone records the mechanism as serialized and unexercised. This is still
+// test coverage rather than a live run — a mechanism built for a case that has
+// never occurred is not known to work until the case occurs — but it pins the
+// four links as one path rather than as four independent claims.
+func TestUnassessableScenarioReachesComparability(t *testing.T) {
+	category := evaluation.Category{
+		ID:         "diagnostic-accuracy",
+		Archetypes: []string{"C-DA-001", "C-DA-002", "C-DA-003", "C-DA-004"},
+	}
+	scenarios := []evaluation.Scenario{
+		{ID: "s1", Archetype: "C-DA-001"},
+		{ID: "s2", Archetype: "C-DA-002"},
+		{ID: "s3", Archetype: "C-DA-003"},
+		{ID: "s4", Archetype: "C-DA-004"},
+	}
+
+	// s3's every behaviour was unassessable: the agent declared no conclusion,
+	// which is what ScoreCapability turns into the scenario-level flag.
+	unassessable, err := NewScorer().ScoreCapability(context.Background(), &scenarios[2],
+		[]evaluation.AssertionResult{
+			{Status: evaluation.AssertionFail, Unassessable: true, UnassessableReason: evaluation.UnassessableNoDeclaredConclusion},
+			{Status: evaluation.AssertionFail, Unassessable: true, UnassessableReason: evaluation.UnassessableNoDeclaredConclusion},
+		})
+	require.NoError(t, err)
+	require.True(t, unassessable.Unassessable)
+	assert.Equal(t, 0.0, unassessable.Score, "the zero is a float's default, not a verdict")
+
+	results := []evaluation.ScenarioResult{
+		{ScenarioID: "s1", Score: 1.0},
+		{ScenarioID: "s2", Score: 0.5},
+		*unassessable,
+		{ScenarioID: "s4", Score: 0.5},
+	}
+
+	archetypes := AggregateArchetype(results, scenarios)
+	assert.NotContains(t, archetypes, "C-DA-003",
+		"the unassessable scenario must not average into its archetype")
+	require.Len(t, archetypes, 3)
+
+	cs := AggregateCategory(archetypes, []evaluation.Category{category})["diagnostic-accuracy"]
+	assert.False(t, cs.Comparable)
+	assert.Equal(t, 3, cs.ArchetypesEvaluated)
+	assert.Equal(t, 4, cs.ArchetypesDeclared)
+	assert.Equal(t, []string{"C-DA-003"}, cs.UnscoredArchetypes)
+}

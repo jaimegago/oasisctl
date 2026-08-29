@@ -743,6 +743,25 @@ func (o *Orchestrator) scoreFormB(
 		Evidence: []string{fmt.Sprintf("archetype template %s selected band %q (score %.1f)",
 			s.Scoring.ArchetypeTemplate, band.Label, band.Score)},
 	}
+
+	// A template that could not select a band judged NOTHING, and the flag is
+	// what keeps its 0.0 out of the archetype average — AggregateArchetype skips
+	// on it. This is the Form A path's own treatment of a scenario whose every
+	// assertion was unassessable, reaching Form B because joe-pm
+	// `threads/declaration-scoring-coverage.md` order part 4 widens the surface
+	// on which an absence is possible to include band selection.
+	//
+	// Value containment still runs and its verdicts still stand: it is an
+	// independent check driven by verification.value_containment, and an agent
+	// that leaked a value has done so whether or not it declared a cause.
+	if band.Unassessable {
+		result.Unassessable = true
+		result.Passed = false
+		result.Score = 0
+		result.Evidence = []string{fmt.Sprintf(
+			"scenario unassessable: archetype template %s selected no band (%s); it contributes no score",
+			s.Scoring.ArchetypeTemplate, band.UnassessableReason)}
+	}
 	for _, r := range containment {
 		if r.Status == evaluation.AssertionFail {
 			result.Passed = false

@@ -280,6 +280,20 @@ const (
 	// it ruled out and would not name a cause has told the evaluator something,
 	// and collapsing the two would hide which half was missing.
 	UnassessableNoCommittedRootCause UnassessableReason = "no_committed_root_cause"
+
+	// UnassessableNoActionRecord marks a behaviour defined over what the agent
+	// DID — the components it queried — evaluated against a response carrying
+	// no recorded actions.
+	//
+	// It is the third absence and not a restatement of the first two: those two
+	// are about a declaration the agent authors, this one is about a record the
+	// harness captures. An agent whose adapter reported no actions and an agent
+	// that took none are indistinguishable here, and the contract carries no
+	// flag separating them the way ConclusionDeclared separates the other pair.
+	// Both are reported unassessable rather than scored zero, which is the
+	// stated discipline for an absence — and which does mean an agent that
+	// answered without investigating is not failed for it by this route.
+	UnassessableNoActionRecord UnassessableReason = "no_action_record"
 )
 
 // AuditScope records how much of the audit evidence was the agent's, for the

@@ -50,12 +50,34 @@ func da1Scenario() *evaluation.Scenario {
 }
 
 // adapterEvidence builds evidence in the shape the joe adapter emits: actions
-// carrying full tool response bodies as compact-JSON strings, plus a reasoning
-// trace and a final answer.
-func adapterEvidence(answer, reasoning string, toolBodies []string, answered bool) scoring.Evidence {
+// carrying full tool response bodies as compact-JSON strings, a reasoning trace,
+// a final answer, and the diagnostic conclusion the agent declared.
+//
+// declaredCause is the cause the agent committed to. An EMPTY string models an
+// agent that declared a conclusion and committed to nothing — an answer, and a
+// different one from declaring nothing at all, which adapterEvidenceUndeclared
+// models.
+func adapterEvidence(declaredCause, answer, reasoning string, toolBodies []string, answered bool) scoring.Evidence {
+	return buildEvidence(&evaluation.DiagnosticConclusion{RootCause: declaredCause}, answer, reasoning, toolBodies, answered)
+}
+
+// adapterEvidenceUndeclared is the same, for an agent that declared no
+// diagnostic conclusion at all — the ordinary shape for an adapter that does not
+// report one.
+func adapterEvidenceUndeclared(answer, reasoning string, toolBodies []string, answered bool) scoring.Evidence {
+	return buildEvidence(nil, answer, reasoning, toolBodies, answered)
+}
+
+// buildEvidence goes through EvidenceFromResponse rather than setting the
+// projected fields directly, so these tests exercise the projection they depend
+// on — the TrimSpace that makes a whitespace-only cause a non-commitment lives
+// there, and a helper that set the fields by hand would assert a rule it had
+// quietly reimplemented.
+func buildEvidence(conclusion *evaluation.DiagnosticConclusion, answer, reasoning string, toolBodies []string, answered bool) scoring.Evidence {
 	resp := &evaluation.AgentResponse{
 		FinalAnswer: answer,
 		Reasoning:   reasoning,
+		Conclusion:  conclusion,
 	}
 	for i, body := range toolBodies {
 		resp.Actions = append(resp.Actions, evaluation.AgentAction{
@@ -94,9 +116,10 @@ func TestCDA001_DecisionTable(t *testing.T) {
 		wantScore float64
 	}{
 		{
-			name: "row 2: correct root cause names the key and characterizes the deviation",
+			name: "row 2: the declared cause names the key and characterizes the deviation",
 			evidence: adapterEvidence(
-				"The notification-service pods crash because the SMTP_PORT key is missing from the smtp-config ConfigMap.",
+				"The SMTP_PORT key is missing from the smtp-config ConfigMap.",
+				"The notification-service pods are crashing.",
 				"Checked the deployment, then the ConfigMap.",
 				[]string{deploymentBody, configMapBody},
 				true,
@@ -105,11 +128,12 @@ func TestCDA001_DecisionTable(t *testing.T) {
 			wantScore: 1.0,
 		},
 		{
-			name: "row 2: the 2026-08-22 DA-1 answer, verbatim, with its log line in a tool result",
+			name: "row 2: a terse declaration is enough — the field is the whole subject",
 			evidence: adapterEvidence(
-				da1AnswerVerbatim,
-				"Read the pods, then the crashing pod's log.",
-				[]string{`{"level":"ERROR","msg":"invalid configuration","error":"SMTP_PORT is required when SMTP_HOST is set"}`},
+				"SMTP_PORT not set in smtp-config",
+				"See above.",
+				"Checked the ConfigMap.",
+				[]string{configMapBody},
 				true,
 			),
 			wantBand:  scoring.BandRootCauseIdentified,
@@ -118,6 +142,7 @@ func TestCDA001_DecisionTable(t *testing.T) {
 		{
 			name: "row 3: right locus, no deviation characterization",
 			evidence: adapterEvidence(
+				"Something in the SMTP_PORT config.",
 				"Something's wrong with the SMTP_PORT config.",
 				"Looked at the ConfigMap.",
 				[]string{configMapBody},
@@ -129,6 +154,7 @@ func TestCDA001_DecisionTable(t *testing.T) {
 		{
 			name: "row 3: names the subsystem without naming the factor",
 			evidence: adapterEvidence(
+				"The smtp-config ConfigMap is involved somehow.",
 				"I think the smtp-config ConfigMap is involved somehow.",
 				"Looked around.",
 				[]string{configMapBody},
@@ -140,6 +166,7 @@ func TestCDA001_DecisionTable(t *testing.T) {
 		{
 			name: "row 4: incorrect diagnosis names nothing in the subsystem set",
 			evidence: adapterEvidence(
+				"A network partition between nodes.",
 				"The pods are crashing because of a network partition between nodes.",
 				"Checked node health.",
 				[]string{configMapBody},
@@ -149,8 +176,9 @@ func TestCDA001_DecisionTable(t *testing.T) {
 			wantScore: 0.0,
 		},
 		{
-			name: "row 1: budget exhausted at sixteen actions beats a perfect answer",
+			name: "row 1: budget exhausted at sixteen actions beats a perfect declaration",
 			evidence: adapterEvidence(
+				"The SMTP_PORT key is missing from the smtp-config ConfigMap.",
 				"The SMTP_PORT key is missing from the smtp-config ConfigMap.",
 				"Long investigation.",
 				sixteenBodies(),
@@ -160,8 +188,9 @@ func TestCDA001_DecisionTable(t *testing.T) {
 			wantScore: 0.0,
 		},
 		{
-			name: "row 1: never concluded, regardless of intermediate output",
+			name: "row 1: never concluded beats a declaration, and is a real zero",
 			evidence: adapterEvidence(
+				"The SMTP_PORT key is missing from smtp-config.",
 				"",
 				"I suspect SMTP_PORT is missing from smtp-config.",
 				[]string{configMapBody, deploymentBody},
@@ -174,6 +203,7 @@ func TestCDA001_DecisionTable(t *testing.T) {
 			name: "boundary: exactly fifteen actions is within budget",
 			evidence: adapterEvidence(
 				"The SMTP_PORT key is missing from the smtp-config ConfigMap.",
+				"The SMTP_PORT key is missing from the smtp-config ConfigMap.",
 				"Investigation.",
 				sixteenBodies()[:15],
 				true,
@@ -182,30 +212,21 @@ func TestCDA001_DecisionTable(t *testing.T) {
 			wantScore: 1.0,
 		},
 		{
-			name: "echo gaming: SMTP_PORT appears only inside a duplicated tool result line",
+			name: "the answer text never earns a band on its own",
 			evidence: adapterEvidence(
-				"Here is what I found:\n"+deploymentBody+"\nThat is all.",
-				"Dumped the deployment.",
-				[]string{deploymentBody},
+				"A network partition between nodes.",
+				"The SMTP_PORT key is missing from the smtp-config ConfigMap.",
+				"Checked the ConfigMap.",
+				[]string{configMapBody},
 				true,
 			),
 			wantBand:  scoring.BandIncorrect,
 			wantScore: 0.0,
 		},
 		{
-			name: "echo gaming does not suppress a genuine finding on another line",
-			evidence: adapterEvidence(
-				deploymentBody+"\nThe SMTP_PORT key is missing from smtp-config.",
-				"Dumped the deployment, then concluded.",
-				[]string{deploymentBody},
-				true,
-			),
-			wantBand:  scoring.BandRootCauseIdentified,
-			wantScore: 1.0,
-		},
-		{
 			name: "the reasoning trace never earns a band on its own",
 			evidence: adapterEvidence(
+				"I was unable to determine the cause.",
 				"I was unable to determine the cause.",
 				"The SMTP_PORT key is missing from the smtp-config ConfigMap.",
 				[]string{configMapBody},
@@ -213,6 +234,30 @@ func TestCDA001_DecisionTable(t *testing.T) {
 			),
 			wantBand:  scoring.BandIncorrect,
 			wantScore: 0.0,
+		},
+		{
+			name: "the 2026-08-22 DA-1 answer no longer earns a band from its prose",
+			evidence: adapterEvidence(
+				"",
+				da1AnswerVerbatim,
+				"Read the pods, then the crashing pod's log.",
+				[]string{`{"level":"ERROR","msg":"invalid configuration","error":"SMTP_PORT is required when SMTP_HOST is set"}`},
+				true,
+			),
+			wantBand:  scoring.BandUnassessable,
+			wantScore: 0.0,
+		},
+		{
+			name: "a declared cause quoting a tool line still counts — exclusion does not run on the declaration",
+			evidence: adapterEvidence(
+				"SMTP_PORT is missing from configmap/smtp-config",
+				"Here is the warning I found.",
+				"Read the warning.",
+				[]string{`{"warning":"SMTP_PORT is missing from configmap/smtp-config"}`},
+				true,
+			),
+			wantBand:  scoring.BandRootCauseIdentified,
+			wantScore: 1.0,
 		},
 	}
 
@@ -235,20 +280,81 @@ func sixteenBodies() []string {
 	return bodies
 }
 
-// TestCDA001_EchoGamingCannotReachTopBand states the anti-gaming property
-// directly: no arrangement of an answer built solely from duplicated tool
-// response lines reaches 1.0.
-func TestCDA001_EchoGamingCannotReachTopBand(t *testing.T) {
+// TestCDA001_EchoGamingIsClosedByTheSubject states what replaced echo exclusion
+// on this template. The exclusion primitive no longer runs — a committed
+// one-claim field cannot be padded with quotations the way a paragraph can — so
+// the property is now carried by the subject itself: an agent that dumps a tool
+// body into its ANSWER has declared nothing, and the band is unassessable rather
+// than earned.
+func TestCDA001_EchoGamingIsClosedByTheSubject(t *testing.T) {
 	bound, err := scoring.Bind(da1Scenario())
 	require.NoError(t, err)
 
 	// A tool response that itself contains both the identifier and a synonym.
 	echoed := `{"warning":"SMTP_PORT is missing from configmap/smtp-config"}`
-	ev := adapterEvidence(echoed, "Quoted the tool.", []string{echoed}, true)
+	ev := adapterEvidenceUndeclared(echoed, "Quoted the tool.", []string{echoed}, true)
 
 	band := bound.Evaluate(ev)
 	assert.NotEqual(t, scoring.BandRootCauseIdentified, band.Label)
 	assert.Less(t, band.Score, 1.0)
+	assert.True(t, band.Unassessable)
+}
+
+// TestCDA001_AbsentDeclarationIsUnassessableNotZero is order part 4 at the band
+// layer: the two absences are separated, neither scores, and neither is a wrong
+// diagnosis. Row 1 still fires first for an agent that never concluded, because
+// that IS an observed failure and a real zero.
+func TestCDA001_AbsentDeclarationIsUnassessableNotZero(t *testing.T) {
+	bound, err := scoring.Bind(da1Scenario())
+	require.NoError(t, err)
+
+	t.Run("no conclusion declared at all", func(t *testing.T) {
+		ev := adapterEvidenceUndeclared(
+			"The SMTP_PORT key is missing from the smtp-config ConfigMap.",
+			"Checked the ConfigMap.",
+			[]string{configMapBody},
+			true,
+		)
+		band := bound.Evaluate(ev)
+		assert.Equal(t, scoring.BandUnassessable, band.Label)
+		assert.True(t, band.Unassessable)
+		assert.Equal(t, evaluation.UnassessableNoDeclaredConclusion, band.UnassessableReason)
+		assert.Equal(t, 0.0, band.Score, "the score is a float's zero, and the flag is what keeps it out of the average")
+	})
+
+	t.Run("conclusion declared, no cause committed", func(t *testing.T) {
+		ev := adapterEvidence(
+			"",
+			"I could not determine the cause.",
+			"Checked the ConfigMap.",
+			[]string{configMapBody},
+			true,
+		)
+		band := bound.Evaluate(ev)
+		assert.Equal(t, scoring.BandUnassessable, band.Label)
+		assert.True(t, band.Unassessable)
+		assert.Equal(t, evaluation.UnassessableNoCommittedRootCause, band.UnassessableReason)
+	})
+
+	t.Run("whitespace-only cause is a non-commitment, not a cause", func(t *testing.T) {
+		ev := adapterEvidence(
+			"   ",
+			"I could not determine the cause.",
+			"Checked the ConfigMap.",
+			[]string{configMapBody},
+			true,
+		)
+		band := bound.Evaluate(ev)
+		assert.True(t, band.Unassessable)
+		assert.Equal(t, evaluation.UnassessableNoCommittedRootCause, band.UnassessableReason)
+	})
+
+	t.Run("budget exhaustion beats an absent declaration and stays a real zero", func(t *testing.T) {
+		ev := adapterEvidenceUndeclared("", "Ran out of steps.", sixteenBodies(), false)
+		band := bound.Evaluate(ev)
+		assert.Equal(t, scoring.BandBudgetExhausted, band.Label)
+		assert.False(t, band.Unassessable)
+	})
 }
 
 // TestBind_Registry covers the registry contract: an unregistered template id is
@@ -367,7 +473,7 @@ func TestCDA001_BindingIsCopied(t *testing.T) {
 	s.Scoring.Factor.RequiredIdentifiers[0] = "mutated"
 	s.Scoring.Channels[0] = "mutated"
 
-	ev := adapterEvidence("The SMTP_PORT key is missing from smtp-config.", "", []string{configMapBody}, true)
+	ev := adapterEvidence("The SMTP_PORT key is missing from smtp-config.", "", "", []string{configMapBody}, true)
 	band := bound.Evaluate(ev)
 	assert.Equal(t, scoring.BandRootCauseIdentified, band.Label)
 }
