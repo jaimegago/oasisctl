@@ -359,6 +359,17 @@ type CategoryScore struct {
 	// and those whose scenarios were all unassessable. It is what turns
 	// `comparable: false` from a flag into something actionable.
 	UnscoredArchetypes []string `json:"unscored_archetypes,omitempty" yaml:"unscored_archetypes,omitempty"`
+	// IncomparableArchetypes names the scored archetypes whose own score rests
+	// on at least one scenario evaluated over fewer behaviours than it
+	// declared. It is the second reason Comparable can be false, and it is
+	// named separately because the two are different facts: an archetype in
+	// UnscoredArchetypes contributed nothing, while one in here contributed a
+	// number computed over a different population.
+	//
+	// Without the split, a category scored over every archetype it declares
+	// would report comparable: false beside an empty UnscoredArchetypes, and a
+	// reader would have no way to tell which coverage failed.
+	IncomparableArchetypes []string `json:"incomparable_archetypes,omitempty" yaml:"incomparable_archetypes,omitempty"`
 }
 
 // ScoringModel defines how scores aggregate.
@@ -643,6 +654,78 @@ type ScenarioResult struct {
 	// denominator" failure, and it is the one that moves a headline number for
 	// a reason that is not the agent.
 	Unassessable bool `json:"unassessable" yaml:"unassessable"`
+	// BehaviorsDeclared and BehaviorsEvaluated are the scenario's scoring
+	// denominator, before and after exclusions.
+	//
+	// Declared is how many behaviours the scenario put up to be judged: its
+	// must/must_not assertions under Form A, and the single band selection
+	// under Form B, which is the whole of that form's evaluation. Evaluated is
+	// how many of them actually entered the score — an unassessable behaviour
+	// and a PROVIDER_FAILURE behaviour are both excluded before the status is
+	// read, deliberately and correctly, because a count either entered would be
+	// a judgement nobody made.
+	//
+	// The pair is emitted ALWAYS, not only when the two differ. A field that
+	// appears only on the defective case cannot be relied on to be absent on
+	// the sound one, so neither carries omitempty and a scenario that reached
+	// no behaviours at all reports an explicit 0 and 0.
+	//
+	// This exists because the two counts diverging is invisible in every other
+	// output. Run 20260829-173511-75206e, arm da-category-pro, scenario
+	// infra.capability.da.multi-signal-correlation-001: one behaviour
+	// UNASSESSABLE and one FAIL took the scenario from passed=1, failed=1,
+	// total=2 to passed=0, failed=1, total=1, and rubricScore answers passed==0
+	// with the rubric's lowest. 0.55 to 0.1, reported as an ordinary FAIL beside
+	// two-behaviour scores in the same column. Unassessable was false, status was
+	// FAIL, and at the category level comparable was true.
+	//
+	// The remedy is disclosure, not repaired arithmetic: rubricScore is
+	// unchanged and the score still prints. See joe-pm
+	// threads/assertion-denominator-disclosure.md.
+	BehaviorsDeclared  int `json:"behaviors_declared" yaml:"behaviors_declared"`
+	BehaviorsEvaluated int `json:"behaviors_evaluated" yaml:"behaviors_evaluated"`
+}
+
+// DenominatorShrank reports that this scenario was scored over fewer behaviours
+// than it declared, so its score is not comparable to one over the full set.
+//
+// It is a positive predicate rather than a negated Comparable field, and that
+// is deliberate. A scenario that reached no behaviours at all — NOT_APPLICABLE,
+// a provision error, a provider failure before evaluation — carries 0 and 0,
+// and "0 == 0, therefore comparable" is a vacuous truth that would read as a
+// claim of full coverage. Nothing shrank there because nothing was declared,
+// and this returns false, so such a result never propagates incomparability it
+// has no standing to assert.
+//
+// The total-zero case is not a second mechanism: a scenario whose every
+// behaviour was excluded is declared N, evaluated 0, which is this predicate at
+// its limit. Unassessable is set from exactly that condition.
+func (r ScenarioResult) DenominatorShrank() bool {
+	return r.BehaviorsDeclared > 0 && r.BehaviorsEvaluated < r.BehaviorsDeclared
+}
+
+// ArchetypeScore is an archetype's score beside the comparability of the
+// population it was computed over.
+//
+// It is a struct rather than the bare float it used to be because a shrunken
+// scenario denominator has to reach the category score, and an archetype that
+// carried only a number could not pass it on. The same reasoning made
+// CategoryScore a struct.
+type ArchetypeScore struct {
+	Score float64 `json:"score" yaml:"score"`
+	// ScenariosScored is how many scenario results contributed to Score.
+	// Scenarios that judged nothing — unassessable, or not applicable — are
+	// not among them.
+	ScenariosScored int `json:"scenarios_scored" yaml:"scenarios_scored"`
+	// Comparable is false when at least one contributing scenario was scored
+	// over fewer behaviours than it declared. Serialized without omitempty so
+	// an explicit true is a positive claim, on the same reasoning as
+	// CategoryScore.Comparable.
+	Comparable bool `json:"comparable" yaml:"comparable"`
+	// ShrunkenScenarios names the contributing scenarios whose denominator
+	// shrank, in the order they were scored. It is what turns comparable:
+	// false into something a reader can act on.
+	ShrunkenScenarios []string `json:"shrunken_scenarios,omitempty" yaml:"shrunken_scenarios,omitempty"`
 }
 
 // EvaluationMode describes which filters were active during an evaluation.
@@ -682,7 +765,7 @@ type Verdict struct {
 	CapabilityResults     []ScenarioResult
 	DimensionScores       map[string]float64
 	CategoryScores        map[string]CategoryScore
-	ArchetypeScores       map[string]float64
+	ArchetypeScores       map[string]ArchetypeScore
 	OASISCoreSpec         string
 	Report                *Report
 	Aborted               bool
@@ -769,11 +852,11 @@ type SubcategoryResult struct {
 // and keeps its own name; it is reported because §2.5 asks for the archetype
 // breakdown behind a category score.
 type CapabilitySummary struct {
-	DomainCategories map[string]CategoryScore `json:"domain_categories" yaml:"domain_categories"`
-	CoreDimensions   map[string]float64       `json:"core_dimensions" yaml:"core_dimensions"`
-	ArchetypeScores  map[string]float64       `json:"archetype_scores" yaml:"archetype_scores"`
-	TierLabel        string                   `json:"tier_label" yaml:"tier_label"`
-	Disclaimer       string                   `json:"disclaimer" yaml:"disclaimer"`
+	DomainCategories map[string]CategoryScore  `json:"domain_categories" yaml:"domain_categories"`
+	CoreDimensions   map[string]float64        `json:"core_dimensions" yaml:"core_dimensions"`
+	ArchetypeScores  map[string]ArchetypeScore `json:"archetype_scores" yaml:"archetype_scores"`
+	TierLabel        string                    `json:"tier_label" yaml:"tier_label"`
+	Disclaimer       string                    `json:"disclaimer" yaml:"disclaimer"`
 }
 
 // ProviderConformanceRequirements defines what a profile requires from the

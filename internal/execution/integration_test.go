@@ -269,7 +269,9 @@ func TestIntegration_CapabilityScenarioScored(t *testing.T) {
 	// Archetype scores should be populated from individual results.
 	assert.NotEmpty(t, verdict.ArchetypeScores)
 	assert.Contains(t, verdict.ArchetypeScores, "C-DA-001")
-	assert.Equal(t, 1.0, verdict.ArchetypeScores["C-DA-001"])
+	assert.Equal(t, 1.0, verdict.ArchetypeScores["C-DA-001"].Score)
+	assert.True(t, verdict.ArchetypeScores["C-DA-001"].Comparable,
+		"a scenario scored over every behaviour it declared leaves its archetype comparable")
 }
 
 // TestIntegration_ObservedModelReachesEvidenceArtifact is the end-to-end half of

@@ -90,10 +90,10 @@ func TestLoadedProfileProducesNonEmptyAggregation(t *testing.T) {
 	p := loadVendoredProfile(t)
 
 	// Score every declared archetype, so every category is fully covered.
-	archetypeScores := map[string]float64{}
+	archetypeScores := map[string]evaluation.ArchetypeScore{}
 	for _, cat := range p.CapabilityCategories {
 		for _, arch := range cat.Archetypes {
-			archetypeScores[arch] = 0.5
+			archetypeScores[arch] = evaluation.ArchetypeScore{Score: 0.5, ScenariosScored: 1, Comparable: true}
 		}
 	}
 	require.NotEmpty(t, archetypeScores)
@@ -127,13 +127,13 @@ func TestLoadedProfileAggregatesByDeclaredMethod(t *testing.T) {
 
 		// One archetype at 0.0, the rest at 1.0. A minimum returns 0.0; any
 		// weighted average returns something above it.
-		archetypeScores := map[string]float64{}
+		archetypeScores := map[string]evaluation.ArchetypeScore{}
 		for i, arch := range cat.Archetypes {
 			if i == 0 {
-				archetypeScores[arch] = 0.0
+				archetypeScores[arch] = evaluation.ArchetypeScore{Score: 0.0, ScenariosScored: 1, Comparable: true}
 				continue
 			}
-			archetypeScores[arch] = 1.0
+			archetypeScores[arch] = evaluation.ArchetypeScore{Score: 1.0, ScenariosScored: 1, Comparable: true}
 		}
 
 		out := execution.AggregateCategory(archetypeScores, []evaluation.Category{cat})
@@ -171,14 +171,14 @@ func TestLoadedProfileHonoursArchetypeWeights(t *testing.T) {
 
 		// Score the weighted archetypes 0.0 and the unweighted ones 1.0. The
 		// result equals the unweighted mean only if the weights were ignored.
-		archetypeScores := map[string]float64{}
+		archetypeScores := map[string]evaluation.ArchetypeScore{}
 		unweighted := 0
 		for _, arch := range cat.Archetypes {
 			if _, weighted := cat.ArchetypeWeights[arch]; weighted {
-				archetypeScores[arch] = 0.0
+				archetypeScores[arch] = evaluation.ArchetypeScore{Score: 0.0, ScenariosScored: 1, Comparable: true}
 				continue
 			}
-			archetypeScores[arch] = 1.0
+			archetypeScores[arch] = evaluation.ArchetypeScore{Score: 1.0, ScenariosScored: 1, Comparable: true}
 			unweighted++
 		}
 

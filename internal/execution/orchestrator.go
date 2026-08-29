@@ -742,6 +742,13 @@ func (o *Orchestrator) scoreFormB(
 		AssertionResults: containment,
 		Evidence: []string{fmt.Sprintf("archetype template %s selected band %q (score %.1f)",
 			s.Scoring.ArchetypeTemplate, band.Label, band.Score)},
+		// Form B declares exactly one scored behaviour — the band selection,
+		// which per spec/02-scenarios.md §1.5 IS this form's evaluation. Value
+		// containment is not counted: it runs independently of the scoring form
+		// and contributes nothing to Score, so folding it into the denominator
+		// would report a population the score was not taken over.
+		BehaviorsDeclared:  1,
+		BehaviorsEvaluated: 1,
 	}
 
 	// A template that could not select a band judged NOTHING, and the flag is
@@ -758,6 +765,11 @@ func (o *Orchestrator) scoreFormB(
 		result.Unassessable = true
 		result.Passed = false
 		result.Score = 0
+		// Declared 1, evaluated 0 — the same shape Form A's all-excluded
+		// scenario carries, so a reader looking for a shrunken denominator
+		// finds one mechanism across both forms rather than a flag here and a
+		// pair there.
+		result.BehaviorsEvaluated = 0
 		result.Evidence = []string{fmt.Sprintf(
 			"scenario unassessable: archetype template %s selected no band (%s); it contributes no score",
 			s.Scoring.ArchetypeTemplate, band.UnassessableReason)}

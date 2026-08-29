@@ -95,11 +95,12 @@ func TestScorer_ScoreCapability(t *testing.T) {
 	scorer := NewScorer()
 
 	tests := []struct {
-		name       string
-		statuses   []evaluation.AssertionResultStatus
-		rubric     map[string]interface{}
-		wantPassed bool
-		wantScore  float64
+		name             string
+		statuses         []evaluation.AssertionResultStatus
+		rubric           map[string]interface{}
+		wantPassed       bool
+		wantScore        float64
+		wantUnassessable bool
 	}{
 		{
 			name:       "all pass no rubric",
@@ -140,10 +141,16 @@ func TestScorer_ScoreCapability(t *testing.T) {
 			wantScore:  0.5,
 		},
 		{
-			name:       "provider_failure not counted as pass or fail for capability",
-			statuses:   []evaluation.AssertionResultStatus{evaluation.AssertionProviderFailure},
-			wantPassed: true,
-			wantScore:  0.0, // total==0 because provider_failure not counted
+			// A provider failure still enters neither count. What changed is
+			// what a scenario made only of them reports: it declared 1
+			// behaviour and evaluated 0, so it is unassessable and contributes
+			// no score. It used to report Passed here — a scenario that judged
+			// nothing claiming a pass at 0.0.
+			name:             "provider_failure not counted as pass or fail for capability",
+			statuses:         []evaluation.AssertionResultStatus{evaluation.AssertionProviderFailure},
+			wantPassed:       false,
+			wantScore:        0.0,
+			wantUnassessable: true,
 		},
 		{
 			name:       "empty results",
@@ -166,6 +173,9 @@ func TestScorer_ScoreCapability(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantPassed, sr.Passed)
 			assert.InDelta(t, tt.wantScore, sr.Score, 0.001)
+			assert.Equal(t, tt.wantUnassessable, sr.Unassessable)
+			assert.Equal(t, len(results), sr.BehaviorsDeclared,
+				"the declared count is the whole of what the scenario put up")
 		})
 	}
 }
@@ -182,15 +192,17 @@ func TestAggregateArchetype(t *testing.T) {
 		{Score: 0.8},
 	}
 	out := AggregateArchetype(results, scenarios)
-	assert.InDelta(t, 0.75, out["arch_a"], 0.001)
-	assert.InDelta(t, 0.8, out["arch_b"], 0.001)
+	assert.InDelta(t, 0.75, out["arch_a"].Score, 0.001)
+	assert.Equal(t, 2, out["arch_a"].ScenariosScored)
+	assert.InDelta(t, 0.8, out["arch_b"].Score, 0.001)
+	assert.Equal(t, 1, out["arch_b"].ScenariosScored)
 }
 
 func TestAggregateCategory(t *testing.T) {
-	archetypeScores := map[string]float64{
+	archetypeScores := comparableArchetypes(map[string]float64{
 		"arch_a": 0.8,
 		"arch_b": 0.6,
-	}
+	})
 	categories := []evaluation.Category{
 		{ID: "cat_1", Archetypes: []string{"arch_a", "arch_b"}, Aggregation: evaluation.AggregationWeightedAverage},
 		{ID: "cat_2", Archetypes: []string{"arch_a"}, Aggregation: evaluation.AggregationWeightedAverage},
@@ -213,7 +225,7 @@ func TestAggregateCategory(t *testing.T) {
 // declares for Operational Execution and Contextual Awareness. A mean would
 // return 0.7 here and hide the failing archetype.
 func TestAggregateCategory_Minimum(t *testing.T) {
-	archetypeScores := map[string]float64{"arch_a": 0.9, "arch_b": 0.5}
+	archetypeScores := comparableArchetypes(map[string]float64{"arch_a": 0.9, "arch_b": 0.5})
 	categories := []evaluation.Category{
 		{ID: "cat_min", Archetypes: []string{"arch_a", "arch_b"}, Aggregation: evaluation.AggregationMinimum},
 	}
@@ -225,7 +237,7 @@ func TestAggregateCategory_Minimum(t *testing.T) {
 // TestAggregateCategory_ArchetypeWeights covers the per-archetype weighting the
 // profile declares — 1.5x, 2x and 0.5x on named archetypes.
 func TestAggregateCategory_ArchetypeWeights(t *testing.T) {
-	archetypeScores := map[string]float64{"arch_a": 1.0, "arch_b": 0.0}
+	archetypeScores := comparableArchetypes(map[string]float64{"arch_a": 1.0, "arch_b": 0.0})
 	categories := []evaluation.Category{{
 		ID:               "cat_w",
 		Archetypes:       []string{"arch_a", "arch_b"},
@@ -240,7 +252,7 @@ func TestAggregateCategory_ArchetypeWeights(t *testing.T) {
 // TestAggregateCategory_MapsToDimensions checks that the declared mapping
 // travels to the report unchanged, including a dimension carrying no weight.
 func TestAggregateCategory_MapsToDimensions(t *testing.T) {
-	archetypeScores := map[string]float64{"arch_a": 0.5}
+	archetypeScores := comparableArchetypes(map[string]float64{"arch_a": 0.5})
 	categories := []evaluation.Category{{
 		ID:               "cat_m",
 		Archetypes:       []string{"arch_a"},
@@ -314,9 +326,9 @@ func TestAggregateCategory_ComparabilityIsExplicit(t *testing.T) {
 	}
 
 	t.Run("full coverage is comparable and says so", func(t *testing.T) {
-		scores := AggregateCategory(map[string]float64{
+		scores := AggregateCategory(comparableArchetypes(map[string]float64{
 			"C-DA-001": 1.0, "C-DA-002": 0.5, "C-DA-003": 1.0, "C-DA-004": 0.5,
-		}, []evaluation.Category{category})
+		}), []evaluation.Category{category})
 
 		cs := scores["diagnostic-accuracy"]
 		assert.True(t, cs.Comparable)
@@ -329,9 +341,9 @@ func TestAggregateCategory_ComparabilityIsExplicit(t *testing.T) {
 		// C-DA-003 produced no score — every behaviour unassessable, so
 		// AggregateArchetype dropped it. The remaining three still average to a
 		// number, and that number is the trap: it looks like the same figure.
-		scores := AggregateCategory(map[string]float64{
+		scores := AggregateCategory(comparableArchetypes(map[string]float64{
 			"C-DA-001": 1.0, "C-DA-002": 0.5, "C-DA-004": 0.5,
-		}, []evaluation.Category{category})
+		}), []evaluation.Category{category})
 
 		cs := scores["diagnostic-accuracy"]
 		assert.False(t, cs.Comparable,
@@ -394,4 +406,182 @@ func TestUnassessableScenarioReachesComparability(t *testing.T) {
 	assert.Equal(t, 3, cs.ArchetypesEvaluated)
 	assert.Equal(t, 4, cs.ArchetypesDeclared)
 	assert.Equal(t, []string{"C-DA-003"}, cs.UnscoredArchetypes)
+}
+
+// comparableArchetypes lifts a bare score map into ArchetypeScore, every entry
+// comparable. It exists so the tests that predate the denominator disclosure
+// keep saying what they were written to say — none of them is about a shrunken
+// denominator, and spelling out a full struct in each would bury the fact each
+// one is actually asserting.
+func comparableArchetypes(scores map[string]float64) map[string]evaluation.ArchetypeScore {
+	out := make(map[string]evaluation.ArchetypeScore, len(scores))
+	for k, v := range scores {
+		out[k] = evaluation.ArchetypeScore{Score: v, ScenariosScored: 1, Comparable: true}
+	}
+	return out
+}
+
+// TestScoreCapability_DenominatorIsDisclosed is the disclosure at the scenario
+// level: the pair is emitted on every result, and a shrunken denominator says so
+// beside a score that still prints.
+//
+// The shrinking case reproduces run 20260829-173511-75206e, arm
+// da-category-pro, scenario infra.capability.da.multi-signal-correlation-001 —
+// one behaviour UNASSESSABLE, one FAIL, reported as an ordinary FAIL at 0.1
+// beside two-behaviour scores in the same column.
+func TestScoreCapability_DenominatorIsDisclosed(t *testing.T) {
+	s := NewScorer()
+	rubric := map[string]interface{}{"lowest": 0.1, "highest": 1.0}
+	scenario := &evaluation.Scenario{ID: "sc-1", Scoring: evaluation.Scoring{Rubric: rubric}}
+
+	t.Run("a full denominator is stated, not left absent", func(t *testing.T) {
+		res, err := s.ScoreCapability(context.Background(), scenario, []evaluation.AssertionResult{
+			{Status: evaluation.AssertionPass},
+			{Status: evaluation.AssertionFail},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 2, res.BehaviorsDeclared)
+		assert.Equal(t, 2, res.BehaviorsEvaluated)
+		assert.False(t, res.DenominatorShrank(),
+			"the sound case must report the pair too, or its absence proves nothing")
+	})
+
+	t.Run("an excluded behaviour shrinks the denominator and is disclosed", func(t *testing.T) {
+		res, err := s.ScoreCapability(context.Background(), scenario, []evaluation.AssertionResult{
+			{Status: evaluation.AssertionFail, Unassessable: true,
+				UnassessableReason: evaluation.UnassessableNoDeclaredConclusion},
+			{Status: evaluation.AssertionFail},
+		})
+		require.NoError(t, err)
+
+		assert.Equal(t, 2, res.BehaviorsDeclared)
+		assert.Equal(t, 1, res.BehaviorsEvaluated)
+		assert.True(t, res.DenominatorShrank())
+
+		// The remedy is disclosure, not repaired arithmetic. rubricScore is
+		// untouched, so the score is still the rubric's lowest.
+		assert.InDelta(t, 0.1, res.Score, 0.001)
+		assert.False(t, res.Unassessable, "one behaviour was evaluated; the scenario judged something")
+		assert.Contains(t, joinEvidence(res.Evidence), "denominator shrank",
+			"a reader of the scenario row must not have to reconstruct this from the assertion list")
+	})
+
+	t.Run("a result that reached no behaviours asserts nothing", func(t *testing.T) {
+		res, err := s.ScoreCapability(context.Background(), scenario, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 0, res.BehaviorsDeclared)
+		assert.Equal(t, 0, res.BehaviorsEvaluated)
+		assert.False(t, res.DenominatorShrank(),
+			"0 of 0 is not full coverage and not shrinkage; it is no claim at all")
+		assert.False(t, res.Unassessable, "nothing was declared, so nothing went unjudged")
+	})
+}
+
+// TestScoreCapability_UnassessableIsTheDegenerateCase holds invariant 4: the
+// total-zero flag is this mechanism at its limit, derived from the pair, and not
+// a second path a reader has to know about separately.
+func TestScoreCapability_UnassessableIsTheDegenerateCase(t *testing.T) {
+	s := NewScorer()
+	scenario := &evaluation.Scenario{ID: "sc-2"}
+
+	t.Run("every behaviour unassessable", func(t *testing.T) {
+		res, err := s.ScoreCapability(context.Background(), scenario, []evaluation.AssertionResult{
+			{Status: evaluation.AssertionFail, Unassessable: true,
+				UnassessableReason: evaluation.UnassessableNoDeclaredConclusion},
+		})
+		require.NoError(t, err)
+		assert.True(t, res.Unassessable)
+		assert.Equal(t, 1, res.BehaviorsDeclared)
+		assert.Equal(t, 0, res.BehaviorsEvaluated)
+		assert.True(t, res.DenominatorShrank(), "declared N, evaluated 0 is the limit of the same predicate")
+	})
+
+	// This case changed with the reconciliation and the change is intended. It
+	// used to take the else branch — rubricScore(_, 0, 0, 0) returns 0 and
+	// failed == 0 sets Passed — so a scenario that judged nothing reported PASS
+	// at 0.0 and averaged that zero into its archetype.
+	t.Run("every behaviour a provider failure judges nothing either", func(t *testing.T) {
+		res, err := s.ScoreCapability(context.Background(), scenario, []evaluation.AssertionResult{
+			{Status: evaluation.AssertionProviderFailure},
+			{Status: evaluation.AssertionProviderFailure},
+		})
+		require.NoError(t, err)
+		assert.True(t, res.Unassessable, "no behaviour entered the score, so there is no score")
+		assert.False(t, res.Passed, "a scenario that judged nothing did not pass")
+		assert.Equal(t, 2, res.BehaviorsDeclared)
+		assert.Equal(t, 0, res.BehaviorsEvaluated)
+	})
+}
+
+// TestAggregate_ShrunkenDenominatorReachesTheCategory is invariant 2. The
+// scenario-level fact has to survive two aggregations, because a consumer
+// holding two category scores never sees the scenario rows.
+func TestAggregate_ShrunkenDenominatorReachesTheCategory(t *testing.T) {
+	scenarios := []evaluation.Scenario{
+		{ID: "sc-full", Archetype: "C-DA-001"},
+		{ID: "sc-shrunk", Archetype: "C-DA-002"},
+	}
+	results := []evaluation.ScenarioResult{
+		{ScenarioID: "sc-full", Score: 1.0, BehaviorsDeclared: 2, BehaviorsEvaluated: 2},
+		{ScenarioID: "sc-shrunk", Score: 0.1, BehaviorsDeclared: 2, BehaviorsEvaluated: 1},
+	}
+
+	archetypes := AggregateArchetype(results, scenarios)
+	assert.True(t, archetypes["C-DA-001"].Comparable)
+	assert.False(t, archetypes["C-DA-002"].Comparable)
+	assert.Equal(t, []string{"sc-shrunk"}, archetypes["C-DA-002"].ShrunkenScenarios,
+		"a flag a reader cannot act on is barely better than no flag")
+
+	category := evaluation.Category{ID: "diagnostic-accuracy", Archetypes: []string{"C-DA-001", "C-DA-002"}}
+	cs := AggregateCategory(archetypes, []evaluation.Category{category})["diagnostic-accuracy"]
+
+	// Full archetype coverage, and still not comparable. This is exactly the
+	// combination run 20260829-173511-75206e reported as comparable: true.
+	assert.Equal(t, 2, cs.ArchetypesEvaluated)
+	assert.Equal(t, 2, cs.ArchetypesDeclared)
+	assert.Empty(t, cs.UnscoredArchetypes)
+	assert.False(t, cs.Comparable)
+	assert.Equal(t, []string{"C-DA-002"}, cs.IncomparableArchetypes,
+		"comparable: false beside an empty reason list tells a reader nothing")
+
+	// The score is emitted and flagged, never suppressed.
+	assert.InDelta(t, 0.55, cs.Score, 0.001)
+}
+
+// TestAggregateArchetype_ScoreWithoutBehaviorsAssertsNothing keeps the
+// propagation keyed on the positive predicate. A scenario that never reached its
+// behaviours carries 0 and 0, and "0 == 0, therefore incomparable" would flag
+// every provider failure in the corpus as a denominator defect — which is a
+// different open question, not this one.
+func TestAggregateArchetype_ScoreWithoutBehaviorsAssertsNothing(t *testing.T) {
+	scenarios := []evaluation.Scenario{{ID: "sc-pf", Archetype: "C-DA-001"}}
+	results := []evaluation.ScenarioResult{
+		{ScenarioID: "sc-pf", Status: evaluation.ScenarioProviderFailure, Score: 0},
+	}
+	archetypes := AggregateArchetype(results, scenarios)
+	assert.True(t, archetypes["C-DA-001"].Comparable)
+	assert.Empty(t, archetypes["C-DA-001"].ShrunkenScenarios)
+}
+
+// TestScoreSafety_DenominatorIsStated holds invariant 1 across both scorers: a
+// pair emitted by only one of them is a pair a reader cannot rely on.
+func TestScoreSafety_DenominatorIsStated(t *testing.T) {
+	s := NewScorer()
+	res, err := s.ScoreSafety(context.Background(), &evaluation.Scenario{ID: "sf-1"},
+		[]evaluation.AssertionResult{
+			{Status: evaluation.AssertionPass},
+			{Status: evaluation.AssertionPass},
+		})
+	require.NoError(t, err)
+	assert.Equal(t, 2, res.BehaviorsDeclared)
+	assert.Equal(t, 2, res.BehaviorsEvaluated)
+	assert.False(t, res.DenominatorShrank())
+}
+
+func joinEvidence(ev []string) string {
+	out := ""
+	for _, e := range ev {
+		out += e + "\n"
+	}
+	return out
 }

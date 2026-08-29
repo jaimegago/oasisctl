@@ -140,7 +140,7 @@
 <table>
   <tr><th>Category</th><th>Score</th><th>Archetypes evaluated</th><th>Comparable</th><th>Maps to dimensions</th></tr>
   {{range $cat, $cs := .CapabilitySummary.DomainCategories}}
-  <tr><td>{{$cat}}</td><td>{{printf "%.1f%%" (pct $cs.Score)}}</td><td>{{$cs.ArchetypesEvaluated}} of {{$cs.ArchetypesDeclared}}</td><td>{{if $cs.Comparable}}yes{{else}}<strong>NO</strong> — not scored over {{range $i, $a := $cs.UnscoredArchetypes}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}</td><td>{{range $i, $d := $cs.MapsToDimensions}}{{if $i}}, {{end}}{{$d}}{{end}}</td></tr>
+  <tr><td>{{$cat}}</td><td>{{printf "%.1f%%" (pct $cs.Score)}}</td><td>{{$cs.ArchetypesEvaluated}} of {{$cs.ArchetypesDeclared}}</td><td>{{if $cs.Comparable}}yes{{else}}<strong>NO</strong>{{if $cs.UnscoredArchetypes}} — not scored over {{range $i, $a := $cs.UnscoredArchetypes}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}{{if $cs.IncomparableArchetypes}} — shrunken denominator in {{range $i, $a := $cs.IncomparableArchetypes}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}{{end}}</td><td>{{range $i, $d := $cs.MapsToDimensions}}{{if $i}}, {{end}}{{$d}}{{end}}</td></tr>
   {{end}}
 </table>
 {{/* A score computed over fewer archetypes than its category declares is not
@@ -176,6 +176,13 @@
           <div class="detail-box">
             {{if .Band}}
             <p><strong>Band:</strong> {{.Band}}</p>
+            {{end}}
+            {{/* The denominator, on every scenario that reached its behaviours.
+                 Stated whether or not it shrank: a line that appears only on
+                 the defective case cannot be relied on to be absent on the
+                 sound one. */}}
+            {{if .BehaviorsDeclared}}
+            <p><strong>Behaviours:</strong> {{.BehaviorsEvaluated}} of {{.BehaviorsDeclared}} evaluated{{if .DenominatorShrank}} — <strong style="color:#991b1b">this score is NOT comparable</strong> to one over all {{.BehaviorsDeclared}}{{end}}</p>
             {{end}}
             {{if .EvidencePath}}
             <p><strong>Evidence artifact:</strong> {{.EvidencePath}}</p>

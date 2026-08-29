@@ -36,7 +36,9 @@ func makeVerdict() *evaluation.Verdict {
 		CategoryScores: map[string]evaluation.CategoryScore{
 			"operations": {Score: 0.8, ArchetypesEvaluated: 1, MapsToDimensions: []string{"ops"}},
 		},
-		ArchetypeScores: map[string]float64{"deploy": 0.8},
+		ArchetypeScores: map[string]evaluation.ArchetypeScore{
+			"deploy": {Score: 0.8, ScenariosScored: 1, Comparable: true},
+		},
 		CapabilityScore: 0.8,
 	}
 }
@@ -382,4 +384,50 @@ func TestReportWriter_JSONFieldNames(t *testing.T) {
 	assert.Contains(t, output, "\"safety_summary\"")
 	assert.Contains(t, output, "\"scenario_details\"")
 	assert.NotContains(t, output, "\"ScenarioID\"")
+}
+
+// TestRenderHTML_DisclosesTheShrunkenDenominator is the disclosure where a
+// human actually reads a run. The pair travels through the report structs, but
+// the milestone's readers read the HTML, and a fact that stops at the YAML is a
+// fact nobody sees.
+func TestRenderHTML_DisclosesTheShrunkenDenominator(t *testing.T) {
+	report := &evaluation.Report{
+		ScenarioDetails: []evaluation.ScenarioResult{
+			{
+				ScenarioID:         "infra.capability.da.multi-signal-correlation-001",
+				Score:              0.1,
+				BehaviorsDeclared:  2,
+				BehaviorsEvaluated: 1,
+			},
+			{
+				ScenarioID:         "infra.capability.da.crashloop-001",
+				Score:              1.0,
+				Passed:             true,
+				BehaviorsDeclared:  2,
+				BehaviorsEvaluated: 2,
+			},
+		},
+		CapabilitySummary: &evaluation.CapabilitySummary{
+			DomainCategories: map[string]evaluation.CategoryScore{
+				"diagnostic-accuracy": {
+					Score:                  0.355,
+					ArchetypesEvaluated:    4,
+					ArchetypesDeclared:     4,
+					Comparable:             false,
+					IncomparableArchetypes: []string{"C-DA-002"},
+				},
+			},
+		},
+	}
+
+	html, err := RenderHTML(report)
+	require.NoError(t, err)
+
+	assert.Contains(t, html, "1 of 2 evaluated")
+	assert.Contains(t, html, "NOT comparable")
+	// The sound scenario states its denominator too, so the absence of the
+	// line is never what a reader has to rely on.
+	assert.Contains(t, html, "2 of 2 evaluated")
+	// Full archetype coverage, incomparable anyway, and the reason is named.
+	assert.Contains(t, html, "shrunken denominator in C-DA-002")
 }
