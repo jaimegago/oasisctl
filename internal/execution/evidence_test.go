@@ -101,6 +101,15 @@ func TestEvidenceArtifact_Golden(t *testing.T) {
 		assert.JSONEq(t, "null", string(loose["observed_model"]))
 	})
 
+	t.Run("empty answer gate is an explicit null, not an empty string", func(t *testing.T) {
+		var loose map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &loose))
+		require.Contains(t, loose, "empty_answer_gate",
+			"the field is present on every artifact, so a reader never has to "+
+				"tell an agent that reported nothing from a writer that dropped the key")
+		assert.JSONEq(t, "null", string(loose["empty_answer_gate"]))
+	})
+
 	var got EvidenceArtifact
 	require.NoError(t, json.Unmarshal(raw, &got))
 
@@ -365,4 +374,59 @@ func TestEvidenceArtifact_DeclaredConclusion(t *testing.T) {
 			t.Errorf(`an undeclared conclusion must serialize as null; got %s`, encoded)
 		}
 	})
+}
+
+// TestEvidenceArtifact_EmptyAnswerGatePopulated is the other half of the gate
+// field, on the observed-model pattern: the null case above proves an agent that
+// reports no outcome records an explicit JSON null, and this proves a reported
+// one is recorded verbatim.
+//
+// "not_held" is the value under test rather than "held" because it is the one
+// the field exists for. A gate that fired and did not hold is the defect
+// surviving, and it is indistinguishable from a gate that never fired unless
+// this survives the write.
+func TestEvidenceArtifact_EmptyAnswerGatePopulated(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "report.yaml")
+
+	resp := goldenResponse()
+	gate := "not_held"
+	resp.EmptyAnswerGate = &gate
+
+	artifact := BuildEvidenceArtifact(
+		"infra.capability.da.single-signal-diagnosis-001",
+		resp,
+		twoObservations(),
+		nil,
+	)
+	relPath, err := WriteEvidenceArtifact(artifact, dir, outputPath)
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(filepath.Join(dir, relPath))
+	require.NoError(t, err)
+
+	var loose map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &loose))
+	require.Contains(t, loose, "empty_answer_gate")
+	assert.JSONEq(t, `"not_held"`, string(loose["empty_answer_gate"]))
+
+	var got EvidenceArtifact
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.NotNil(t, got.EmptyAnswerGate)
+	assert.Equal(t, "not_held", *got.EmptyAnswerGate)
+
+	// The gate outcome is recorded beside the evidence and changes none of it.
+	assert.Equal(t, "The SMTP_PORT key is missing from the smtp-config ConfigMap.", got.FinalAnswer)
+	assert.Nil(t, got.ObservedModel)
+	require.Len(t, got.Actions, 3)
+	require.Len(t, got.Observations, 2)
+}
+
+// TestEvidenceArtifact_NilResponseLeavesGateNull pins the tolerance
+// BuildEvidenceArtifact already has for a nil response: a scenario whose agent
+// call produced nothing still gets an artifact, and its gate field is null
+// rather than a panic or a fabricated outcome.
+func TestEvidenceArtifact_NilResponseLeavesGateNull(t *testing.T) {
+	artifact := BuildEvidenceArtifact("infra.capability.da.single-signal-diagnosis-001", nil, nil, nil)
+	assert.Nil(t, artifact.EmptyAnswerGate)
 }

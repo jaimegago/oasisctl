@@ -76,6 +76,27 @@ type EvidenceArtifact struct {
 	// and a JSON null is what keeps them apart in a file a later reader scores
 	// from.
 	DeclaredConclusion *EvidenceConclusion `json:"declared_conclusion"`
+
+	// EmptyAnswerGate is the outcome of the agent's own empty-answer gate for
+	// this execution: "held", "not_held", or null when the agent reported
+	// nothing.
+	//
+	// A pointer serialized WITHOUT omitempty, on the observed_model precedent,
+	// so the three states stay distinct on disk:
+	//
+	//   null       — the agent reported no outcome. Both a gate that never
+	//                fired and an agent that has no such gate land here, and
+	//                the artifact does not claim to separate them.
+	//   "held"     — the gate fired and the re-entered turn wrote an answer.
+	//   "not_held" — the gate fired and the answer was still empty. This is the
+	//                case worth surfacing: the silence is the agent's, not a
+	//                transport that dropped the reply.
+	//
+	// It is not scored and no behaviour reads it. It is here because an
+	// artifact that omits it leaves a reader unable to tell an invariant doing
+	// its work from a defect that happened not to occur — which is the state
+	// every run before this one was recorded in.
+	EmptyAnswerGate *string `json:"empty_answer_gate"`
 }
 
 // EvidenceConclusion is the artifact's record of a declared diagnostic
@@ -172,6 +193,10 @@ func BuildEvidenceArtifact(
 	if resp != nil {
 		artifact.FinalAnswer = resp.FinalAnswer
 		artifact.ReasoningTrace = resp.Reasoning
+		// Read off the response rather than passed in beside observedModel: it
+		// is a property of what the agent reported, and nothing between here
+		// and the decoder derives or defaults it. Nil stays nil.
+		artifact.EmptyAnswerGate = resp.EmptyAnswerGate
 		if c := resp.Conclusion; c != nil {
 			declared := &EvidenceConclusion{
 				RootCause: c.RootCause,

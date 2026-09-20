@@ -330,6 +330,71 @@ func TestIntegration_ObservedModelReachesEvidenceArtifact(t *testing.T) {
 	})
 }
 
+// TestIntegration_EmptyAnswerGateReachesEvidenceArtifact is the end-to-end half
+// of the empty-answer gate chain: an outcome on the agent's wire response
+// survives the decode, the orchestrator and the artifact write, landing in
+// empty_answer_gate — and an agent that reports none produces an explicit JSON
+// null.
+//
+// This chain is the whole point of the field. joe D-0160 emits the outcome on
+// its task response, and before this it stopped at the first consumer: the
+// adapter struct had no such field, so `held`, `not_held` and absent were
+// indistinguishable in every artifact a run kept, and the invariant built to
+// close `empty-answer-turn-accepted` could not be observed working. A
+// regression anywhere along the three hops restores exactly that, silently, and
+// only a run's artifacts would show it.
+func TestIntegration_EmptyAnswerGateReachesEvidenceArtifact(t *testing.T) {
+	run := func(t *testing.T, gate string) map[string]json.RawMessage {
+		t.Helper()
+
+		provSrv := newMockProviderServer(t)
+		agentSrv := newMockAgentServer(t)
+		agentSrv.defaultResponse = mockAgentResponse{
+			Reasoning:       "The notification-service pods are crashing because the SMTP_PORT key is missing from the smtp-config ConfigMap.",
+			FinalAnswer:     "The root cause is a missing configuration key: SMTP_PORT is not present in the smtp-config ConfigMap.",
+			EmptyAnswerGate: gate,
+		}
+
+		scenario := loadScenarioByID(t, profileDir, "infra.capability.da.single-signal-diagnosis-001")
+		evidenceDir := t.TempDir()
+		orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1, EvidenceDir: evidenceDir})
+
+		verdict, err := orch.Run(
+			context.Background(), profileDir,
+			[]evaluation.Scenario{scenario},
+			"test-agent", "integration-test", "yaml", "",
+		)
+		require.NoError(t, err)
+		require.Len(t, verdict.CapabilityResults, 1)
+
+		path := filepath.Join(evidenceDir, filepath.Base(verdict.CapabilityResults[0].EvidencePath))
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+
+		var loose map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &loose))
+		require.Contains(t, loose, "empty_answer_gate")
+		return loose
+	}
+
+	t.Run("held survives to the artifact", func(t *testing.T) {
+		loose := run(t, "held")
+		assert.JSONEq(t, `"held"`, string(loose["empty_answer_gate"]))
+	})
+
+	t.Run("not_held survives to the artifact", func(t *testing.T) {
+		loose := run(t, "not_held")
+		assert.JSONEq(t, `"not_held"`, string(loose["empty_answer_gate"]),
+			"the defect surviving its own gate is the outcome the field exists to record")
+	})
+
+	t.Run("no reported outcome records an explicit null", func(t *testing.T) {
+		loose := run(t, "")
+		assert.JSONEq(t, "null", string(loose["empty_answer_gate"]),
+			"an agent with no such gate must not produce an observed outcome named \"\"")
+	})
+}
+
 // TestIntegration_FormBBandAndEvidenceInReports confirms the two new scenario
 // record fields reach every report format.
 func TestIntegration_FormBBandAndEvidenceInReports(t *testing.T) {

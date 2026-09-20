@@ -67,6 +67,12 @@ type agentResponseBody struct {
 		Rationale string `json:"rationale"`
 	} `json:"discarded"`
 	ConclusionDeclared bool `json:"conclusion_declared"`
+	// EmptyAnswerGate is the optional empty-answer gate outcome an adapter may
+	// report for the execution — "held", "not_held", or absent. Like Model it
+	// is decoded as a plain string precisely so the two ways of not reporting
+	// one — field absent, field empty — arrive here identically and are
+	// collapsed to a nil *string exactly once, below.
+	EmptyAnswerGate string `json:"empty_answer_gate"`
 }
 
 // Execute sends a request to the agent and returns its response.
@@ -119,6 +125,14 @@ func (c *HTTPClient) Execute(ctx context.Context, req evaluation.AgentRequest) (
 	if respBody.Model != "" {
 		model := respBody.Model
 		agentResp.Model = &model
+	}
+	// The same collapse for the empty-answer gate outcome, and for the same
+	// reason: an agent that reports none — absent field or empty string —
+	// yields nil, which the evidence artifact records as an explicit JSON null.
+	// An empty string would read as an observed outcome named "".
+	if respBody.EmptyAnswerGate != "" {
+		gate := respBody.EmptyAnswerGate
+		agentResp.EmptyAnswerGate = &gate
 	}
 	// The one place a reported conclusion becomes an optional value. An adapter
 	// that declares nothing yields nil, which every behaviour keyed on the

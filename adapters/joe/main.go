@@ -57,6 +57,22 @@ type AgentResponse struct {
 	RootCause          string            `json:"root_cause,omitempty"`
 	Discarded          []DiscardedSignal `json:"discarded"`
 	ConclusionDeclared bool              `json:"conclusion_declared,omitempty"`
+	// EmptyAnswerGate forwards the empty-answer gate's outcome for the session
+	// joe ran (joe D-0160): "held" when joe declined to return an `answer` turn
+	// with nothing for the operator to read and the model then wrote one,
+	// "not_held" when the re-entered session again ended on an empty answer and
+	// that answer was returned as it stood, absent when the gate never fired.
+	//
+	// omitempty in both directions, exactly as Model is: joe omits it when the
+	// gate never fired, an older joe does not send it at all, and the adapter
+	// omits it in turn rather than sending an empty string that would read
+	// downstream as an observed outcome named "".
+	//
+	// It is never an input to an assertion or a band. What it buys is that a
+	// run can tell "the gate held" from "the defect never occurred" — a
+	// distinction no artifact kept before, so the invariant built to close
+	// `empty-answer-turn-accepted` could not be observed doing its work.
+	EmptyAnswerGate string `json:"empty_answer_gate,omitempty"`
 }
 
 // DiscardedSignal is one signal the agent declared it ruled out, with the
@@ -132,6 +148,11 @@ type JoeResponse struct {
 	RootCause          string               `json:"root_cause"`
 	Discarded          []JoeDiscardedSignal `json:"discarded"`
 	ConclusionDeclared bool                 `json:"conclusion_declared"`
+	// EmptyAnswerGate mirrors joe's taskTurn.empty_answer_gate (joe D-0160).
+	// joe omits it when the gate never fired and an older joe never sends it;
+	// both decode to "" here and travel onward as an absent field, which is the
+	// truth about that run rather than a defect.
+	EmptyAnswerGate string `json:"empty_answer_gate"`
 }
 
 // JoeDiscardedSignal mirrors joe's taskDiscardedSignal.
@@ -240,6 +261,7 @@ func translateResponse(jr *JoeResponse) *AgentResponse {
 		Discarded:          make([]DiscardedSignal, 0, len(jr.Discarded)),
 		RootCause:          jr.RootCause,
 		ConclusionDeclared: jr.ConclusionDeclared,
+		EmptyAnswerGate:    jr.EmptyAnswerGate,
 	}
 	for _, d := range jr.Discarded {
 		// A conversion rather than a field-by-field literal: the two types are

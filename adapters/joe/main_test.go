@@ -895,3 +895,51 @@ func TestTranslateResponse_DeclaredConclusion(t *testing.T) {
 		}
 	})
 }
+
+// TestTranslateResponse_EmptyAnswerGate pins the adapter's link in the pipe the
+// empty-answer gate outcome travels from joe to the evaluator (joe D-0160).
+// This is the hop that did not exist: joe emitted the field, the adapter struct
+// had no place for it, and the outcome stopped at the first consumer.
+func TestTranslateResponse_EmptyAnswerGate(t *testing.T) {
+	for _, outcome := range []string{"held", "not_held"} {
+		t.Run(outcome+" is carried through unchanged", func(t *testing.T) {
+			body := `{"steps":[],"final_answer":"f","empty_answer_gate":"` + outcome + `"}`
+			got := translateResponse(decodeJoe(t, body))
+			if got.EmptyAnswerGate != outcome {
+				t.Errorf("EmptyAnswerGate = %q, want %q", got.EmptyAnswerGate, outcome)
+			}
+			encoded, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if !bytes.Contains(encoded, []byte(`"empty_answer_gate":"`+outcome+`"`)) {
+				t.Errorf("serialized response does not carry the outcome; got %s", encoded)
+			}
+		})
+	}
+
+	// A gate that never fired and a joe too old to have one both send nothing.
+	// The adapter omits the field in turn rather than sending "", which the
+	// evaluator would otherwise have to tell apart from a real outcome.
+	t.Run("an unfired gate is omitted from the wire, not sent empty", func(t *testing.T) {
+		for name, body := range map[string]string{
+			"the gate never fired":                 `{"steps":[],"final_answer":"f"}`,
+			"joe sent the field as empty":          `{"steps":[],"final_answer":"f","empty_answer_gate":""}`,
+			"an older joe has no such gate at all": `{"steps":[],"final_answer":"f","root_cause":"c","conclusion_declared":true}`,
+		} {
+			t.Run(name, func(t *testing.T) {
+				got := translateResponse(decodeJoe(t, body))
+				if got.EmptyAnswerGate != "" {
+					t.Errorf("EmptyAnswerGate = %q, want empty", got.EmptyAnswerGate)
+				}
+				encoded, err := json.Marshal(got)
+				if err != nil {
+					t.Fatalf("marshal: %v", err)
+				}
+				if bytes.Contains(encoded, []byte("empty_answer_gate")) {
+					t.Errorf("serialized response carries the key for an agent that reported nothing; got %s", encoded)
+				}
+			})
+		}
+	})
+}

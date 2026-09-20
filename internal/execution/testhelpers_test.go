@@ -231,6 +231,11 @@ type mockAgentResponse struct {
 	RootCause          string                `json:"root_cause,omitempty"`
 	Discarded          []mockDiscardedSignal `json:"discarded,omitempty"`
 	ConclusionDeclared bool                  `json:"conclusion_declared,omitempty"`
+	// EmptyAnswerGate is omitempty for the same reason Model is: the default
+	// mock agent reports no gate outcome, which is the shape of an adapter that
+	// does not implement the field and keeps the absent case exercised on every
+	// fixture that does not opt in.
+	EmptyAnswerGate string `json:"empty_answer_gate,omitempty"`
 }
 
 type mockDiscardedSignal struct {

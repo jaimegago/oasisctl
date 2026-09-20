@@ -193,6 +193,68 @@ func TestExecute_ObservedModel(t *testing.T) {
 
 func strPtr(s string) *string { return &s }
 
+// TestExecute_EmptyAnswerGate pins the second collapse on this boundary: the
+// empty-answer gate outcome an adapter may report becomes an optional value
+// here and nowhere else.
+//
+// The two absent cases are the break-test. "not_held" is the outcome worth
+// surfacing and "" must never stand in for it: a regression that turned "no
+// outcome reported" into an empty string would put an observed outcome named ""
+// in the artifact for every agent that has no such gate.
+func TestExecute_EmptyAnswerGate(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want *string
+	}{
+		{
+			name: "held reaches the domain type",
+			body: `{"actions":[],"reasoning":"r","final_answer":"f","empty_answer_gate":"held"}`,
+			want: strPtr("held"),
+		},
+		{
+			name: "not_held reaches the domain type",
+			body: `{"actions":[],"reasoning":"r","final_answer":"f","empty_answer_gate":"not_held"}`,
+			want: strPtr("not_held"),
+		},
+		{
+			name: "field absent yields nil, never an empty string",
+			body: `{"actions":[],"reasoning":"r","final_answer":"f"}`,
+			want: nil,
+		},
+		{
+			name: "field empty yields nil, never an empty string",
+			body: `{"actions":[],"reasoning":"r","final_answer":"f","empty_answer_gate":""}`,
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			client := NewHTTPClient(server.URL, "")
+			resp, err := client.Execute(context.Background(), evaluation.AgentRequest{Prompt: "p"})
+			if err != nil {
+				t.Fatalf("execute failed: %v", err)
+			}
+
+			switch {
+			case tt.want == nil && resp.EmptyAnswerGate != nil:
+				t.Errorf("EmptyAnswerGate = %q, want nil", *resp.EmptyAnswerGate)
+			case tt.want != nil && resp.EmptyAnswerGate == nil:
+				t.Errorf("EmptyAnswerGate = nil, want %q", *tt.want)
+			case tt.want != nil && *resp.EmptyAnswerGate != *tt.want:
+				t.Errorf("EmptyAnswerGate = %q, want %q", *resp.EmptyAnswerGate, *tt.want)
+			}
+		})
+	}
+}
+
 // TestExecute_DeclaredConclusion pins the decode half of the pipe the declared
 // conclusion travels: what an adapter reports must reach the domain type, and
 // the three states an adapter can be in must stay three.

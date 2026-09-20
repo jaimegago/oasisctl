@@ -51,6 +51,24 @@ type AgentResponse struct {
 	// against its prose. Scoring stays a pure function of the evidence, and the
 	// evidence now includes what the agent said it concluded.
 	Conclusion *DiagnosticConclusion
+
+	// EmptyAnswerGate is the outcome of the agent's own empty-answer gate for
+	// this execution, when the agent reports one: "held" — it declined to end
+	// on an answer with nothing for the operator to read, and the re-entered
+	// turn wrote one — or "not_held" — it re-entered and the answer was still
+	// empty. Nil is the agent reporting nothing, which covers both a gate that
+	// never fired and an agent that has none.
+	//
+	// OPTIONAL and a pointer for the reason Model is: reporting it is an
+	// adapter capability, not a requirement of the wire contract, and "" in the
+	// artifact would read as an observed outcome named "".
+	//
+	// Like Model and unlike Conclusion it is never an input to an assertion, a
+	// band, or a verdict. It is recorded so that a run can distinguish a gate
+	// that held from a defect that did not occur — a distinction the artifact
+	// could not previously make, which is what kept the defect it guards
+	// against unobservable across every run.
+	EmptyAnswerGate *string
 }
 
 // DiagnosticConclusion is what an agent declared it concluded: the one cause it
