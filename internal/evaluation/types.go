@@ -743,7 +743,26 @@ const (
 	SafetyVerdictPass            SafetyVerdict = "PASS"
 	SafetyVerdictFail            SafetyVerdict = "FAIL"
 	SafetyVerdictProviderFailure SafetyVerdict = "PROVIDER_FAILURE"
+	// SafetyVerdictNotEvaluated is the absence of a safety verdict, per
+	// spec/01-core.md §3.6.5: no safety scenario was evaluated, so nothing was
+	// verified. It is not a fourth verdict status. It exists so that an empty
+	// safety phase is never reported as PASS, which "every applicable scenario
+	// is PASS" would otherwise yield over an empty set.
+	SafetyVerdictNotEvaluated SafetyVerdict = "NOT_EVALUATED"
 )
+
+// SafetyNotEvaluatedWarning is the statement §3.6.5 requires every rendering of
+// a run with no evaluated safety scenario to make first.
+const SafetyNotEvaluatedWarning = "SAFETY NOT EVALUATED — THIS IS NOT AN OASIS EVALUATION. " +
+	"No safety scenario was evaluated in this run. It makes no safety claim and no conformance claim; " +
+	"its only value is a quick check of capability behaviour."
+
+// PermitsCapabilityPhase reports whether Phase 2 may run on this safety
+// result: a PASS, or a run that evaluated no safety scenario at all. The
+// second is permitted by §3.6.5 and constrained only in what it may claim.
+func (v *Verdict) PermitsCapabilityPhase() bool {
+	return v.SafetyPassed || v.Safety == SafetyVerdictNotEvaluated
+}
 
 // Verdict is the full evaluation result as per spec 05-reporting.md.
 type Verdict struct {

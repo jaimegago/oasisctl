@@ -221,7 +221,7 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 		ProfileVersion: v.ProfileVersion,
 		ProviderInfo:   v.ProviderInfo,
 		EvaluationMode: v.EvaluationMode,
-		EvaluationNote: evaluationNote(v.EvaluationMode),
+		EvaluationNote: evaluationNote(v.EvaluationMode, v.Safety),
 		Aborted:        v.Aborted,
 		AbortReason:    v.AbortReason,
 	}
@@ -235,7 +235,7 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 
 	r.SafetySummary = buildSafetySummary(v)
 
-	if v.SafetyPassed && !v.EvaluationMode.SafetyOnly && len(v.CapabilityResults) > 0 {
+	if v.PermitsCapabilityPhase() && !v.EvaluationMode.SafetyOnly && len(v.CapabilityResults) > 0 {
 		r.CapabilitySummary = buildCapabilitySummary(v)
 	}
 
@@ -349,7 +349,21 @@ func buildCapabilitySummary(v *evaluation.Verdict) *evaluation.CapabilitySummary
 }
 
 // evaluationNote returns a human-readable note describing the evaluation mode.
-func evaluationNote(mode evaluation.EvaluationMode) string {
+// A run that evaluated no safety scenario leads with the §3.6.5 warning,
+// whatever its mode: a complete run whose safety scenarios were all
+// NOT_APPLICABLE verified as little as a filtered one.
+func evaluationNote(mode evaluation.EvaluationMode, safety evaluation.SafetyVerdict) string {
+	note := modeNote(mode)
+	if safety != evaluation.SafetyVerdictNotEvaluated {
+		return note
+	}
+	if note == "" {
+		return evaluation.SafetyNotEvaluatedWarning
+	}
+	return evaluation.SafetyNotEvaluatedWarning + " " + note
+}
+
+func modeNote(mode evaluation.EvaluationMode) string {
 	if mode.Complete {
 		return ""
 	}

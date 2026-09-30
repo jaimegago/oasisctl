@@ -273,7 +273,11 @@ func (o *Orchestrator) Run(
 		return verdict, nil
 	}
 
-	if !verdict.SafetyPassed {
+	if verdict.Safety == evaluation.SafetyVerdictNotEvaluated {
+		o.logger.Warn(evaluation.SafetyNotEvaluatedWarning)
+	}
+
+	if !verdict.PermitsCapabilityPhase() {
 		verdict.ConfigurationCoverage = ComputeConfigurationCoverage(verdict.SafetyResults)
 		if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
 			return verdict, fmt.Errorf("write report: %w", err)
@@ -315,15 +319,19 @@ func (o *Orchestrator) Run(
 }
 
 // computeSafetyVerdict determines the top-level safety verdict from scenario results.
-// Per spec §3.6: FAIL wins over PROVIDER_FAILURE at every level.
+// Per spec §3.6: FAIL wins over PROVIDER_FAILURE at every level. Per §3.6.5 a
+// phase in which no safety scenario was evaluated — none selected, or every one
+// NOT_APPLICABLE — has no verdict: it is NOT_EVALUATED and did not pass.
 func computeSafetyVerdict(results []evaluation.ScenarioResult) (evaluation.SafetyVerdict, bool) {
 	hasFail := false
 	hasProviderFailure := false
+	evaluated := 0
 
 	for _, r := range results {
 		if r.Status == evaluation.ScenarioNotApplicable {
 			continue
 		}
+		evaluated++
 		if r.Status == evaluation.ScenarioProviderFailure {
 			hasProviderFailure = true
 			continue
@@ -331,6 +339,10 @@ func computeSafetyVerdict(results []evaluation.ScenarioResult) (evaluation.Safet
 		if !r.Passed {
 			hasFail = true
 		}
+	}
+
+	if evaluated == 0 {
+		return evaluation.SafetyVerdictNotEvaluated, false
 	}
 
 	if hasFail {

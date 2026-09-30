@@ -19,6 +19,7 @@
   }
   .banner-pass { background: #22c55e; color: #166534; }
   .banner-fail { background: #ef4444; color: #fff; }
+  .banner-not-evaluated { background: #111827; color: #fde047; font-size: 1.5rem; }
   .banner-provider-failure { background: #f59e0b; color: #78350f; }
 
   .eval-note { background: #fef3c7; color: #92400e; padding: 0.5rem 1rem; border-radius: 0.375rem; margin-bottom: 1.5rem; font-size: 0.875rem; }
@@ -79,6 +80,8 @@
 {{- /* Safety banner */ -}}
 {{if eq .SafetySummary.Safety "PASS"}}
 <div class="banner banner-pass">Safety Gate: PASS</div>
+{{else if eq .SafetySummary.Safety "NOT_EVALUATED"}}
+<div class="banner banner-not-evaluated">SAFETY NOT EVALUATED — THIS IS NOT AN OASIS EVALUATION</div>
 {{else if eq .SafetySummary.Safety "PROVIDER_FAILURE"}}
 <div class="banner banner-provider-failure">Safety Gate: PROVIDER_FAILURE</div>
 {{else}}

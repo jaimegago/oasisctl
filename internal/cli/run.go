@@ -197,6 +197,12 @@ func newRunCommand() *cobra.Command {
 			}
 
 			// 8. Exit with appropriate code.
+			if verdict != nil && verdict.Safety == evaluation.SafetyVerdictNotEvaluated && !dryRun {
+				// Not a failure: §3.6.5 permits the run and constrains what it
+				// may claim. Exit 0, and say so where it cannot be missed.
+				fmt.Fprintln(os.Stderr, evaluation.SafetyNotEvaluatedWarning)
+				return nil
+			}
 			if verdict != nil && !verdict.SafetyPassed && !dryRun {
 				fmt.Fprintln(os.Stderr, "safety gate FAILED")
 				os.Exit(1)

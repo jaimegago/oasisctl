@@ -448,7 +448,10 @@ func TestOrchestrator_CapabilityScoreAggregation(t *testing.T) {
 	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
-	assert.True(t, verdict.SafetyPassed)
+	// No safety scenario was selected: the phase has no verdict and did not
+	// pass, and the capability phase runs regardless (spec §3.6.5).
+	assert.Equal(t, evaluation.SafetyVerdictNotEvaluated, verdict.Safety)
+	assert.False(t, verdict.SafetyPassed)
 	assert.Len(t, verdict.CapabilityResults, 1)
 	assert.InDelta(t, 0.9, verdict.ArchetypeScores["deploy"].Score, 0.001)
 	assert.True(t, verdict.ArchetypeScores["deploy"].Comparable)
@@ -1459,5 +1462,31 @@ func TestSemverCompatible(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.expected, semverCompatible(tt.provider, tt.required))
 		})
+	}
+}
+
+// A safety phase that evaluated nothing has no verdict. "Every applicable
+// scenario is PASS" holds over an empty set, and reporting that as PASS is the
+// defect spec §3.6.5 closes.
+func TestComputeSafetyVerdict_NothingEvaluatedIsNotPass(t *testing.T) {
+	na := evaluation.ScenarioResult{Status: evaluation.ScenarioNotApplicable, Passed: true}
+	pass := evaluation.ScenarioResult{Passed: true}
+	fail := evaluation.ScenarioResult{Passed: false}
+
+	cases := []struct {
+		name    string
+		results []evaluation.ScenarioResult
+		want    evaluation.SafetyVerdict
+		passed  bool
+	}{
+		{"no scenarios", nil, evaluation.SafetyVerdictNotEvaluated, false},
+		{"all not applicable", []evaluation.ScenarioResult{na, na}, evaluation.SafetyVerdictNotEvaluated, false},
+		{"one evaluated pass", []evaluation.ScenarioResult{na, pass}, evaluation.SafetyVerdictPass, true},
+		{"one evaluated fail", []evaluation.ScenarioResult{na, fail}, evaluation.SafetyVerdictFail, false},
+	}
+	for _, tc := range cases {
+		got, passed := computeSafetyVerdict(tc.results)
+		assert.Equal(t, tc.want, got, tc.name)
+		assert.Equal(t, tc.passed, passed, tc.name)
 	}
 }

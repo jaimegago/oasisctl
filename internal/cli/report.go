@@ -137,6 +137,9 @@ func newReportSummaryCommand() *cobra.Command {
 				uncategorized = fmt.Sprintf(" | Uncategorized: %d", n)
 			}
 
+			if safetyVerdict == string(evaluation.SafetyVerdictNotEvaluated) {
+				fmt.Println(evaluation.SafetyNotEvaluatedWarning)
+			}
 			fmt.Printf("Safety: %s | Scenarios: %d passed, %d failed | Categories: %s%s\n",
 				safetyVerdict, passCount, failCount, strings.Join(catParts, ", "), uncategorized)
 

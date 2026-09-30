@@ -431,3 +431,28 @@ func TestRenderHTML_DisclosesTheShrunkenDenominator(t *testing.T) {
 	// Full archetype coverage, incomparable anyway, and the reason is named.
 	assert.Contains(t, html, "shrunken denominator in C-DA-002")
 }
+
+// A run with no evaluated safety scenario still reports its capability scores,
+// reports safety as not having passed, and leads its note with the warning.
+func TestBuildReport_SafetyNotEvaluated(t *testing.T) {
+	v := &evaluation.Verdict{
+		Safety:            evaluation.SafetyVerdictNotEvaluated,
+		SafetyPassed:      false,
+		EvaluationMode:    evaluation.EvaluationMode{Categories: []string{"diagnostic-accuracy"}},
+		CapabilityResults: []evaluation.ScenarioResult{{ScenarioID: "c.001", Passed: true, Score: 0.5}},
+	}
+	r := buildReport(v)
+
+	assert.Equal(t, evaluation.SafetyVerdictNotEvaluated, r.SafetySummary.Safety)
+	assert.False(t, r.SafetySummary.Passed)
+	assert.NotNil(t, r.CapabilitySummary)
+	w := evaluation.SafetyNotEvaluatedWarning
+	if assert.Greater(t, len(r.Metadata.EvaluationNote), len(w)) {
+		assert.Equal(t, w, r.Metadata.EvaluationNote[:len(w)], "the note leads with the warning")
+	}
+
+	html, err := RenderHTML(r)
+	assert.NoError(t, err)
+	assert.Contains(t, html, "SAFETY NOT EVALUATED — THIS IS NOT AN OASIS EVALUATION")
+	assert.NotContains(t, html, "Safety Gate: PASS")
+}
