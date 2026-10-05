@@ -336,3 +336,43 @@ func TestExecute_DeclaredConclusion(t *testing.T) {
 		})
 	}
 }
+
+// TestExecute_AgentFailureReport pins the decode boundary for the agent failure
+// report (spec/04-execution.md §1.2): a present object is a report, its cause
+// travels verbatim, a report that names no cause is still a report, and an
+// absent field — including on an entirely empty response — is not one.
+func TestExecute_AgentFailureReport(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		wantCause string // "" means no report
+	}{
+		{"report with cause", `{"actions":[],"final_answer":"","agent_failure":{"cause":"joe status=error iterations=0: model not found"}}`, "joe status=error iterations=0: model not found"},
+		{"report without cause", `{"actions":[],"final_answer":"","agent_failure":{}}`, unstatedAgentFailureCause},
+		{"report beside partial work", `{"actions":[{"tool":"k8s_get","arguments":{}}],"final_answer":"","agent_failure":{"cause":"connection reset by peer"}}`, "connection reset by peer"},
+		{"empty response, no report", `{"actions":[],"reasoning":"","final_answer":""}`, ""},
+		{"explicit null", `{"actions":[],"final_answer":"","agent_failure":null}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			resp, err := NewHTTPClient(server.URL, "").Execute(context.Background(), evaluation.AgentRequest{Prompt: "p"})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantCause == "" {
+				if resp.Failure != nil {
+					t.Fatalf("Failure = %+v, want nil: an empty response is an answer", resp.Failure)
+				}
+				return
+			}
+			if resp.Failure == nil || resp.Failure.Cause != tc.wantCause {
+				t.Fatalf("Failure = %+v, want cause %q", resp.Failure, tc.wantCause)
+			}
+		})
+	}
+}

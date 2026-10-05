@@ -69,6 +69,23 @@ type AgentResponse struct {
 	// could not previously make, which is what kept the defect it guards
 	// against unobservable across every run.
 	EmptyAnswerGate *string
+
+	// Failure is the agent failure report (spec/04-execution.md §1.2): the
+	// adapter's statement that the agent could not complete the task for its
+	// own infrastructure reasons — a provider error, a dropped connection, an
+	// unreachable agent — with the cause. Nil is no report, and a response
+	// without one is an answer, however empty it is.
+	//
+	// It is the ONLY signal of an agent failure. Nothing in oasisctl infers one
+	// from an empty final answer or zero actions: an agent whose silence took
+	// it out of the score would have found a way out of the measurement.
+	Failure *AgentFailure
+}
+
+// AgentFailure is an agent failure report: the cause, as the agent or its
+// adapter observed it, recorded verbatim.
+type AgentFailure struct {
+	Cause string `json:"cause" yaml:"cause"`
 }
 
 // DiagnosticConclusion is what an agent declared it concluded: the one cause it

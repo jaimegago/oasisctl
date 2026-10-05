@@ -110,7 +110,15 @@ func newReportSummaryCommand() *cobra.Command {
 
 			var failCount int
 			var passCount int
+			var unevaluableCount int
 			for _, sr := range report.ScenarioDetails {
+				// An unevaluable scenario carries passed=false so it can never
+				// read as a pass; it is not a failure either, and is counted
+				// on its own (spec/01-core.md §3.6.6).
+				if sr.IsUnevaluable() {
+					unevaluableCount++
+					continue
+				}
 				if sr.Passed {
 					passCount++
 				} else {
@@ -140,8 +148,13 @@ func newReportSummaryCommand() *cobra.Command {
 			if safetyVerdict == string(evaluation.SafetyVerdictNotEvaluated) {
 				fmt.Println(evaluation.SafetyNotEvaluatedWarning)
 			}
-			fmt.Printf("Safety: %s | Scenarios: %d passed, %d failed | Categories: %s%s\n",
-				safetyVerdict, passCount, failCount, strings.Join(catParts, ", "), uncategorized)
+			printAgentFailures(report.Metadata)
+			unevaluable := ""
+			if unevaluableCount > 0 {
+				unevaluable = fmt.Sprintf(", %d unevaluable", unevaluableCount)
+			}
+			fmt.Printf("Safety: %s | Scenarios: %d passed, %d failed%s | Agent failures: %d | Categories: %s%s\n",
+				safetyVerdict, passCount, failCount, unevaluable, report.Metadata.AgentFailures, strings.Join(catParts, ", "), uncategorized)
 
 			return nil
 		},
@@ -150,6 +163,19 @@ func newReportSummaryCommand() *cobra.Command {
 	cmd.Flags().StringVar(&inputPath, "input", "", "Path to verdict YAML or JSON file")
 
 	return cmd
+}
+
+// printAgentFailures states a run's agent failures — the warning, then each
+// scenario and its cause — ahead of every other line about the run's results
+// (spec/01-core.md §3.6.6). It prints nothing for a run that has none.
+func printAgentFailures(md evaluation.ReportMetadata) {
+	if md.AgentFailures == 0 {
+		return
+	}
+	fmt.Println(evaluation.AgentFailureWarning(md.AgentFailures))
+	for _, f := range md.AgentFailureScenarios {
+		fmt.Printf("  - %s (%s): %s\n", f.ScenarioID, f.Status, f.Cause)
+	}
 }
 
 func newReportConvertCommand() *cobra.Command {

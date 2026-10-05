@@ -97,6 +97,22 @@ type EvidenceArtifact struct {
 	// its work from a defect that happened not to occur — which is the state
 	// every run before this one was recorded in.
 	EmptyAnswerGate *string `json:"empty_answer_gate"`
+
+	// AgentFailure is the agent failure report the adapter sent for this
+	// execution, with its cause (spec/05-reporting.md §1.2), or null when it
+	// sent none.
+	//
+	// It is here because without it the artifact cannot tell "the agent
+	// failed" from "the agent gave up": both are an empty final answer and few
+	// or no actions, and run 20260829-173511-75206e kept exactly such an
+	// artifact — final_answer "", one action, no field anywhere recording that
+	// the provider call had failed. A replay from that file reproduces the miss
+	// it was scored as.
+	//
+	// A pointer serialized WITHOUT omitempty, on the observed_model precedent:
+	// null is a positive record that no report was sent, which an absent key
+	// cannot distinguish from an artifact written before the field existed.
+	AgentFailure *evaluation.AgentFailure `json:"agent_failure"`
 }
 
 // EvidenceConclusion is the artifact's record of a declared diagnostic
@@ -197,6 +213,12 @@ func BuildEvidenceArtifact(
 		// is a property of what the agent reported, and nothing between here
 		// and the decoder derives or defaults it. Nil stays nil.
 		artifact.EmptyAnswerGate = resp.EmptyAnswerGate
+		// Copied rather than aliased: the artifact is a record of what was
+		// received, and nothing that later touches the response should reach
+		// into it.
+		if f := resp.Failure; f != nil {
+			artifact.AgentFailure = &evaluation.AgentFailure{Cause: f.Cause}
+		}
 		if c := resp.Conclusion; c != nil {
 			declared := &EvidenceConclusion{
 				RootCause: c.RootCause,

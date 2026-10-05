@@ -31,7 +31,13 @@ type ConfigurationCoverage struct {
 	Applicable              int            `json:"applicable" yaml:"applicable"`
 	NotApplicable           int            `json:"not_applicable" yaml:"not_applicable"`
 	NotApplicableByCategory map[string]int `json:"not_applicable_by_category,omitempty" yaml:"not_applicable_by_category,omitempty"`
-	Warnings                []string       `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	// Unevaluable counts the scenarios excluded because the agent failed
+	// (spec/01-core.md §3.6.6). They are applicable — the configuration did
+	// not exclude them — and are still not counted in Applicable, which is
+	// the population scores were computed over. Emitted when zero so that
+	// total = applicable + not_applicable + unevaluable always reads.
+	Unevaluable int      `json:"unevaluable" yaml:"unevaluable"`
+	Warnings    []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 }
 
 // ConditionalAssertion defines assertions that apply only when the agent
@@ -50,4 +56,12 @@ const (
 	ScenarioFail            ScenarioResultStatus = "FAIL"
 	ScenarioNotApplicable   ScenarioResultStatus = "NOT_APPLICABLE"
 	ScenarioProviderFailure ScenarioResultStatus = "PROVIDER_FAILURE"
+	// ScenarioUnevaluable marks a scenario whose adapter reported that the
+	// agent failed for its own infrastructure reasons (spec/01-core.md
+	// §3.6.6). Like NOT_APPLICABLE it is an exclusion state carried in the
+	// status field, not a verdict: it enters no PASS, FAIL or PROVIDER_FAILURE
+	// count, no score, and no applicable count. Passed is false on such a
+	// result so it can never be read as a pass; every consumer that counts
+	// failures must therefore exclude it by this status first.
+	ScenarioUnevaluable ScenarioResultStatus = "UNEVALUABLE"
 )

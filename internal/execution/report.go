@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -76,6 +77,7 @@ type scenarioStats struct {
 	Failed           int
 	ProviderFailures int
 	NotApplicable    int
+	Unevaluable      int
 }
 
 func computeStats(details []evaluation.ScenarioResult) scenarioStats {
@@ -88,6 +90,10 @@ func computeStats(details []evaluation.ScenarioResult) scenarioStats {
 		}
 		if sr.Status == evaluation.ScenarioProviderFailure {
 			s.ProviderFailures++
+			continue
+		}
+		if sr.IsUnevaluable() {
+			s.Unevaluable++
 			continue
 		}
 		if len(sr.Errors) > 0 && !sr.Passed {
@@ -105,14 +111,18 @@ func computeStats(details []evaluation.ScenarioResult) scenarioStats {
 }
 
 var htmlFuncMap = template.FuncMap{
-	"formatTime": func(t time.Time) string { return t.Format("2006-01-02 15:04:05 UTC") },
-	"pct":        func(f float64) float64 { return f * 100 },
+	"formatTime":          func(t time.Time) string { return t.Format("2006-01-02 15:04:05 UTC") },
+	"pct":                 func(f float64) float64 { return f * 100 },
+	"agentFailureWarning": evaluation.AgentFailureWarning,
 	"rowClass": func(sr evaluation.ScenarioResult) string {
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			return "row-na"
 		}
 		if sr.Status == evaluation.ScenarioProviderFailure {
 			return "row-provider-failure"
+		}
+		if sr.IsUnevaluable() {
+			return "row-unevaluable"
 		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			return "row-error"
@@ -144,6 +154,9 @@ var htmlFuncMap = template.FuncMap{
 		if sr.Status == evaluation.ScenarioProviderFailure {
 			return "badge-provider-failure"
 		}
+		if sr.IsUnevaluable() {
+			return "badge-unevaluable"
+		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			return "badge-error"
 		}
@@ -158,6 +171,9 @@ var htmlFuncMap = template.FuncMap{
 		}
 		if sr.Status == evaluation.ScenarioProviderFailure {
 			return "PROVIDER_FAILURE"
+		}
+		if sr.IsUnevaluable() {
+			return "UNEVALUABLE — AGENT FAILURE"
 		}
 		if len(sr.Errors) > 0 && !sr.Passed {
 			return "ERROR"
@@ -221,10 +237,14 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 		ProfileVersion: v.ProfileVersion,
 		ProviderInfo:   v.ProviderInfo,
 		EvaluationMode: v.EvaluationMode,
-		EvaluationNote: evaluationNote(v.EvaluationMode, v.Safety),
 		Aborted:        v.Aborted,
 		AbortReason:    v.AbortReason,
+		// Counted from the results rather than carried on the verdict, so the
+		// count and the list cannot disagree with the scenario rows they name.
+		AgentFailureScenarios: evaluation.CollectAgentFailures(v.SafetyResults, v.CapabilityResults),
 	}
+	r.Metadata.AgentFailures = len(r.Metadata.AgentFailureScenarios)
+	r.Metadata.EvaluationNote = evaluationNote(v.EvaluationMode, v.Safety, r.Metadata.AgentFailures)
 
 	r.Environment = evaluation.ReportEnvironment{
 		TierClaimed: v.Tier,
@@ -270,6 +290,14 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 		if sr.Status == evaluation.ScenarioProviderFailure {
 			ss.ProviderFailures++
 			ss.ProviderFailureIDs = append(ss.ProviderFailureIDs, sr.ScenarioID)
+			continue
+		}
+		// Excluded like NOT_APPLICABLE and listed like a provider failure:
+		// the agent failed, no violation stood, and the scenario is in no
+		// count (spec/01-core.md §3.6.6). Its cause is in the run-level
+		// metadata.agent_failure_scenarios.
+		if sr.IsUnevaluable() {
+			ss.UnevaluableIDs = append(ss.UnevaluableIDs, sr.ScenarioID)
 			continue
 		}
 		ss.Applicable++
@@ -351,16 +379,21 @@ func buildCapabilitySummary(v *evaluation.Verdict) *evaluation.CapabilitySummary
 // evaluationNote returns a human-readable note describing the evaluation mode.
 // A run that evaluated no safety scenario leads with the §3.6.5 warning,
 // whatever its mode: a complete run whose safety scenarios were all
-// NOT_APPLICABLE verified as little as a filtered one.
-func evaluationNote(mode evaluation.EvaluationMode, safety evaluation.SafetyVerdict) string {
-	note := modeNote(mode)
-	if safety != evaluation.SafetyVerdictNotEvaluated {
-		return note
+// NOT_APPLICABLE verified as little as a filtered one. A run carrying agent
+// failure reports says so next (§3.6.6), still ahead of the mode note and of
+// any capability figure.
+func evaluationNote(mode evaluation.EvaluationMode, safety evaluation.SafetyVerdict, agentFailures int) string {
+	var parts []string
+	if safety == evaluation.SafetyVerdictNotEvaluated {
+		parts = append(parts, evaluation.SafetyNotEvaluatedWarning)
 	}
-	if note == "" {
-		return evaluation.SafetyNotEvaluatedWarning
+	if agentFailures > 0 {
+		parts = append(parts, evaluation.AgentFailureWarning(agentFailures))
 	}
-	return evaluation.SafetyNotEvaluatedWarning + " " + note
+	if note := modeNote(mode); note != "" {
+		parts = append(parts, note)
+	}
+	return strings.Join(parts, " ")
 }
 
 func modeNote(mode evaluation.EvaluationMode) string {

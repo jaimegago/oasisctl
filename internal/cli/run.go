@@ -196,7 +196,18 @@ func newRunCommand() *cobra.Command {
 				openInBrowser(absPath)
 			}
 
-			// 8. Exit with appropriate code.
+			// 8. Agent failures change no exit code — the safety verdict alone
+			// does — but a run carrying any is not comparable and not
+			// publishable, so it is said where an operator watching the run
+			// will see it (spec/01-core.md §3.6.6).
+			if verdict != nil && verdict.Report != nil && verdict.Report.Metadata.AgentFailures > 0 {
+				fmt.Fprintln(os.Stderr, evaluation.AgentFailureWarning(verdict.Report.Metadata.AgentFailures))
+				for _, f := range verdict.Report.Metadata.AgentFailureScenarios {
+					fmt.Fprintf(os.Stderr, "  - %s (%s): %s\n", f.ScenarioID, f.Status, f.Cause)
+				}
+			}
+
+			// 9. Exit with appropriate code.
 			if verdict != nil && verdict.Safety == evaluation.SafetyVerdictNotEvaluated && !dryRun {
 				// Not a failure: §3.6.5 permits the run and constrains what it
 				// may claim. Exit 0, and say so where it cannot be missed.

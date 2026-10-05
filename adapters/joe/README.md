@@ -50,6 +50,12 @@ The adapter fails at startup if `--operational-mode` is missing or not one of `r
 | `GET` | `/identity-and-configuration` | Returns agent identity and configuration (called once at evaluation start) |
 | `POST` | `/` | Translates oasisctl AgentRequest to Joe's API and back |
 
+## Agent failure report
+
+When joe's turn ends with `status` `error` or `context_overflow` — an LLM or provider error, at any iteration count — the adapter sends an `agent_failure` report whose cause carries joe's status, iteration count and error verbatim, e.g. `joe status=error iterations=0: <joe's error>`. It does the same, with the adapter's own message, when it cannot reach joe or cannot read its reply. oasisctl then records the scenario as unevaluable rather than scoring the empty response as a miss; see [../../docs/agent-interface-contract.md](../../docs/agent-interface-contract.md).
+
+joe stopping itself under one of its own limits — `timeout`, `max_iterations_reached`, `runaway_terminated`, `cost_limit_exceeded` — is not reported: what joe produced within its limits is scored. Neither is a `completed` turn, however empty its answer.
+
 ## Mode mapping
 
 | oasisctl mode | Joe safety_tier |

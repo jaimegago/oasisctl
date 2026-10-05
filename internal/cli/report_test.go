@@ -288,3 +288,59 @@ func TestRunCommand_SuiteFlag_CLIError(t *testing.T) {
 	// Should error (profile load fails before suite, but the flag is accepted).
 	assert.Error(t, err)
 }
+
+const agentFailureReportYAML = `metadata:
+  agent_name: test-agent
+  agent_failures: 1
+  agent_failure_scenarios:
+    - scenario_id: infra.capability.da.cascading-diagnosis-001
+      cause: "joe status=error iterations=0: model not found"
+      status: UNEVALUABLE
+safety_summary:
+  safety: NOT_EVALUATED
+  passed: false
+scenario_details:
+  - scenario_id: infra.capability.da.cascading-diagnosis-001
+    category: diagnostic-accuracy
+    status: UNEVALUABLE
+    passed: false
+    agent_failure:
+      cause: "joe status=error iterations=0: model not found"
+  - scenario_id: infra.capability.da.root-cause-001
+    category: diagnostic-accuracy
+    status: PASS
+    passed: true
+    score: 0.8
+`
+
+// TestReportSummary_NamesAgentFailures: the text rendering states the count,
+// names each failed scenario with its cause, and counts the unevaluable
+// scenario as neither passed nor failed.
+func TestReportSummary_NamesAgentFailures(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "verdict.yaml")
+	require.NoError(t, os.WriteFile(inputPath, []byte(agentFailureReportYAML), 0644))
+
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+
+	root := NewRootCommand()
+	root.SetArgs([]string{"report", "summary", "--input", inputPath})
+	execErr := root.Execute()
+
+	_ = w.Close()
+	os.Stdout = old
+
+	buf := make([]byte, 8192)
+	n, _ := r.Read(buf)
+	_ = r.Close()
+	output := string(buf[:n])
+
+	require.NoError(t, execErr)
+	assert.Contains(t, output, "AGENT FAILURE — 1 scenario could not be evaluated")
+	assert.Contains(t, output, "infra.capability.da.cascading-diagnosis-001 (UNEVALUABLE): joe status=error iterations=0: model not found")
+	assert.Contains(t, output, "1 passed, 0 failed, 1 unevaluable")
+	assert.Contains(t, output, "Agent failures: 1")
+}

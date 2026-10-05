@@ -73,6 +73,21 @@ type AgentResponse struct {
 	// distinction no artifact kept before, so the invariant built to close
 	// `empty-answer-turn-accepted` could not be observed doing its work.
 	EmptyAnswerGate string `json:"empty_answer_gate,omitempty"`
+	// AgentFailure is the agent failure report (oasis-spec
+	// spec/04-execution.md §1.2): the adapter's statement that joe could not
+	// complete the task for its own infrastructure reasons, with the cause.
+	// oasisctl treats a scenario carrying it as unevaluable — excluded from
+	// every score and counted at run level — rather than scoring whatever
+	// was returned as an answer.
+	//
+	// omitempty, and that is load-bearing: its PRESENCE is the signal, so it
+	// must be absent on every ordinary response, including an empty one.
+	AgentFailure *AgentFailureReport `json:"agent_failure,omitempty"`
+}
+
+// AgentFailureReport is the body of an agent failure report.
+type AgentFailureReport struct {
+	Cause string `json:"cause"`
 }
 
 // DiscardedSignal is one signal the agent declared it ruled out, with the
@@ -153,6 +168,15 @@ type JoeResponse struct {
 	// both decode to "" here and travel onward as an absent field, which is the
 	// truth about that run rather than a defect.
 	EmptyAnswerGate string `json:"empty_answer_gate"`
+	// Status, Iterations and Error are joe's terminal state for the turn
+	// (taskResponse.status / .iterations / .error). Status is one of joe's
+	// closed set — "completed", "timeout", "max_iterations_reached",
+	// "runaway_terminated", "cost_limit_exceeded", "context_overflow",
+	// "error" — and is what decides whether this turn is reported as an agent
+	// failure (see agentFailureFromStatus).
+	Status     string `json:"status"`
+	Iterations int    `json:"iterations"`
+	Error      string `json:"error"`
 }
 
 // JoeDiscardedSignal mirrors joe's taskDiscardedSignal.
@@ -346,11 +370,55 @@ func translateResponse(jr *JoeResponse) *AgentResponse {
 	return resp
 }
 
+// agentFailureStatuses are joe's terminal statuses that mean its turn ended in
+// an LLM or provider error rather than in anything joe decided.
+//
+//   - "error" is joe's generic bucket for a run error no typed sentinel
+//     claimed: a provider 404 for a retired model, a reset connection, an SDK
+//     that could not carry a response. Every observed instance of
+//     joe-pm queue/agent-llm-failure-scores-as-capability-miss.md landed here.
+//   - "context_overflow" is the provider refusing the request because the
+//     input exceeded the model's window — classified by joe's LLM adapter.
+//
+// Deliberately NOT here: "timeout" (the wall-clock budget joe was given),
+// "max_iterations_reached" and "runaway_terminated" (joe's own loop and token
+// budgets), and "cost_limit_exceeded" (joe's own spend gate, which refused the
+// call before any provider saw it). Each is joe stopping itself under a limit,
+// not a provider failing it, and what the agent produced within its limits is
+// what gets scored.
+var agentFailureStatuses = map[string]bool{
+	"error":            true,
+	"context_overflow": true,
+}
+
+// agentFailureFromStatus returns the agent failure report for a joe turn that
+// ended in an LLM or provider error, at any iteration count, or nil. The cause
+// carries joe's own status, iteration count and error verbatim, so the
+// evidence artifact records what joe said rather than the adapter's reading of
+// it.
+func agentFailureFromStatus(jr *JoeResponse) *AgentFailureReport {
+	if !agentFailureStatuses[jr.Status] {
+		return nil
+	}
+	errText := jr.Error
+	if errText == "" {
+		errText = "(joe reported no error text)"
+	}
+	return &AgentFailureReport{
+		Cause: fmt.Sprintf("joe status=%s iterations=%d: %s", jr.Status, jr.Iterations, errText),
+	}
+}
+
+// errorResponse is the adapter's own failure: it could not reach joe, or could
+// not read what joe returned. That is an agent failure as the contract defines
+// it, and it is reported as one. The message travels in the report and not in
+// final_answer, where it used to be — an error string there was scored as
+// joe's answer to the task.
 func errorResponse(msg string) *AgentResponse {
 	return &AgentResponse{
-		Actions:     []AgentAction{},
-		Reasoning:   "",
-		FinalAnswer: msg,
+		Actions:      []AgentAction{},
+		Discarded:    []DiscardedSignal{},
+		AgentFailure: &AgentFailureReport{Cause: "joe-adapter: " + msg},
 	}
 }
 
@@ -506,6 +574,13 @@ func newServeMux(cfg adapterConfig) *http.ServeMux {
 		}
 
 		oasisResp := translateResponse(&joeResp)
+		// Whatever joe returned beside a failed turn — actions taken before
+		// the failure, partial reasoning — still travels as received; the
+		// report is what tells the evaluator not to score it.
+		oasisResp.AgentFailure = agentFailureFromStatus(&joeResp)
+		if oasisResp.AgentFailure != nil {
+			log.Printf("AGENT FAILURE: %s", oasisResp.AgentFailure.Cause)
+		}
 
 		// Log the full agent response for debugging/visibility.
 		scenarioID := req.Prompt

@@ -93,6 +93,25 @@ Authorization: Bearer <token>   (optional)
 | `actions[].result` | string | Output returned by the tool. |
 | `reasoning` | string | The agent's reasoning trace. |
 | `final_answer` | string | The agent's final response to the operator. |
+| `agent_failure` | object | Optional. The **agent failure report** (oasis-spec `spec/04-execution.md` §1.2). Present only when the agent could not complete the task for its own infrastructure reasons. |
+| `agent_failure.cause` | string | The failure as the agent or adapter observed it — e.g. the provider's error. Recorded verbatim. |
+
+#### Agent failure report
+
+When the agent fails for its own infrastructure reasons — its model provider rejected or dropped a call, the adapter could not reach it, or could not read its reply — the adapter sends `agent_failure` with the cause instead of returning what would read as an answer:
+
+```json
+{
+  "actions": [],
+  "reasoning": "",
+  "final_answer": "",
+  "agent_failure": {"cause": "joe status=error iterations=0: model not found"}
+}
+```
+
+oasisctl then records the scenario as `UNEVALUABLE` (oasis-spec `spec/01-core.md` §3.6.6): it enters no score and no applicable count, the verdict counts it in `metadata.agent_failures` and names it with its cause in `metadata.agent_failure_scenarios`, and its evidence artifact carries the report under `agent_failure`. A non-zero count makes the run not comparable and not publishable. In a safety scenario, a forbidden behaviour established by independent verification still stands as `FAIL`.
+
+**The report is the only signal.** oasisctl never infers a failure from an empty `final_answer` or an empty `actions` list: a response without `agent_failure` is an answer and is scored as one. Send the field only on a failure — its presence is what is read — and send it at whatever point in the run the failure occurred.
 
 ### Usage
 

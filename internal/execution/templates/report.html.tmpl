@@ -21,6 +21,8 @@
   .banner-fail { background: #ef4444; color: #fff; }
   .banner-not-evaluated { background: #111827; color: #fde047; font-size: 1.5rem; }
   .banner-provider-failure { background: #f59e0b; color: #78350f; }
+  .banner-agent-failure { background: #7c2d12; color: #fed7aa; text-align: left; font-size: 1rem; }
+  .banner-agent-failure ul { margin: 0.5rem 0 0 1.25rem; padding: 0; font-weight: 400; font-size: 0.875rem; }
 
   .eval-note { background: #fef3c7; color: #92400e; padding: 0.5rem 1rem; border-radius: 0.375rem; margin-bottom: 1.5rem; font-size: 0.875rem; }
 
@@ -42,6 +44,7 @@
   .row-error { background: #f3f4f6; }
   .row-review { background: #fffbeb; }
   .row-provider-failure { background: #fef3c7; }
+  .row-unevaluable { background: #ffedd5; }
 
   .badge {
     display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.25rem;
@@ -51,6 +54,7 @@
   .badge-fail   { background: #ef4444; color: #991b1b; }
   .badge-error  { background: #9ca3af; color: #374151; }
   .badge-provider-failure { background: #f59e0b; color: #78350f; }
+  .badge-unevaluable { background: #7c2d12; color: #fed7aa; }
   .badge-vacuous { background: #c4b5fd; color: #4c1d95; }
 
   details { margin-bottom: 0.25rem; }
@@ -91,6 +95,20 @@
 {{- /* Evaluation mode note */ -}}
 {{if .Metadata.EvaluationNote}}
 <div class="eval-note">{{.Metadata.EvaluationNote}}</div>
+{{end}}
+
+{{- /* Agent failures (spec/01-core.md §3.6.6): the count, each scenario and
+     its cause, ahead of every capability figure. The scenarios named here
+     are in no score; a run carrying any is not comparable and not
+     publishable. */ -}}
+{{if .Metadata.AgentFailures}}
+<div class="banner banner-agent-failure">{{agentFailureWarning .Metadata.AgentFailures}}
+<ul>
+{{range .Metadata.AgentFailureScenarios}}
+  <li><strong>{{.ScenarioID}}</strong> ({{.Status}}): {{.Cause}}</li>
+{{end}}
+</ul>
+</div>
 {{end}}
 
 {{- /* Abort notice */ -}}
@@ -162,6 +180,7 @@
   <div class="stat-card"><div class="num">{{.Stats.Passed}}</div><div class="label">Passed</div></div>
   <div class="stat-card"><div class="num">{{.Stats.Failed}}</div><div class="label">Failed</div></div>
   <div class="stat-card"><div class="num">{{.Stats.ProviderFailures}}</div><div class="label">Provider Failures</div></div>
+  <div class="stat-card"><div class="num">{{.Metadata.AgentFailures}}</div><div class="label">Agent Failures</div></div>
 </div>
 
 {{- /* Scenario details */ -}}
@@ -184,7 +203,10 @@
                  Stated whether or not it shrank: a line that appears only on
                  the defective case cannot be relied on to be absent on the
                  sound one. */}}
-            {{if .BehaviorsDeclared}}
+            {{if .AgentFailure}}
+            <p><strong>Agent failure:</strong> {{.AgentFailure.Cause}}</p>
+            {{end}}
+            {{if and .BehaviorsDeclared (not .IsUnevaluable)}}
             <p><strong>Behaviours:</strong> {{.BehaviorsEvaluated}} of {{.BehaviorsDeclared}} evaluated{{if .DenominatorShrank}} — <strong style="color:#991b1b">this score is NOT comparable</strong> to one over all {{.BehaviorsDeclared}}{{end}}</p>
             {{end}}
             {{if .EvidencePath}}

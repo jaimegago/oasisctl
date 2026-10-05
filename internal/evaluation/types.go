@@ -1,6 +1,9 @@
 package evaluation
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Scenario represents a single OASIS evaluation scenario as defined in spec 02-scenarios.md.
 type Scenario struct {
@@ -684,6 +687,18 @@ type ScenarioResult struct {
 	// threads/assertion-denominator-disclosure.md.
 	BehaviorsDeclared  int `json:"behaviors_declared" yaml:"behaviors_declared"`
 	BehaviorsEvaluated int `json:"behaviors_evaluated" yaml:"behaviors_evaluated"`
+	// AgentFailure is the agent failure report the adapter sent for this
+	// scenario, or nil. On a capability scenario it always comes with Status
+	// UNEVALUABLE. On a safety scenario it comes with UNEVALUABLE unless a
+	// violation stood on independent evidence, in which case the status is FAIL
+	// and the report is kept here so it is not lost (spec/01-core.md §3.6.6).
+	AgentFailure *AgentFailure `json:"agent_failure,omitempty" yaml:"agent_failure,omitempty"`
+}
+
+// IsUnevaluable reports whether the scenario was excluded because the agent
+// failed. A scenario whose safety violation stood despite a report is not.
+func (r ScenarioResult) IsUnevaluable() bool {
+	return r.Status == ScenarioUnevaluable
 }
 
 // DenominatorShrank reports that this scenario was scored over fewer behaviours
@@ -726,6 +741,12 @@ type ArchetypeScore struct {
 	// shrank, in the order they were scored. It is what turns comparable:
 	// false into something a reader can act on.
 	ShrunkenScenarios []string `json:"shrunken_scenarios,omitempty" yaml:"shrunken_scenarios,omitempty"`
+	// UnevaluableScenarios names this archetype's scenarios that were excluded
+	// because the agent failed (spec/01-core.md §3.6.6). Score is computed
+	// over the rest, which is a population the agent's failures chose, so a
+	// non-empty list makes the archetype not comparable — and through it the
+	// category, exactly as a shrunken denominator does.
+	UnevaluableScenarios []string `json:"unevaluable_scenarios,omitempty" yaml:"unevaluable_scenarios,omitempty"`
 }
 
 // EvaluationMode describes which filters were active during an evaluation.
@@ -817,6 +838,54 @@ type ReportMetadata struct {
 	EvaluationNote string         `json:"evaluation_note,omitempty" yaml:"evaluation_note,omitempty"`
 	Aborted        bool           `json:"aborted,omitempty" yaml:"aborted,omitempty"`
 	AbortReason    string         `json:"abort_reason,omitempty" yaml:"abort_reason,omitempty"`
+	// AgentFailures is the run-level count of scenarios, in either phase, whose
+	// adapter sent an agent failure report (spec/05-reporting.md §1). It is
+	// emitted when zero, because a count that appears only on the defective
+	// run cannot be relied on to be absent on the sound one. Non-zero makes the
+	// run incomplete, not comparable and not publishable (spec/01-core.md
+	// §3.6.6).
+	//
+	// It sits here, beside Aborted, and not beside SafetySummary's
+	// ProviderFailures: those count safety scenarios only, and an agent can
+	// fail in either phase.
+	AgentFailures int `json:"agent_failures" yaml:"agent_failures"`
+	// AgentFailureScenarios names each of them with its cause, in run order.
+	AgentFailureScenarios []AgentFailureRecord `json:"agent_failure_scenarios,omitempty" yaml:"agent_failure_scenarios,omitempty"`
+}
+
+// AgentFailureRecord is one scenario that carried an agent failure report.
+// Status is the scenario's own status: UNEVALUABLE, or FAIL where a safety
+// violation stood despite the report.
+type AgentFailureRecord struct {
+	ScenarioID string               `json:"scenario_id" yaml:"scenario_id"`
+	Cause      string               `json:"cause" yaml:"cause"`
+	Status     ScenarioResultStatus `json:"status" yaml:"status"`
+}
+
+// AgentFailureWarning is the statement every rendering of a run carrying agent
+// failure reports makes before any capability figure (spec/01-core.md §3.6.6).
+func AgentFailureWarning(n int) string {
+	noun := "scenarios"
+	if n == 1 {
+		noun = "scenario"
+	}
+	return fmt.Sprintf("AGENT FAILURE — %d %s could not be evaluated because the agent failed for its own "+
+		"infrastructure reasons. They are excluded from every score; this run is not comparable and not publishable.", n, noun)
+}
+
+// CollectAgentFailures returns, in order, every result that carried an agent
+// failure report.
+func CollectAgentFailures(results ...[]ScenarioResult) []AgentFailureRecord {
+	var out []AgentFailureRecord
+	for _, rs := range results {
+		for _, r := range rs {
+			if r.AgentFailure == nil {
+				continue
+			}
+			out = append(out, AgentFailureRecord{ScenarioID: r.ScenarioID, Cause: r.AgentFailure.Cause, Status: r.Status})
+		}
+	}
+	return out
 }
 
 // ReportEnvironment captures environment details for the report.
@@ -852,7 +921,12 @@ type SafetySummary struct {
 	// latitude the vacuity markers were added under — see joe-pm
 	// queue/vacuity-reporting-schema-unstated.md, which is the standing item
 	// for that gap. It is omitempty, so an ordinary run's report is unchanged.
-	UncategorizedIDs  []string `json:"uncategorized_scenario_ids,omitempty" yaml:"uncategorized_scenario_ids,omitempty"`
+	UncategorizedIDs []string `json:"uncategorized_scenario_ids,omitempty" yaml:"uncategorized_scenario_ids,omitempty"`
+	// UnevaluableIDs names the safety scenarios excluded because the agent
+	// failed and no violation stood (spec/01-core.md §3.6.6). They are in
+	// none of the counts above. Their causes are in the run-level
+	// metadata.agent_failure_scenarios, which also covers capability.
+	UnevaluableIDs    []string `json:"unevaluable_ids,omitempty" yaml:"unevaluable_ids,omitempty"`
 	HumanReviewNeeded bool     `json:"human_review_needed" yaml:"human_review_needed"`
 }
 

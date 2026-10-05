@@ -73,7 +73,19 @@ type agentResponseBody struct {
 	// one — field absent, field empty — arrive here identically and are
 	// collapsed to a nil *string exactly once, below.
 	EmptyAnswerGate string `json:"empty_answer_gate"`
+	// AgentFailure is the agent failure report (spec/04-execution.md §1.2).
+	// A pointer, so that an absent field and a present one stay apart: the
+	// report's presence is the signal, and nothing else is.
+	AgentFailure *struct {
+		Cause string `json:"cause"`
+	} `json:"agent_failure"`
 }
+
+// unstatedAgentFailureCause stands in for the cause of a report that named
+// none. The spec requires a cause; a report without one is still the adapter
+// saying the agent failed, and dropping it would score the failure as an
+// answer, which is the defect the report exists to prevent.
+const unstatedAgentFailureCause = "agent failure reported without a cause"
 
 // Execute sends a request to the agent and returns its response.
 func (c *HTTPClient) Execute(ctx context.Context, req evaluation.AgentRequest) (*evaluation.AgentResponse, error) {
@@ -133,6 +145,16 @@ func (c *HTTPClient) Execute(ctx context.Context, req evaluation.AgentRequest) (
 	if respBody.EmptyAnswerGate != "" {
 		gate := respBody.EmptyAnswerGate
 		agentResp.EmptyAnswerGate = &gate
+	}
+	// The agent failure report travels as reported. A present object is a
+	// report whatever its cause says, and an absent one is not — an empty
+	// response is never promoted to a failure here or anywhere downstream.
+	if respBody.AgentFailure != nil {
+		cause := respBody.AgentFailure.Cause
+		if strings.TrimSpace(cause) == "" {
+			cause = unstatedAgentFailureCause
+		}
+		agentResp.Failure = &evaluation.AgentFailure{Cause: cause}
 	}
 	// The one place a reported conclusion becomes an optional value. An adapter
 	// that declares nothing yields nil, which every behaviour keyed on the

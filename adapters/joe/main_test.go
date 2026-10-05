@@ -665,11 +665,136 @@ func TestTranslateResponse_MalformedBodyIsExplicitError(t *testing.T) {
 	}
 
 	resp := errorResponse("Error: failed to decode Joe response: " + err.Error())
-	if !strings.HasPrefix(resp.FinalAnswer, "Error:") {
-		t.Errorf("error response final_answer = %q, want an Error: prefix", resp.FinalAnswer)
+	// The error travels as an agent failure report, never as final_answer:
+	// an error string there was scored as joe's answer to the task.
+	if resp.AgentFailure == nil || !strings.Contains(resp.AgentFailure.Cause, "Error: failed to decode Joe response") {
+		t.Errorf("error response agent_failure = %+v, want a report carrying the decode error", resp.AgentFailure)
+	}
+	if resp.FinalAnswer != "" {
+		t.Errorf("error response final_answer = %q, want empty", resp.FinalAnswer)
 	}
 	if resp.Actions == nil || len(resp.Actions) != 0 {
 		t.Errorf("error response actions = %v, want empty non-nil slice", resp.Actions)
+	}
+}
+
+// TestAgentFailureFromStatus pins which of joe's terminal statuses are reported
+// as an agent failure. Only an LLM or provider error is; joe stopping itself
+// under one of its own limits is not, and neither is a completed turn —
+// however empty its answer.
+func TestAgentFailureFromStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status     string
+		iterations int
+		errText    string
+		wantCause  string // "" means no report
+	}{
+		{"error", 0, "googleapi: Error 404: models/gemini-2.5-pro is not found", "joe status=error iterations=0: googleapi: Error 404: models/gemini-2.5-pro is not found"},
+		{"error", 2, "read: connection reset by peer", "joe status=error iterations=2: read: connection reset by peer"},
+		{"context_overflow", 5, "The conversation or a tool output was too large for the model's context window.", "joe status=context_overflow iterations=5: The conversation or a tool output was too large for the model's context window."},
+		{"error", 1, "", "joe status=error iterations=1: (joe reported no error text)"},
+		{"completed", 0, "", ""},
+		{"timeout", 3, "task timed out", ""},
+		{"max_iterations_reached", 10, "max iterations", ""},
+		{"runaway_terminated", 4, "token ceiling", ""},
+		{"cost_limit_exceeded", 0, "cost limit", ""},
+		{"", 0, "", ""},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			got := agentFailureFromStatus(&JoeResponse{Status: tc.status, Iterations: tc.iterations, Error: tc.errText})
+			if tc.wantCause == "" {
+				if got != nil {
+					t.Fatalf("status %q: got report %+v, want none", tc.status, got)
+				}
+				return
+			}
+			if got == nil || got.Cause != tc.wantCause {
+				t.Fatalf("status %q: got %+v, want cause %q", tc.status, got, tc.wantCause)
+			}
+		})
+	}
+}
+
+// TestServeExecute_AgentFailureReport drives the real handler: a joe turn that
+// ended in an LLM error reaches oasisctl as an agent failure report carrying
+// joe's error, and an ordinary turn — including one whose answer is empty —
+// carries no agent_failure key at all. The second half is the break-test for
+// the settled rule that silence is never promoted to a failure.
+func TestServeExecute_AgentFailureReport(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		wantCause string
+	}{
+		{"llm error at iteration 0", `{"status":"error","iterations":0,"steps":[],"final_answer":"","error":"model not found"}`, "joe status=error iterations=0: model not found"},
+		{"empty completed answer", `{"status":"completed","iterations":1,"steps":[],"final_answer":""}`, ""},
+		{"older joe without status", `{"steps":[],"final_answer":"done"}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			joeCore := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer joeCore.Close()
+
+			cfg := adapterConfig{joeURL: joeCore.URL, timeout: 5 * time.Second, operationalMode: "read_only"}
+			adapter := httptest.NewServer(newServeMux(cfg))
+			defer adapter.Close()
+
+			resp, err := http.Post(adapter.URL+"/", "application/json",
+				strings.NewReader(`{"prompt":"diagnose","tools":[],"mode":"read-only","scope":{}}`))
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			var raw map[string]json.RawMessage
+			if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+				t.Fatalf("decode adapter response: %v", err)
+			}
+			v, ok := raw["agent_failure"]
+			if tc.wantCause == "" {
+				if ok {
+					t.Fatalf("agent_failure present as %s; want the key absent", v)
+				}
+				return
+			}
+			var report AgentFailureReport
+			if !ok || json.Unmarshal(v, &report) != nil || report.Cause != tc.wantCause {
+				t.Fatalf("agent_failure = %s; want cause %q", v, tc.wantCause)
+			}
+		})
+	}
+}
+
+// TestServeExecute_JoeUnreachableIsAgentFailure: when the adapter cannot reach
+// joe at all, the agent failed as the contract defines it, and the response
+// says so in a report rather than in final_answer.
+func TestServeExecute_JoeUnreachableIsAgentFailure(t *testing.T) {
+	joeCore := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	joeURL := joeCore.URL
+	joeCore.Close()
+
+	cfg := adapterConfig{joeURL: joeURL, timeout: 5 * time.Second, operationalMode: "read_only"}
+	adapter := httptest.NewServer(newServeMux(cfg))
+	defer adapter.Close()
+
+	resp, err := http.Post(adapter.URL+"/", "application/json",
+		strings.NewReader(`{"prompt":"diagnose","tools":[],"mode":"read-only","scope":{}}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var body AgentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode adapter response: %v", err)
+	}
+	if body.AgentFailure == nil || !strings.Contains(body.AgentFailure.Cause, "Joe request failed") {
+		t.Fatalf("agent_failure = %+v, want a report naming the failed request", body.AgentFailure)
+	}
+	if body.FinalAnswer != "" {
+		t.Errorf("final_answer = %q, want empty", body.FinalAnswer)
 	}
 }
 

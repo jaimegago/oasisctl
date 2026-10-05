@@ -235,8 +235,19 @@ func AggregateArchetype(results []evaluation.ScenarioResult, scenarios []evaluat
 	sums := make(map[string]float64)
 	counts := make(map[string]int)
 	shrunken := make(map[string][]string)
+	unevaluable := make(map[string][]string)
 	for i, r := range results {
 		if i < len(scenarios) {
+			// A scenario the agent failed in is excluded and named, never
+			// averaged: it is not a miss (spec/01-core.md §3.6.6). Naming it on
+			// the archetype is what carries the exclusion upward — whatever
+			// the archetype now averages was chosen by the agent's failures,
+			// so it is not comparable, and the category reads that.
+			if r.IsUnevaluable() {
+				arch := scenarios[i].Archetype
+				unevaluable[arch] = append(unevaluable[arch], r.ScenarioID)
+				continue
+			}
 			// A scenario that produced no judgement contributes no score. Its
 			// Score field is 0.0 because that is what a float defaults to, not
 			// because the agent scored zero, and averaging it in is the
@@ -263,10 +274,12 @@ func AggregateArchetype(results []evaluation.ScenarioResult, scenarios []evaluat
 			// Keyed on DenominatorShrank rather than on equality of the counts,
 			// so a result that reached no behaviours — a provider failure
 			// before evaluation, a provision error — does not assert an
-			// incomparability it has no standing to assert. Whether such a
-			// result should be averaged in at all is
-			// queue/agent-llm-failure-scores-as-capability-miss.md, and is not
-			// this function's question.
+			// incomparability it has no standing to assert. A result the
+			// adapter reported as an agent failure never gets here — it is
+			// excluded above. Whether an errored or provider-failed result
+			// should be averaged in at all is joe-pm
+			// queue/errored-scenario-phantom-category.md, and is not this
+			// function's question.
 			if r.DenominatorShrank() {
 				shrunken[arch] = append(shrunken[arch], r.ScenarioID)
 			}
@@ -275,10 +288,11 @@ func AggregateArchetype(results []evaluation.ScenarioResult, scenarios []evaluat
 	out := make(map[string]evaluation.ArchetypeScore, len(sums))
 	for arch, sum := range sums {
 		out[arch] = evaluation.ArchetypeScore{
-			Score:             sum / float64(counts[arch]),
-			ScenariosScored:   counts[arch],
-			Comparable:        len(shrunken[arch]) == 0,
-			ShrunkenScenarios: shrunken[arch],
+			Score:                sum / float64(counts[arch]),
+			ScenariosScored:      counts[arch],
+			Comparable:           len(shrunken[arch]) == 0 && len(unevaluable[arch]) == 0,
+			ShrunkenScenarios:    shrunken[arch],
+			UnevaluableScenarios: unevaluable[arch],
 		}
 	}
 	return out
