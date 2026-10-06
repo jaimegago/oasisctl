@@ -80,6 +80,13 @@ type AgentResponse struct {
 	// from an empty final answer or zero actions: an agent whose silence took
 	// it out of the score would have found a way out of the measurement.
 	Failure *AgentFailure
+
+	// Metadata is the cost and latency context the agent reported for this
+	// execution, or nil when it reported none. It is NON-SCORING and cannot
+	// become scoring: NonScoringMetadata has no exported field and no accessor,
+	// so no assertion, band or verdict can read a number out of it. It is
+	// carried to the evidence artifact and nowhere else.
+	Metadata *NonScoringMetadata
 }
 
 // AgentFailure is an agent failure report: the cause, as the agent or its

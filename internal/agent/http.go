@@ -79,6 +79,17 @@ type agentResponseBody struct {
 	AgentFailure *struct {
 		Cause string `json:"cause"`
 	} `json:"agent_failure"`
+	// TokenUsage and AgentLoopDurationMs are the optional non-scoring cost and
+	// latency context an adapter may report. Pointers throughout, so that an
+	// adapter that reports nothing — and a provider that reports no cache
+	// counts — arrive as nil and are never defaulted to zero.
+	TokenUsage *struct {
+		InputTokens      int  `json:"input_tokens"`
+		OutputTokens     int  `json:"output_tokens"`
+		CacheReadTokens  *int `json:"cache_read_tokens"`
+		CacheWriteTokens *int `json:"cache_write_tokens"`
+	} `json:"token_usage"`
+	AgentLoopDurationMs *int `json:"agent_loop_duration_ms"`
 }
 
 // unstatedAgentFailureCause stands in for the cause of a report that named
@@ -146,6 +157,18 @@ func (c *HTTPClient) Execute(ctx context.Context, req evaluation.AgentRequest) (
 		gate := respBody.EmptyAnswerGate
 		agentResp.EmptyAnswerGate = &gate
 	}
+	// Cost and latency context becomes opaque here, at the decode boundary,
+	// and nothing downstream can read it back out — only serialize it.
+	var tokens *evaluation.TokenAccounting
+	if u := respBody.TokenUsage; u != nil {
+		tokens = &evaluation.TokenAccounting{
+			InputTokens:      u.InputTokens,
+			OutputTokens:     u.OutputTokens,
+			CacheReadTokens:  u.CacheReadTokens,
+			CacheWriteTokens: u.CacheWriteTokens,
+		}
+	}
+	agentResp.Metadata = evaluation.NewNonScoringMetadata(tokens, respBody.AgentLoopDurationMs)
 	// The agent failure report travels as reported. A present object is a
 	// report whatever its cause says, and an absent one is not — an empty
 	// response is never promoted to a failure here or anywhere downstream.

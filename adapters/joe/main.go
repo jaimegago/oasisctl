@@ -83,6 +83,32 @@ type AgentResponse struct {
 	// omitempty, and that is load-bearing: its PRESENCE is the signal, so it
 	// must be absent on every ordinary response, including an empty one.
 	AgentFailure *AgentFailureReport `json:"agent_failure,omitempty"`
+	// TokenUsage and AgentLoopDurationMs forward joe's per-task token
+	// accounting and the time joe spent inside its agent loop
+	// (taskResponse.total_tokens / .duration_ms). They are NON-SCORING
+	// metadata: cost and latency context for a result, never an input to an
+	// assertion, a band or a verdict — oasisctl holds them in a type no
+	// scoring path can read.
+	//
+	// The duration is renamed on purpose. joe brackets agent.Run and nothing
+	// else, so it excludes joe's request handling, session setup and every
+	// second of lab or fixture time; "duration_ms" would read as scenario
+	// wall-clock, which it is not.
+	//
+	// omitempty pointers: an older joe sends neither, and the adapter then
+	// sends nothing rather than zeros that would read as measurements.
+	TokenUsage          *TokenUsage `json:"token_usage,omitempty"`
+	AgentLoopDurationMs *int        `json:"agent_loop_duration_ms,omitempty"`
+}
+
+// TokenUsage is joe's per-task token accounting as forwarded to oasisctl. The
+// cache counts are absent, never zero, when joe's provider does not report
+// them: a present 0 is "no cache activity", an absent field is "not reported".
+type TokenUsage struct {
+	InputTokens      int  `json:"input_tokens"`
+	OutputTokens     int  `json:"output_tokens"`
+	CacheReadTokens  *int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *int `json:"cache_write_tokens,omitempty"`
 }
 
 // AgentFailureReport is the body of an agent failure report.
@@ -177,6 +203,13 @@ type JoeResponse struct {
 	Status     string `json:"status"`
 	Iterations int    `json:"iterations"`
 	Error      string `json:"error"`
+	// TotalTokens and DurationMs are joe's per-task token accounting and its
+	// agent-loop duration (taskResponse.total_tokens / .duration_ms). Pointers
+	// so a joe that sends neither decodes to nil rather than to zeros. The
+	// cache counts inside TotalTokens are pointers for the same reason: joe
+	// omits each one its provider does not report.
+	TotalTokens *TokenUsage `json:"total_tokens"`
+	DurationMs  *int        `json:"duration_ms"`
 }
 
 // JoeDiscardedSignal mirrors joe's taskDiscardedSignal.
@@ -282,10 +315,12 @@ func translateResponse(jr *JoeResponse) *AgentResponse {
 		// Built non-nil unconditionally: the field must reach oasisctl as `[]`
 		// and never as null, or the absent-list ambiguity the declaration
 		// exists to remove comes back silently at the far end of the pipe.
-		Discarded:          make([]DiscardedSignal, 0, len(jr.Discarded)),
-		RootCause:          jr.RootCause,
-		ConclusionDeclared: jr.ConclusionDeclared,
-		EmptyAnswerGate:    jr.EmptyAnswerGate,
+		Discarded:           make([]DiscardedSignal, 0, len(jr.Discarded)),
+		RootCause:           jr.RootCause,
+		ConclusionDeclared:  jr.ConclusionDeclared,
+		EmptyAnswerGate:     jr.EmptyAnswerGate,
+		TokenUsage:          jr.TotalTokens,
+		AgentLoopDurationMs: jr.DurationMs,
 	}
 	for _, d := range jr.Discarded {
 		// A conversion rather than a field-by-field literal: the two types are

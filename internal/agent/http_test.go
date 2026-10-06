@@ -376,3 +376,50 @@ func TestExecute_AgentFailureReport(t *testing.T) {
 		})
 	}
 }
+
+// The non-scoring metadata decodes into the opaque domain value, and an
+// adapter that reports none yields nil rather than zeros.
+func TestExecute_NonScoringMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string // marshalled Metadata; "" means nil
+	}{
+		{
+			name: "reported, cache write unreported",
+			body: `{"actions":[],"final_answer":"f","token_usage":{"input_tokens":900,"output_tokens":40,"cache_read_tokens":0},"agent_loop_duration_ms":5123}`,
+			want: `{"tokens":{"input_tokens":900,"output_tokens":40,"cache_read_tokens":0,"cache_write_tokens":null},"agent_loop_duration_ms":5123}`,
+		},
+		{
+			name: "not reported",
+			body: `{"actions":[],"final_answer":"f"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			resp, err := NewHTTPClient(server.URL, "").Execute(context.Background(), evaluation.AgentRequest{Prompt: "p"})
+			if err != nil {
+				t.Fatalf("execute failed: %v", err)
+			}
+			if tt.want == "" {
+				if resp.Metadata != nil {
+					t.Errorf("Metadata = %v, want nil", resp.Metadata)
+				}
+				return
+			}
+			got, err := json.Marshal(resp.Metadata)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("Metadata = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}

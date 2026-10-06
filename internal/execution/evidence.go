@@ -113,6 +113,18 @@ type EvidenceArtifact struct {
 	// null is a positive record that no report was sent, which an absent key
 	// cannot distinguish from an artifact written before the field existed.
 	AgentFailure *evaluation.AgentFailure `json:"agent_failure"`
+
+	// NonScoringMetadata is the cost and latency context the agent reported:
+	// its token accounting and the time it spent inside its own agent loop.
+	// Null when the agent reported neither.
+	//
+	// NOT scored, and not readable by anything that scores — see
+	// evaluation.NonScoringMetadata. Two things a reader must not do with it:
+	// take a null cache count for zero (null is "the provider does not report
+	// it"), and take agent_loop_duration_ms for scenario wall-clock. The
+	// duration covers the agent's own loop only; lab setup, fixture time and
+	// the agent's request handling are all outside it.
+	NonScoringMetadata *evaluation.NonScoringMetadata `json:"non_scoring_metadata"`
 }
 
 // EvidenceConclusion is the artifact's record of a declared diagnostic
@@ -213,6 +225,9 @@ func BuildEvidenceArtifact(
 		// is a property of what the agent reported, and nothing between here
 		// and the decoder derives or defaults it. Nil stays nil.
 		artifact.EmptyAnswerGate = resp.EmptyAnswerGate
+		// The metadata is immutable once built, so sharing the pointer cannot
+		// let anything reach back into the record.
+		artifact.NonScoringMetadata = resp.Metadata
 		// Copied rather than aliased: the artifact is a record of what was
 		// received, and nothing that later touches the response should reach
 		// into it.

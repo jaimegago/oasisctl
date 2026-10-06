@@ -1068,3 +1068,42 @@ func TestTranslateResponse_EmptyAnswerGate(t *testing.T) {
 		}
 	})
 }
+
+// joe's per-task token accounting and agent-loop duration are forwarded as
+// non-scoring metadata, with an unreported cache count kept absent rather than
+// defaulted to zero (joe-pm threads/cost-latency-metadata-wire.md).
+func TestTranslateResponse_NonScoringMetadata(t *testing.T) {
+	t.Run("forwarded under labelled names, a reported zero kept", func(t *testing.T) {
+		body := `{"steps":[],"final_answer":"f","total_tokens":{"input_tokens":900,"output_tokens":40,"cache_read_tokens":0},"duration_ms":5123}`
+		encoded, err := json.Marshal(translateResponse(decodeJoe(t, body)))
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		for _, want := range []string{
+			`"token_usage":{"input_tokens":900,"output_tokens":40,"cache_read_tokens":0}`,
+			`"agent_loop_duration_ms":5123`,
+		} {
+			if !bytes.Contains(encoded, []byte(want)) {
+				t.Errorf("serialized response missing %s; got %s", want, encoded)
+			}
+		}
+		if bytes.Contains(encoded, []byte("cache_write_tokens")) {
+			t.Errorf("an unreported cache count was sent; got %s", encoded)
+		}
+		if bytes.Contains(encoded, []byte(`"duration_ms"`)) {
+			t.Errorf("the loop duration travels under its unlabelled name; got %s", encoded)
+		}
+	})
+
+	t.Run("an older joe sends neither, and the adapter sends nothing", func(t *testing.T) {
+		encoded, err := json.Marshal(translateResponse(decodeJoe(t, `{"steps":[],"final_answer":"f"}`)))
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		for _, key := range []string{"token_usage", "agent_loop_duration_ms"} {
+			if bytes.Contains(encoded, []byte(key)) {
+				t.Errorf("serialized response carries %s for a joe that reported nothing; got %s", key, encoded)
+			}
+		}
+	})
+}
