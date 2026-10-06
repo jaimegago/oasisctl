@@ -3,6 +3,7 @@ package validation
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/jaimegago/oasisctl/internal/evaluation"
 	"github.com/jaimegago/oasisctl/internal/scoring"
@@ -42,6 +43,7 @@ func ValidateScenario(s evaluation.Scenario, intentConfig ...evaluation.IntentPr
 
 	validateConcern(s, verr)
 	validateScoringForm(s, verr)
+	validateMisleadingSignals(s, verr)
 
 	// value_containment is a verification method per spec/02-scenarios.md §1.6,
 	// listed alongside state_assertions, api_audit, negative_verification and
@@ -118,6 +120,61 @@ func validateScoringForm(s evaluation.Scenario, verr *evaluation.ValidationError
 	if s.Classification == evaluation.ClassificationCapability && s.Scoring.Type != evaluation.ScoringTypeWeighted {
 		verr.Add("scoring.type", "capability scenarios must use weighted scoring, or a Form B archetype_template binding")
 	}
+}
+
+// misleadingSignalBehavior is the behavior whose ground truth is the scenario's
+// misleading_signals declaration.
+const misleadingSignalBehavior = "identify_misleading_signal"
+
+// validateMisleadingSignals enforces the SI profile's behavior-definitions.md
+// § identify_misleading_signal: a scenario asserting the behavior MUST declare
+// a non-empty misleading_signals, and every entry MUST name a resource its
+// preconditions.environment.state declares. Without the declaration the
+// evaluator cannot tell the misleading signal from the actual cause, and a
+// scenario lacking it is invalid rather than an evaluator error discovered at
+// run time.
+func validateMisleadingSignals(s evaluation.Scenario, verr *evaluation.ValidationError) {
+	if len(s.MisleadingSignals) == 0 {
+		if assertsBehavior(s, misleadingSignalBehavior) {
+			verr.Add("misleading_signals",
+				"required: the scenario asserts identify_misleading_signal but declares no misleading signal")
+		}
+		return
+	}
+
+	declared := make(map[string]bool)
+	for _, state := range s.Preconditions.Environment.State {
+		if resource, ok := state["resource"].(string); ok {
+			declared[strings.TrimSpace(resource)] = true
+		}
+	}
+	for i, sig := range s.MisleadingSignals {
+		resource := strings.TrimSpace(sig.Resource)
+		switch {
+		case resource == "":
+			verr.Add("misleading_signals", "entry at index "+itoa(i)+": resource is required")
+		case !declared[resource]:
+			verr.Add("misleading_signals",
+				fmt.Sprintf("entry at index %d: %q is not declared in preconditions.environment.state", i, resource))
+		}
+	}
+}
+
+// assertsBehavior reports whether any must, must_not or conditional assertion
+// of the scenario names the behavior.
+func assertsBehavior(s evaluation.Scenario, behavior string) bool {
+	lists := [][]evaluation.AssertionItem{s.Assertions.Must, s.Assertions.MustNot}
+	for _, c := range s.Conditional {
+		lists = append(lists, c.Must, c.MustNot)
+	}
+	for _, items := range lists {
+		for _, item := range items {
+			if item.Behavior == behavior {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // validateIntent checks intent presence and length based on promotion rules.

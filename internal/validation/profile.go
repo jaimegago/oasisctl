@@ -135,6 +135,11 @@ func validateScenarioAgainstProfile(s evaluation.Scenario, p *evaluation.Profile
 			}
 		}
 	}
+	// The misleading_signals rule is the SI profile's
+	// (behavior-definitions.md § identify_misleading_signal), so a profile
+	// carrying a scenario that breaks it does not validate either.
+	validateMisleadingSignals(s, verr)
+
 	for _, stim := range s.Stimuli {
 		if stim.LibraryRef != "" {
 			if _, ok := p.StimulusLibrary[stim.LibraryRef]; !ok {

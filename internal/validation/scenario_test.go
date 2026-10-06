@@ -213,3 +213,84 @@ func TestValidateScenario_WrongScoringTypeForClassification(t *testing.T) {
 		})
 	}
 }
+
+// misleadingSignalScenario is a minimal valid Form A capability scenario
+// asserting identify_misleading_signal, shaped like C-DA-003.
+func misleadingSignalScenario() evaluation.Scenario {
+	return evaluation.Scenario{
+		ID:             "test.capability.misleading.001",
+		Name:           "Misleading signal",
+		Classification: evaluation.ClassificationCapability,
+		Category:       "diagnostic-accuracy",
+		Archetype:      "C-DA-003",
+		Tier:           1,
+		Preconditions: evaluation.Preconditions{
+			Environment: evaluation.EnvironmentPrecondition{
+				Type: "kubernetes-cluster",
+				State: []map[string]interface{}{
+					{"resource": "deployment/user-service"},
+					{"resource": "pod/batch-processor-x9k2"},
+					{"resource": "node/node-1"},
+				},
+			},
+		},
+		Assertions: evaluation.Assertions{
+			Must: []evaluation.AssertionItem{
+				{Behavior: "identify_misleading_signal"},
+				{Behavior: "find_actual_root_cause_oom"},
+			},
+		},
+		MisleadingSignals: []evaluation.MisleadingSignal{
+			{Resource: "node/node-1"},
+			{Resource: "pod/batch-processor-x9k2"},
+		},
+		Verification:  evaluation.Verification{StateAssertions: []evaluation.StateAssertion{{Description: "OOM kill identified"}}},
+		Scoring:       evaluation.Scoring{Type: evaluation.ScoringTypeWeighted},
+		Observability: []string{"agent reasoning trace"},
+	}
+}
+
+func TestValidateScenario_MisleadingSignals(t *testing.T) {
+	t.Run("declared and resolvable: valid", func(t *testing.T) {
+		assert.Nil(t, validation.ValidateScenario(misleadingSignalScenario()))
+	})
+
+	t.Run("asserted without the declaration: invalid", func(t *testing.T) {
+		s := misleadingSignalScenario()
+		s.MisleadingSignals = nil
+		verr := validation.ValidateScenario(s)
+		require.NotNil(t, verr)
+		require.Len(t, verr.Issues, 1)
+		assert.Equal(t, "misleading_signals", verr.Issues[0].Field)
+		assert.Contains(t, verr.Issues[0].Message, "asserts identify_misleading_signal")
+	})
+
+	t.Run("asserted only conditionally: still requires the declaration", func(t *testing.T) {
+		s := misleadingSignalScenario()
+		s.MisleadingSignals = nil
+		s.Assertions.Must = s.Assertions.Must[1:]
+		s.Conditional = []evaluation.ConditionalAssertion{{
+			When: map[string]interface{}{"operational_mode": "read-only"},
+			Must: []evaluation.AssertionItem{{Behavior: "identify_misleading_signal"}},
+		}}
+		verr := validation.ValidateScenario(s)
+		require.NotNil(t, verr)
+		assert.Equal(t, "misleading_signals", verr.Issues[0].Field)
+	})
+
+	t.Run("names a resource the state does not declare: invalid", func(t *testing.T) {
+		s := misleadingSignalScenario()
+		s.MisleadingSignals = append(s.MisleadingSignals, evaluation.MisleadingSignal{Resource: "node/node-2"})
+		verr := validation.ValidateScenario(s)
+		require.NotNil(t, verr)
+		require.Len(t, verr.Issues, 1)
+		assert.Contains(t, verr.Issues[0].Message, `"node/node-2" is not declared`)
+	})
+
+	t.Run("not asserted and not declared: no requirement", func(t *testing.T) {
+		s := misleadingSignalScenario()
+		s.MisleadingSignals = nil
+		s.Assertions.Must = s.Assertions.Must[1:]
+		assert.Nil(t, validation.ValidateScenario(s))
+	})
+}

@@ -24,9 +24,19 @@ type Scenario struct {
 	Assertions     Assertions             `yaml:"assertions"`
 	Conditional    []ConditionalAssertion `yaml:"conditional,omitempty" json:"conditional,omitempty"`
 	Injection      *Injection             `yaml:"injection,omitempty" json:"injection,omitempty"`
-	Verification   Verification           `yaml:"verification"`
-	Scoring        Scoring                `yaml:"scoring"`
-	Observability  []string               `yaml:"observability_requirements"`
+	// MisleadingSignals is the SI profile's declaration of which signal a
+	// scenario asserting identify_misleading_signal treats as misleading
+	// (behavior-definitions.md § identify_misleading_signal).
+	MisleadingSignals []MisleadingSignal `yaml:"misleading_signals,omitempty" json:"misleading_signals,omitempty"`
+	Verification      Verification       `yaml:"verification"`
+	Scoring           Scoring            `yaml:"scoring"`
+	Observability     []string           `yaml:"observability_requirements"`
+}
+
+// MisleadingSignal is one declared misleading signal: a resource the scenario
+// declares in preconditions.environment.state, in the same kind/name form.
+type MisleadingSignal struct {
+	Resource string `yaml:"resource" json:"resource"`
 }
 
 // Injection is the scenario's injection manifest per spec/02-scenarios.md §1.11.

@@ -231,6 +231,90 @@ func TestCDA003_FullDeclaration_Scores(t *testing.T) {
 	assert.False(t, result.Unassessable)
 }
 
+// TestCDA003_DiscardedTheActualCause_ScoresZero replays the declared
+// conclusions of run 20260913-214524-fc4ff4, verbatim from its evidence
+// artifacts. Every arm declared the `dd` CPU load its root cause and discarded
+// the restart. Each scored 0.5 while a discard of any declared resource
+// satisfied identify_misleading_signal. Against the declared misleading
+// signals each now fails both behaviours, and C-DA-003 scores 0.0, the
+// rubric's fell_for_misleading_signal row.
+func TestCDA003_DiscardedTheActualCause_ScoresZero(t *testing.T) {
+	scenario := loadCapabilityScenario(t, "infra.capability.da.misleading-signal-001")
+	require.NotEmpty(t, scenario.MisleadingSignals, "the vendored C-DA-003 must declare its misleading signals")
+
+	arms := map[string]evaluation.DiagnosticConclusion{
+		"flash-a": {
+			RootCause: "The node CPU is pegged because the `user-service` pod is running a CPU-intensive command (`dd if=/dev/zero of=/dev/null bs=1M`).",
+			Discarded: []evaluation.DiscardedSignal{{
+				Signal:    "User-service restarting",
+				Rationale: "The current `user-service` pod (`user-service-78cd59c7dc-qvqfq`) is not showing any signs of restarting based on `restartCount` and recent Kubernetes events.",
+			}},
+		},
+		"flash-b": {
+			RootCause: "The `user-service-78cd59c7dc-ncc8b` pod is running a command (`dd if=/dev/zero of=/dev/null bs=1M`) designed to consume all available CPU. This pod has no CPU limits defined, allowing it to peg the CPU on the `e2e-cae0771e-control-plane` node.",
+			Discarded: []evaluation.DiscardedSignal{{
+				Signal:    "User-service pod restarting",
+				Rationale: "The current `user-service-78cd59c7dc-ncc8b` pod shows a restart count of 0 and is in a `Running` state, with empty logs. While past restarts of other `user-service` pods cannot be entirely ruled out, the immediate evidence does not support the current pod \"keeping on restarting\".",
+			}},
+		},
+		"pro": {
+			RootCause: "The user-service deployment is configured to run an infinite CPU stress command (dd if=/dev/zero of=/dev/null), which is pegging the CPU.",
+			Discarded: []evaluation.DiscardedSignal{{
+				Signal:    "user-service is restarting",
+				Rationale: "The pod has a restart count of 0 and has been running continuously since creation.",
+			}},
+		},
+	}
+
+	for arm, conclusion := range arms {
+		t.Run(arm, func(t *testing.T) {
+			conclusion := conclusion
+			resp := &evaluation.AgentResponse{Conclusion: &conclusion}
+			results, err := daEngine(t).Evaluate(context.Background(), &scenario, resp, nil)
+			require.NoError(t, err)
+			require.Len(t, results, 2)
+			for _, r := range results {
+				assert.Equal(t, evaluation.AssertionFail, r.Status, "%s: %s", r.Assertion.Behavior, r.Evidence)
+				assert.False(t, r.Unassessable, "%s: a declared wrong answer is a FAIL, not an absence", r.Assertion.Behavior)
+			}
+
+			result, err := execution.NewScorer().ScoreCapability(context.Background(), &scenario, results)
+			require.NoError(t, err)
+			assert.Equal(t, 0.0, result.Score)
+		})
+	}
+}
+
+// TestCDA003_DiscardedTheMisleadingSignal_ScoresOne is the other side: a
+// discard of the node CPU or of the batch pod, with the OOM kill declared as
+// the root cause, passes both behaviours.
+func TestCDA003_DiscardedTheMisleadingSignal_ScoresOne(t *testing.T) {
+	scenario := loadCapabilityScenario(t, "infra.capability.da.misleading-signal-001")
+
+	discards := map[string]evaluation.DiscardedSignal{
+		"the node CPU":  {Signal: "Node CPU pegged at 97%", Rationale: "the load is a co-tenant's, and user-service's restarts are OOM kills"},
+		"the batch pod": {Signal: "batch-processor-x9k2 CPU at 95%", Rationale: "a noisy neighbour; it does not touch user-service's memory"},
+	}
+	for name, discard := range discards {
+		t.Run(name, func(t *testing.T) {
+			resp := &evaluation.AgentResponse{Conclusion: &evaluation.DiagnosticConclusion{
+				RootCause: "user-service is OOM killed by a memory leak",
+				Discarded: []evaluation.DiscardedSignal{discard},
+			}}
+			results, err := daEngine(t).Evaluate(context.Background(), &scenario, resp, nil)
+			require.NoError(t, err)
+			require.Len(t, results, 2)
+			for _, r := range results {
+				assert.Equal(t, evaluation.AssertionPass, r.Status, "%s: %s", r.Assertion.Behavior, r.Evidence)
+			}
+
+			result, err := execution.NewScorer().ScoreCapability(context.Background(), &scenario, results)
+			require.NoError(t, err)
+			assert.Equal(t, 1.0, result.Score)
+		})
+	}
+}
+
 // TestCDA003_UndeclaredConclusion_IsUnassessableNotZero is order part 4 at the
 // scenario level. An agent that answered in prose and declared nothing has not
 // given a wrong diagnosis, and the run must say so rather than banking a 0.0

@@ -555,10 +555,10 @@ var memoryExhaustionFacets = []labeledIdentifiers{
 // under a stated root cause naming OOM, the misleading signal is by
 // construction not what the agent named, and C-DA-003's own rubric puts
 // "identified misleading signal + found actual cause" — an answer that names
-// both, dismissing one — in its *top* band at 1.0. An independent
-// "is X blamed" scan would need a rule for which declared signal is the
-// misleading one, which no scenario field declares and the spec does not
-// settle.
+// both, dismissing one — in its *top* band at 1.0. An independent "is X
+// blamed" scan is not added now that `misleading_signals` declares which
+// signal is misleading: the first sentence already decides the verdict, and
+// the scenario's other `must` reads the declaration.
 //
 // So the FAIL is the rubric's floor band, `fell_for_misleading_signal`: an
 // answer that states a cause without ever reaching memory.
@@ -635,7 +635,7 @@ var initFailureVocabulary = []string{
 //
 //   - the component half resolves against a closed set the scenario declares,
 //     the init-container names. The generic terms stay beside them for the
-//     reason declaredSignalAnchors admits both halves of a `kind/name`
+//     reason misleadingSignalAnchors admits the kind half of a `kind/name`
 //     declaration: an agent naming "the init container" has named the kind of
 //     the thing the scenario declares, and a set recognising only `db-migrate`
 //     would read a correct answer as no identification at all.
@@ -727,38 +727,38 @@ func declaredInitContainers(scenario *evaluation.Scenario) (names []string, stat
 // evalIdentifyMisleadingSignal.
 
 // evalIdentifyMisleadingSignal decides `identify_misleading_signal` (C-DA-003):
-// "Agent reasoning trace explicitly considers and discards the misleading
-// signal with stated rationale. Agent continues investigation beyond the
-// misleading signal" (behavior-definitions.md §2).
+// "Agent reasoning trace explicitly considers and discards a declared
+// misleading signal with stated rationale. Agent continues investigation
+// beyond the misleading signal" (behavior-definitions.md §2).
 //
 // The verdict reads the agent's DECLARED discards, never its prose. It is
-// satisfied by an entry that both resolves to something the scenario declares
-// and carries a rationale — the two halves of "discards the signal with stated
-// rationale", each taken from the agent's own declaration of the act rather
-// than inferred from how it wrote about it.
+// satisfied by an entry that both names a signal the scenario declares
+// MISLEADING and carries a rationale — the two halves of "discards the signal
+// with stated rationale", each taken from the agent's own declaration of the
+// act rather than inferred from how it wrote about it.
 //
-// **Which** declared signal is the misleading one is still deliberately not
-// decided here, and the reason is unchanged by the move to a declaration: no
-// scenario field marks a signal as misleading, and inferring it from the state
-// declaration or from the operator prompt would be evaluator-invented ground
-// truth. An agent that discarded the *correct* signal passes this verdict —
-// and fails `find_actual_root_cause_oom`, which C-DA-003 declares alongside it
-// as a second `must`. The pair is what carries the scenario; neither verdict
-// carries it alone.
+// **Which signal is misleading is the scenario's declaration, not this
+// evaluator's inference.** The scenario names it in `misleading_signals`, and a
+// discard is resolved against that set and nothing else. Until joe-pm
+// `threads/misleading-signal-declared.md` it was resolved against every
+// declared resource, so an agent that discarded the actual cause — "User-service
+// restarting" resolves to `deployment/user-service` — was credited for seeing
+// past the misleading signal, and C-DA-003's `fell_for_misleading_signal: 0.0`
+// row could not be reached. Discarding the true cause is the opposite of this
+// behaviour, and it now fails it.
 //
-// **The second sentence's "continues investigation beyond" is no longer a
-// separate check, and that is a real change rather than an oversight.** It was
-// implemented as "the trace references at least two distinct anchors", which is
-// a scan over open prose — the thing this repair removes. Under a declaration
-// the clause is carried by the pair above: an agent that discarded a signal and
-// reached no committed cause fails `find_actual_root_cause_oom`. joe-pm
+// **The second sentence's "continues investigation beyond" is not a separate
+// check.** It was implemented as "the trace references at least two distinct
+// anchors", which is a scan over open prose. Under a declaration the clause is
+// carried by the pair: an agent that discarded a signal and reached no
+// committed cause fails `find_actual_root_cause_oom`. joe-pm
 // `threads/declared-diagnostic-conclusion.md` order part 3 states the
 // satisfaction condition as resolution plus rationale, and this follows it.
 func (e *AssertionEngine) evalIdentifyMisleadingSignal(item evaluation.AssertionItem, response *evaluation.AgentResponse, scenario *evaluation.Scenario) (evaluation.AssertionResult, error) {
-	anchors, declared := declaredSignalAnchors(scenario)
-	if declared == 0 {
+	anchors := misleadingSignalAnchors(scenario)
+	if len(anchors.names) == 0 {
 		return evaluation.AssertionResult{}, fmt.Errorf(
-			"scenario declares no environment state; identify_misleading_signal has no declared signal to anchor a discard against")
+			"scenario declares no misleading_signals; identify_misleading_signal has no declared misleading signal to resolve a discard against")
 	}
 
 	if response == nil || response.Conclusion == nil {
@@ -766,12 +766,6 @@ func (e *AssertionEngine) evalIdentifyMisleadingSignal(item evaluation.Assertion
 			"agent declared no conclusion; the behaviour is defined over the declared discards and there was nothing to read"), nil
 	}
 
-	// The two halves of the act, taken from the agent's own declaration: an
-	// entry that RESOLVES to something the scenario declares, and that CARRIES
-	// a rationale. Nothing here classifies a communicative act from prose —
-	// the agent already said it discarded the thing, so there is no dismissal
-	// to detect, only a name to resolve.
-	//
 	// A rationale-less entry is tracked separately so its evidence line says
 	// which half was missing. Naming a signal with no reason is not the act the
 	// definition describes, and reporting it as "discarded nothing" would be
@@ -783,76 +777,138 @@ func (e *AssertionEngine) evalIdentifyMisleadingSignal(item evaluation.Assertion
 			continue
 		}
 		// The residue of lexical matching, and the whole of it: a short
-		// declared field resolved against the scenario's CLOSED set of declared
-		// signals. Bounded, not eliminated — the agent declares in its words
-		// and the scenario in its own, so something still bridges them.
-		if resolved := referencedIn([]string{d.Signal}, anchors); len(resolved) > 0 {
+		// declared field resolved against the scenario's CLOSED set of
+		// declared misleading signals. Bounded, not eliminated — the agent
+		// declares in its words and the scenario in its own.
+		if resolved := anchors.resolve(d.Signal); len(resolved) > 0 {
 			return passed(item, fmt.Sprintf(
-				"agent declared it discarded %q, which resolves to the declared signal %s, with a stated rationale",
+				"agent declared it discarded %q, which resolves to the declared misleading signal %s, with a stated rationale",
 				d.Signal, strings.Join(resolved, ", "))), nil
 		}
 	}
 
 	if namedWithoutRationale > 0 {
 		return failed(item, fmt.Sprintf(
-			"agent declared %d discarded signal(s), none resolving to a declared signal with a stated rationale (%d carried no rationale)",
+			"agent declared %d discarded signal(s), none resolving to a declared misleading signal with a stated rationale (%d carried no rationale)",
 			len(response.Conclusion.Discarded), namedWithoutRationale)), nil
 	}
 	if len(response.Conclusion.Discarded) == 0 {
-		return failed(item, "agent declared a conclusion and discarded nothing — no declared signal was ruled out"), nil
+		return failed(item, "agent declared a conclusion and discarded nothing — no declared misleading signal was ruled out"), nil
 	}
 	return failed(item, fmt.Sprintf(
-		"agent declared %d discarded signal(s), none of which resolves to anything the scenario declares",
+		"agent declared %d discarded signal(s), none of which resolves to a declared misleading signal",
 		len(response.Conclusion.Discarded))), nil
 }
 
-// declaredSignalAnchors returns everything the scenario's environment state
-// declares that an agent could name when discarding a signal — the kind half
-// and the name half of each `resource: kind/name` declaration — followed by
-// the observability pillars. Both halves of the resource declaration count,
-// because an agent writing about `node/node-1` may name either, and a
-// heuristic that recognised only the name would read "the node CPU is a red
-// herring" as no discard at all.
+// misleadingAnchors is what a declared discard is resolved against: the
+// declared misleading signals, and the names of every other declared resource,
+// which veto a reference made by kind alone.
+type misleadingAnchors struct {
+	// names are the name halves of the declared misleading signals. A name
+	// identifies its resource, so a discard containing one resolves outright.
+	names []labeledIdentifiers
+	// kinds are the kind halves of the declared misleading signals, kept only
+	// where the kind is unambiguous: every resource the scenario declares of
+	// that kind is a misleading signal.
+	kinds []labeledIdentifiers
+	// others are the name halves of every declared resource that is NOT a
+	// misleading signal.
+	others []labeledIdentifiers
+}
+
+// resolve returns the declared misleading signals the discard names, under
+// behavior-definitions.md § identify_misleading_signal: by name, or by an
+// unambiguous kind in a discard that names no other declared resource.
 //
-// The second return is how many anchors the scenario itself declared. The
-// pillars are appended to every scenario, so a caller that needs to know
-// whether the scenario declared any signal at all cannot learn it from the
-// length — and a scenario with no declared state is missing scenario data, the
-// error case trace_failure_chain takes for the same reason.
-func declaredSignalAnchors(scenario *evaluation.Scenario) ([]labeledIdentifiers, int) {
-	var out []labeledIdentifiers
-	seen := make(map[string]bool)
-	add := func(name string) {
-		key := strings.ToLower(strings.TrimSpace(name))
-		if key == "" || seen[key] {
-			return
+// The kind half is admitted because an agent writing "the node CPU spike" has
+// named `node/node-1` as declared. It is vetoed by another declared name because
+// a kind word beside a name refers to that name's resource: "User-service pod
+// restarting" is user-service's pod, and reading it as
+// `pod/batch-processor-x9k2` would re-admit the defect this repair removes by
+// way of the word "pod". That discard is run `20260913-214524-fc4ff4`'s
+// flash-b arm verbatim.
+//
+// No declared→actual resolution is consulted, because none exists for these
+// kinds. The provider reports what a declared NAMESPACE became
+// (provider-guide.md §1.1) and nothing else; petri binds `node-1` to a real lab
+// node at provision and reports the binding to no one. So a discard naming the
+// real node by its lab name alone resolves to nothing. That is recorded as a
+// finding in the thread rather than papered over here with a wider match.
+func (a misleadingAnchors) resolve(signal string) []string {
+	if named := referencedIn([]string{signal}, a.names); len(named) > 0 {
+		return named
+	}
+	kinds := referencedIn([]string{signal}, a.kinds)
+	if len(kinds) == 0 || len(referencedIn([]string{signal}, a.others)) > 0 {
+		return nil
+	}
+	return kinds
+}
+
+// misleadingSignalAnchors builds the anchor set from the scenario's
+// `misleading_signals` and its environment state. Labels are the declared
+// `kind/name` strings, so evidence names the declaration it resolved to.
+func misleadingSignalAnchors(scenario *evaluation.Scenario) misleadingAnchors {
+	var out misleadingAnchors
+	misleading := make(map[string]bool)
+	for _, sig := range scenario.MisleadingSignals {
+		if r := strings.TrimSpace(sig.Resource); r != "" {
+			misleading[strings.ToLower(r)] = true
 		}
-		seen[key] = true
-		// A declared kind that *is* a pillar keeps the pillar's own token list,
-		// so a scenario declaring `logs/api-service` still matches "log".
-		for _, pillar := range signalPillars {
-			if pillar.label == key {
-				out = append(out, pillar)
-				return
-			}
-		}
-		out = append(out, labeledIdentifiers{label: name, identifiers: []string{name}})
 	}
 
+	// A kind is ambiguous when the state declares a resource of that kind
+	// that is not misleading.
+	ambiguousKind := make(map[string]bool)
+	seenOther := make(map[string]bool)
 	for _, state := range scenario.Preconditions.Environment.State {
 		resource, _ := state["resource"].(string)
-		if idx := strings.Index(resource, "/"); idx >= 0 {
-			add(resource[:idx])
-			add(resource[idx+1:])
-		} else {
-			add(resource)
+		resource = strings.TrimSpace(resource)
+		if resource == "" || misleading[strings.ToLower(resource)] {
+			continue
+		}
+		kind, name := splitResource(resource)
+		if kind != "" {
+			ambiguousKind[strings.ToLower(kind)] = true
+		}
+		if key := strings.ToLower(name); name != "" && !seenOther[key] {
+			seenOther[key] = true
+			out.others = append(out.others, labeledIdentifiers{label: resource, identifiers: []string{name}})
 		}
 	}
-	declared := len(out)
-	for _, pillar := range signalPillars {
-		add(pillar.label)
+
+	for _, sig := range scenario.MisleadingSignals {
+		resource := strings.TrimSpace(sig.Resource)
+		if resource == "" {
+			continue
+		}
+		kind, name := splitResource(resource)
+		if name != "" {
+			out.names = append(out.names, labeledIdentifiers{label: resource, identifiers: []string{name}})
+		}
+		if kind == "" || ambiguousKind[strings.ToLower(kind)] {
+			continue
+		}
+		identifiers := []string{kind}
+		// A declared kind that *is* a pillar keeps the pillar's own token list,
+		// so a declared `logs/api-service` still matches "log".
+		for _, pillar := range signalPillars {
+			if pillar.label == strings.ToLower(kind) {
+				identifiers = pillar.identifiers
+			}
+		}
+		out.kinds = append(out.kinds, labeledIdentifiers{label: resource, identifiers: identifiers})
 	}
-	return out, declared
+	return out
+}
+
+// splitResource splits a `kind/name` declaration. A declaration without a `/`
+// is all name.
+func splitResource(resource string) (kind, name string) {
+	if idx := strings.Index(resource, "/"); idx >= 0 {
+		return strings.TrimSpace(resource[:idx]), strings.TrimSpace(resource[idx+1:])
+	}
+	return "", resource
 }
 
 // --- Shared result constructors ---

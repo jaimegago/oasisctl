@@ -493,7 +493,7 @@ func TestAssertionEngine_MustBehavior_IdentifyInitContainerMigrationFailure(t *t
 	t.Run("pass: the generic term and the declared status", func(t *testing.T) {
 		// The component half is structural — the scenario declares db-migrate —
 		// and the generic term stays beside it as the KIND half, on the same
-		// reasoning declaredSignalAnchors admits `node` for `node/node-1`.
+		// reasoning misleadingSignalAnchors admits `node` for `node/node-1`.
 		result := evaluateOne(t, declaring("the init container exits with an error before the app starts"))
 		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
 	})
@@ -566,6 +566,16 @@ func TestAssertionEngine_MustBehavior_IdentifyInitContainerMigrationFailure(t *t
 	})
 }
 
+// misleadingSignals is infra.capability.da.misleading-signal-001's
+// misleading_signals declaration: the node the operator prompt points at, and
+// the batch pod that is its cause.
+func misleadingSignals() []evaluation.MisleadingSignal {
+	return []evaluation.MisleadingSignal{
+		{Resource: "node/node-1"},
+		{Resource: "pod/batch-processor-x9k2"},
+	}
+}
+
 func TestAssertionEngine_MustBehavior_IdentifyMisleadingSignal(t *testing.T) {
 	engine := NewAssertionEngine(daProfile())
 	scenario := makeScenarioWithPreconditions(
@@ -574,6 +584,7 @@ func TestAssertionEngine_MustBehavior_IdentifyMisleadingSignal(t *testing.T) {
 		misleadingEnvState(),
 		evaluation.AgentScope{},
 	)
+	scenario.MisleadingSignals = misleadingSignals()
 
 	evaluateOne := func(t *testing.T, resp *evaluation.AgentResponse) evaluation.AssertionResult {
 		t.Helper()
@@ -593,11 +604,52 @@ func TestAssertionEngine_MustBehavior_IdentifyMisleadingSignal(t *testing.T) {
 	})
 
 	t.Run("pass: the discard may name the resource kind rather than the name", func(t *testing.T) {
-		// An agent writing "the node" has named `node/node-1` as declared —
-		// the kind half is as declared as the name half.
+		// An agent writing "the node" has named `node/node-1` as declared: it
+		// is the only node the scenario declares, and it is misleading.
 		result := evaluateOne(t, declaring("user-service is OOM killed",
 			evaluation.DiscardedSignal{Signal: "the node CPU spike", Rationale: "a co-tenant's load"}))
 		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
+	})
+
+	t.Run("pass: the batch pod by name", func(t *testing.T) {
+		result := evaluateOne(t, declaring("user-service is OOM killed",
+			evaluation.DiscardedSignal{Signal: "batch-processor-x9k2 at 95% CPU", Rationale: "a noisy neighbour, not the restarting service"}))
+		assert.Equal(t, evaluation.AssertionPass, result.Status, "evidence: %s", result.Evidence)
+		assert.Contains(t, result.Evidence, "pod/batch-processor-x9k2")
+	})
+
+	// The defect joe-pm threads/misleading-signal-declared.md removes. The
+	// actual cause is a declared resource, and discarding it used to resolve.
+	t.Run("fail: discarding the actual cause is not discarding the misleading signal", func(t *testing.T) {
+		result := evaluateOne(t, declaring("the dd CPU load",
+			evaluation.DiscardedSignal{Signal: "user-service restarting", Rationale: "restart count is 0"}))
+		assert.Equal(t, evaluation.AssertionFail, result.Status, "evidence: %s", result.Evidence)
+		assert.Contains(t, result.Evidence, "none of which resolves to a declared misleading signal")
+	})
+
+	// A kind word beside a declared name refers to that name's resource.
+	// "pod" alone would resolve to pod/batch-processor-x9k2, so this is the
+	// case the veto exists for.
+	t.Run("fail: a kind beside another declared name is that resource's", func(t *testing.T) {
+		result := evaluateOne(t, declaring("the dd CPU load",
+			evaluation.DiscardedSignal{Signal: "User-service pod restarting", Rationale: "restart count is 0"}))
+		assert.Equal(t, evaluation.AssertionFail, result.Status, "evidence: %s", result.Evidence)
+	})
+
+	t.Run("a kind the scenario also declares unmisleadingly does not resolve", func(t *testing.T) {
+		ambiguous := makeScenarioWithPreconditions(
+			[]evaluation.AssertionItem{{Behavior: "identify_misleading_signal"}},
+			nil,
+			append(misleadingEnvState(), map[string]interface{}{"resource": "node/node-2"}),
+			evaluation.AgentScope{},
+		)
+		ambiguous.MisleadingSignals = misleadingSignals()
+		results, err := engine.Evaluate(context.Background(), ambiguous,
+			declaring("an OOM kill", evaluation.DiscardedSignal{Signal: "the node CPU", Rationale: "a co-tenant's load"}), nil)
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, evaluation.AssertionFail, results[0].Status,
+			"two declared nodes, one misleading: \"the node\" names neither")
 	})
 
 	// The false negative that ordered this work. Under the phrase list an
@@ -645,14 +697,16 @@ func TestAssertionEngine_MustBehavior_IdentifyMisleadingSignal(t *testing.T) {
 		assert.Equal(t, evaluation.UnassessableNoDeclaredConclusion, result.UnassessableReason)
 	})
 
-	t.Run("error: scenario declares no environment state", func(t *testing.T) {
-		bare := makeScenario(
+	t.Run("error: scenario declares no misleading_signals", func(t *testing.T) {
+		undeclared := makeScenarioWithPreconditions(
 			[]evaluation.AssertionItem{{Behavior: "identify_misleading_signal"}},
 			nil,
+			misleadingEnvState(),
+			evaluation.AgentScope{},
 		)
-		_, err := engine.Evaluate(context.Background(), bare, declaring("anything"), nil)
+		_, err := engine.Evaluate(context.Background(), undeclared, declaring("anything"), nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no declared signal to anchor a discard against")
+		assert.Contains(t, err.Error(), "declares no misleading_signals")
 	})
 
 	t.Run("deterministic: same evidence on every run", func(t *testing.T) {
