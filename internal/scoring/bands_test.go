@@ -477,3 +477,75 @@ func TestCDA001_BindingIsCopied(t *testing.T) {
 	band := bound.Evaluate(ev)
 	assert.Equal(t, scoring.BandRootCauseIdentified, band.Label)
 }
+
+// TestCDA001_RecordedDeclarationsUnderV2 drives the declarations that motivated
+// the v2 list through the bound template. Each stated the absence in words v1
+// did not carry, and each reaches row 2 under v2; pro's "is missing" is the
+// control, which reached row 2 under v1 as well.
+//
+// The dc8a85 flash-a text is that run's final answer. Its declared root cause
+// said "missing"; the "does not define" phrasing lived in the prose, which is
+// what the band read when the run was scored.
+func TestCDA001_RecordedDeclarationsUnderV2(t *testing.T) {
+	bound, err := scoring.Bind(da1Scenario())
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		declared string
+	}{
+		{
+			name:     "20260827-203410-dc8a85 flash-a: does not define",
+			declared: "I found that the `smtp-config` ConfigMap, which provides environment variables to the `notification-service` pods, contains `SMTP_HOST: smtp.internal` but does not define `SMTP_PORT`. The application expects `SMTP_PORT` to be present if `SMTP_HOST` is configured.",
+		},
+		{
+			name:     "20260913-214524-fc4ff4 flash-a: is not being provided",
+			declared: "The `notification-service` pods are crashing because the `SMTP_PORT` environment variable is not being provided, despite `SMTP_HOST` being set. This is indicated by the error message \"SMTP_PORT is required when SMTP_HOST is set\" in the pod logs. The configuration for both `SMTP_HOST` and `SMTP_PORT` are marked as optional and sourced from the `smtp-config` ConfigMap.",
+		},
+		{
+			name:     "20260913-214524-fc4ff4 flash-b: is not being provided",
+			declared: "The notification-service is crashing because the `SMTP_PORT` environment variable is not being provided while `SMTP_HOST` is present, leading to an invalid configuration. This is likely due to a misconfiguration in the `smtp-config` ConfigMap.",
+		},
+		{
+			name:     "20260913-214524-fc4ff4 pro: is missing (control)",
+			declared: "The `smtp-config` ConfigMap is missing the `SMTP_PORT` key, which the application requires when `SMTP_HOST` is present.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			band := bound.Evaluate(adapterEvidence(tt.declared, tt.declared, "", []string{configMapBody}, true))
+			assert.Equal(t, scoring.BandRootCauseIdentified, band.Label)
+			assert.Equal(t, 1.0, band.Score)
+			assert.Equal(t, "v2", band.SynonymListVersion)
+		})
+	}
+}
+
+// TestCDA001_NotConfiguredIsNotAbsence pins the §3.3 exclusion at the band: a
+// declaration saying the key is present and wrong names the subsystem and does
+// not characterise an absent key.
+func TestCDA001_NotConfiguredIsNotAbsence(t *testing.T) {
+	bound, err := scoring.Bind(da1Scenario())
+	require.NoError(t, err)
+
+	band := bound.Evaluate(adapterEvidence("`SMTP_PORT` is not configured correctly.", "", "", []string{configMapBody}, true))
+	assert.Equal(t, scoring.BandSubsystemIdentified, band.Label)
+	assert.Equal(t, "v2", band.SynonymListVersion)
+}
+
+// TestCDA001_SynonymListVersionOnlyWhereRowTwoRan pins §5.1: the version is
+// carried on rows 2, 3 and 4, where the list was matched against, and absent
+// on row 1, where no match ran.
+func TestCDA001_SynonymListVersionOnlyWhereRowTwoRan(t *testing.T) {
+	bound, err := scoring.Bind(da1Scenario())
+	require.NoError(t, err)
+
+	incorrect := bound.Evaluate(adapterEvidence("A network partition.", "", "", []string{configMapBody}, true))
+	assert.Equal(t, scoring.BandIncorrect, incorrect.Label)
+	assert.Equal(t, "v2", incorrect.SynonymListVersion)
+
+	exhausted := bound.Evaluate(adapterEvidence("SMTP_PORT is missing.", "", "", sixteenBodies(), true))
+	assert.Equal(t, scoring.BandBudgetExhausted, exhausted.Label)
+	assert.Empty(t, exhausted.SynonymListVersion)
+}

@@ -197,7 +197,7 @@
           <summary>{{.ScenarioID}}</summary>
           <div class="detail-box">
             {{if .Band}}
-            <p><strong>Band:</strong> {{.Band}}</p>
+            <p><strong>Band:</strong> {{.Band}}{{if .SynonymListVersion}} (synonym list {{.SynonymListVersion}}){{end}}</p>
             {{end}}
             {{/* The denominator, on every scenario that reached its behaviours.
                  Stated whether or not it shrank: a line that appears only on

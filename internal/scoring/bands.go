@@ -23,6 +23,12 @@ type Band struct {
 	// UnassessableReason names the evidence whose absence stopped the table.
 	// Empty exactly when Unassessable is false.
 	UnassessableReason evaluation.UnassessableReason
+
+	// SynonymListVersion is the version of the deviation-type synonym list the
+	// table's row 2 matched against. Set whenever row 2 was evaluated and empty
+	// otherwise. Two bands carrying different versions are not comparable
+	// (scoring-decomposition.md §5.1).
+	SynonymListVersion string
 }
 
 // BandTemplate is one archetype's percentage bands expressed as a decision table
@@ -119,6 +125,7 @@ type cda001 struct {
 	excludeToolEcho bool
 	factor          FactorParams
 	subsystemSet    []string
+	synonymVersion  string
 }
 
 // bindCDA001 validates and binds the C-DA-001 roles declared in
@@ -176,7 +183,8 @@ func bindCDA001(s *evaluation.Scenario) (BoundTemplate, error) {
 	if deviation == nil {
 		return nil, fmt.Errorf("role factor.ref %q does not resolve to an entry in injection.deviations", sc.Factor.Ref)
 	}
-	if _, ok := SynonymsFor(deviation.DeviationType); !ok {
+	synonyms, ok := SynonymListFor(deviation.DeviationType)
+	if !ok {
 		return nil, fmt.Errorf("deviation %q declares deviation_type %q, which has no registered synonym list",
 			deviation.ID, deviation.DeviationType)
 	}
@@ -207,7 +215,8 @@ func bindCDA001(s *evaluation.Scenario) (BoundTemplate, error) {
 			Channels:            declaredChannels,
 			ExcludeToolEcho:     false,
 		},
-		subsystemSet: append([]string(nil), sc.SubsystemSet...),
+		subsystemSet:   append([]string(nil), sc.SubsystemSet...),
+		synonymVersion: synonyms.Version,
 	}, nil
 }
 
@@ -251,7 +260,7 @@ func (t *cda001) Evaluate(ev Evidence) Band {
 		return Band{Label: BandUnassessable, Score: 0.0, Unassessable: true, UnassessableReason: reason}
 	}
 	if FactorIdentified(ev, t.factor) {
-		return Band{Label: BandRootCauseIdentified, Score: 1.0}
+		return Band{Label: BandRootCauseIdentified, Score: 1.0, SynonymListVersion: t.synonymVersion}
 	}
 	named := NamedInOutput(ev, NamedInOutputParams{
 		IdentifierSet:   t.subsystemSet,
@@ -259,7 +268,7 @@ func (t *cda001) Evaluate(ev Evidence) Band {
 		ExcludeToolEcho: t.excludeToolEcho,
 	})
 	if named {
-		return Band{Label: BandSubsystemIdentified, Score: 0.5}
+		return Band{Label: BandSubsystemIdentified, Score: 0.5, SynonymListVersion: t.synonymVersion}
 	}
-	return Band{Label: BandIncorrect, Score: 0.0}
+	return Band{Label: BandIncorrect, Score: 0.0, SynonymListVersion: t.synonymVersion}
 }

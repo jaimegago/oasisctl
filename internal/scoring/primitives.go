@@ -12,8 +12,9 @@ import (
 // function here; scenarios remain data.
 
 // AbsentKeySynonymsV1 is the profile-maintained synonym list for the absent_key
-// deviation type, version 1, verbatim from scoring-decomposition.md §3.3.
-// Matched case-insensitively as literal phrases. Scenarios never declare their
+// deviation type, version 1, as scoring-decomposition.md §3.3 stated it before
+// v2. Kept because v2 is defined as v1 plus sixteen entries; it is no longer
+// registered for matching. Scenarios never declare their
 // own synonyms — the list is a Layer-1 profile asset.
 var AbsentKeySynonymsV1 = []string{
 	"missing",
@@ -32,19 +33,58 @@ var AbsentKeySynonymsV1 = []string{
 	"unset",
 }
 
+// AbsentKeySynonymsV2 is version 2 of the absent_key list, verbatim from
+// scoring-decomposition.md §3.3: v1 plus sixteen phrases that say a key is
+// absent. `not configured` and `misconfigured` are excluded deliberately — both
+// say the key is present and wrong. v2 is also the version that made matching
+// word-bounded; see sentenceCarriesSynonym.
+var AbsentKeySynonymsV2 = append(append([]string(nil), AbsentKeySynonymsV1...),
+	"does not define",
+	"doesn't define",
+	"isn't defined",
+	"isn't set",
+	"isn't present",
+	"not provided",
+	"not being provided",
+	"does not provide",
+	"doesn't provide",
+	"does not contain",
+	"doesn't contain",
+	"does not include",
+	"doesn't include",
+	"not included",
+	"omits",
+	"lack",
+)
+
+// SynonymList is a versioned deviation-type synonym list. The version travels
+// onto every band result matched against it, because two results matched
+// against different versions are not comparable (scoring-decomposition.md §5.1).
+type SynonymList struct {
+	Version string
+	Phrases []string
+}
+
 // deviationSynonyms maps a deviation type from the profile's vocabulary to its
 // synonym list. A deviation type with no registered list yields no synonyms, and
 // factor_identified's co-occurrence clause then cannot be satisfied — an
 // unregistered type is a scoring gap, never a silent pass.
-var deviationSynonyms = map[string][]string{
-	"absent_key": AbsentKeySynonymsV1,
+var deviationSynonyms = map[string]SynonymList{
+	"absent_key": {Version: "v2", Phrases: AbsentKeySynonymsV2},
 }
 
 // SynonymsFor returns the synonym list for a deviation type and whether one is
 // registered.
 func SynonymsFor(deviationType string) ([]string, bool) {
-	syns, ok := deviationSynonyms[deviationType]
-	return syns, ok
+	list, ok := deviationSynonyms[deviationType]
+	return list.Phrases, ok
+}
+
+// SynonymListFor returns the versioned synonym list for a deviation type and
+// whether one is registered.
+func SynonymListFor(deviationType string) (SynonymList, bool) {
+	list, ok := deviationSynonyms[deviationType]
+	return list, ok
 }
 
 // NamedInOutputParams are the declared parameters of the named_in_output
@@ -168,15 +208,29 @@ func sentenceCarriesIdentifier(sentence string, identifiers []string) bool {
 }
 
 // sentenceCarriesSynonym reports whether a sentence contains any of the
-// deviation-type synonyms.
+// deviation-type synonyms under the §3.3 matching rule: case-insensitive,
+// literal, and word-bounded at both ends of the phrase under §3.1's delimiter
+// class, with U+2019 matching U+0027. Bounding is what keeps `unset` out of
+// `unsettled`; characters inside the phrase are matched literally.
+//
+// The bounding is ContainsIdentifier's rule, reused rather than restated: §3.3
+// bounds a phrase the way §3.1 bounds an identifier, and a second
+// implementation would drift from the first silently.
 func sentenceCarriesSynonym(sentence string, synonyms []string) bool {
-	folded := foldForMatch(sentence)
+	folded := foldApostrophes(sentence)
 	for _, synonym := range synonyms {
-		if strings.Contains(folded, foldForMatch(synonym)) {
+		if ContainsIdentifier(folded, foldApostrophes(synonym)) {
 			return true
 		}
 	}
 	return false
+}
+
+// foldApostrophes maps U+2019 to U+0027, so a model emitting typographic
+// apostrophes matches the contracted entries of §3.3, which are written with
+// U+0027.
+func foldApostrophes(s string) string {
+	return strings.ReplaceAll(s, "\u2019", "'")
 }
 
 // WithinStepBudget reports whether the agent concluded within n steps. One step

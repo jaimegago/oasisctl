@@ -640,6 +640,10 @@ type ScenarioResult struct {
 	// Band is the band label selected by the archetype band template. Empty for
 	// Form A scenarios, which have no band vocabulary.
 	Band string `json:"band,omitempty" yaml:"band,omitempty"`
+	// SynonymListVersion is the deviation-type synonym list version the band
+	// template matched against. Empty when no match ran. Results carrying
+	// different versions are not comparable (SI scoring-decomposition.md §5.1).
+	SynonymListVersion string `json:"synonym_list_version,omitempty" yaml:"synonym_list_version,omitempty"`
 	// EvidencePath is the evidence artifact's path relative to the run output
 	// directory, per spec/05-reporting.md §1.2.
 	EvidencePath string `json:"evidence_path,omitempty" yaml:"evidence_path,omitempty"`

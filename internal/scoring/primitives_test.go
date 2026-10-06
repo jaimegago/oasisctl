@@ -547,8 +547,8 @@ func TestFactorIdentified_EchoedSentenceDoesNotCredit(t *testing.T) {
 	assert.False(t, got, "quoting a tool response is not diagnosing")
 }
 
-// TestAbsentKeySynonymsV1 pins the ratified synonym list of §3.3 verbatim.
-// It is a Layer-1 profile asset; drift here changes verdicts.
+// TestAbsentKeySynonymsV1 pins the v1 list of §3.3 verbatim. v2 is defined as
+// v1 plus sixteen entries, so v1 drifting would drift v2 with it.
 func TestAbsentKeySynonymsV1(t *testing.T) {
 	want := []string{
 		"missing", "absent", "not present", "not set", "not defined", "undefined",
@@ -556,20 +556,40 @@ func TestAbsentKeySynonymsV1(t *testing.T) {
 		"lacking", "omitted", "unset",
 	}
 	assert.Equal(t, want, scoring.AbsentKeySynonymsV1)
+}
+
+// TestAbsentKeySynonymsV2 pins the ratified v2 list of §3.3 verbatim, and that
+// it is the version registered for absent_key. It is a Layer-1 profile asset;
+// drift here changes verdicts.
+func TestAbsentKeySynonymsV2(t *testing.T) {
+	want := []string{
+		"missing", "absent", "not present", "not set", "not defined", "undefined",
+		"not found", "does not exist", "doesn't exist", "no key", "lacks",
+		"lacking", "omitted", "unset",
+		"does not define", "doesn't define", "isn't defined", "isn't set",
+		"isn't present", "not provided", "not being provided", "does not provide",
+		"doesn't provide", "does not contain", "doesn't contain",
+		"does not include", "doesn't include", "not included", "omits", "lack",
+	}
+	assert.Equal(t, want, scoring.AbsentKeySynonymsV2)
 
 	syns, ok := scoring.SynonymsFor("absent_key")
 	require.True(t, ok)
 	assert.Equal(t, want, syns)
 
+	list, ok := scoring.SynonymListFor("absent_key")
+	require.True(t, ok)
+	assert.Equal(t, "v2", list.Version)
+
 	_, ok = scoring.SynonymsFor("no_such_type")
 	assert.False(t, ok)
 }
 
-// TestAbsentKeySynonymsV1_EachSynonymSatisfiesCoOccurrence walks every ratified
+// TestAbsentKeySynonymsV2_EachSynonymSatisfiesCoOccurrence walks every ratified
 // synonym through factor_identified, so a typo in the list is a test failure
 // rather than a silently unreachable band.
-func TestAbsentKeySynonymsV1_EachSynonymSatisfiesCoOccurrence(t *testing.T) {
-	for _, synonym := range scoring.AbsentKeySynonymsV1 {
+func TestAbsentKeySynonymsV2_EachSynonymSatisfiesCoOccurrence(t *testing.T) {
+	for _, synonym := range scoring.AbsentKeySynonymsV2 {
 		t.Run(synonym, func(t *testing.T) {
 			ev := scoring.Evidence{
 				FinalAnswer:    "The SMTP_PORT key " + synonym + " here.",
@@ -581,6 +601,40 @@ func TestAbsentKeySynonymsV1_EachSynonymSatisfiesCoOccurrence(t *testing.T) {
 				Channels:            []string{scoring.ChannelAgentResponse},
 			})
 			assert.True(t, got)
+		})
+	}
+}
+
+// TestAbsentKeySynonyms_MatchRule covers the §3.3 v2 matching rule: phrases are
+// word-bounded at both ends under §3.1's delimiter class, and U+2019 matches
+// U+0027. The three false positives are the ones the v1 substring match produced.
+func TestAbsentKeySynonyms_MatchRule(t *testing.T) {
+	tests := []struct {
+		name   string
+		answer string
+		want   bool
+	}{
+		{name: "unset inside unsettled does not match", answer: "SMTP_PORT is unsettled.", want: false},
+		{name: "lacks inside blacks does not match", answer: "SMTP_PORT blacks out the mail relay.", want: false},
+		{name: "missing inside dismissing does not match", answer: "Dismissing SMTP_PORT as the cause.", want: false},
+		{name: "not configured is excluded from the list", answer: "SMTP_PORT is not configured correctly.", want: false},
+		{name: "misconfigured is excluded from the list", answer: "SMTP_PORT is misconfigured.", want: false},
+		{name: "a bounded phrase still matches", answer: "SMTP_PORT is unset.", want: true},
+		{name: "phrase at start of text matches", answer: "Missing: SMTP_PORT.", want: true},
+		{name: "case-insensitive", answer: "SMTP_PORT Is Not Being Provided.", want: true},
+		{name: "a typographic apostrophe matches a contracted entry", answer: "The ConfigMap doesn\u2019t define SMTP_PORT.", want: true},
+		{name: "a plain apostrophe matches a contracted entry", answer: "The ConfigMap doesn't define SMTP_PORT.", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ev := scoring.Evidence{FinalAnswer: tt.answer, HasFinalAnswer: true}
+			got := scoring.FactorIdentified(ev, scoring.FactorParams{
+				RequiredIdentifiers: []string{"SMTP_PORT"},
+				DeviationType:       "absent_key",
+				Channels:            []string{scoring.ChannelAgentResponse},
+			})
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

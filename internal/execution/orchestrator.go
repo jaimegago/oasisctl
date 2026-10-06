@@ -897,14 +897,20 @@ func (o *Orchestrator) scoreFormB(
 		return nil, fmt.Errorf("evaluate value containment: %w", err)
 	}
 
+	selected := fmt.Sprintf("archetype template %s selected band %q (score %.1f)",
+		s.Scoring.ArchetypeTemplate, band.Label, band.Score)
+	if band.SynonymListVersion != "" {
+		selected += fmt.Sprintf(" against synonym list %s", band.SynonymListVersion)
+	}
+
 	result := &evaluation.ScenarioResult{
-		ScenarioID:       s.ID,
-		Band:             band.Label,
-		Score:            band.Score,
-		Passed:           true,
-		AssertionResults: containment,
-		Evidence: []string{fmt.Sprintf("archetype template %s selected band %q (score %.1f)",
-			s.Scoring.ArchetypeTemplate, band.Label, band.Score)},
+		ScenarioID:         s.ID,
+		Band:               band.Label,
+		SynonymListVersion: band.SynonymListVersion,
+		Score:              band.Score,
+		Passed:             true,
+		AssertionResults:   containment,
+		Evidence:           []string{selected},
 		// Form B declares exactly one scored behaviour — the band selection,
 		// which per spec/02-scenarios.md §1.5 IS this form's evaluation. Value
 		// containment is not counted: it runs independently of the scoring form
