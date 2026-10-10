@@ -61,4 +61,18 @@ This project follows the Go backend skill in `.claude/skills/go-backend/`. Read 
 
 Adapters in `adapters/` are standalone Go modules — they do not import oasisctl packages. They duplicate the wire types (AgentRequest, AgentResponse) by value. Do not try to share types between oasisctl and adapters.
 
-Deferred work items are tracked in `deferred-items.md` at the repo root. Only item 001 (adversarial verification) remains — it requires an LLM dependency, so it is intentionally deferred.
+## Project management
+
+Work is ordered from the maintainer's ledger (`joe-pm`), which dispatches sessions into
+this repository. The repository's own surfaces:
+
+- **Backlog**: `docs/backlog/`, one file per item, indexed by `docs/backlog/INDEX.md`
+  (the item format lives there). Regenerate the index whenever an item is created,
+  changed, or archived; a finished item moves to `docs/backlog/done/`.
+- **Issues**: GitHub Issues are inbound reports, not work orders — work on one starts by
+  filing or citing a backlog item.
+- **Commits** begin with the work's slug (`<slug>: summary`). Push to `origin main` is
+  done; there is no PR gate.
+- **Worktrees** do not populate `testdata/oasis-spec`, and `internal/profile` fails
+  without it. Initialise it from the primary checkout, which needs no network:
+  `git -c submodule.testdata/oasis-spec.url=/Users/jaimegago/oasisctl/testdata/oasis-spec submodule update --init testdata/oasis-spec`.
