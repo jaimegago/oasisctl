@@ -28,6 +28,16 @@ type mockProviderServer struct {
 	mu       sync.Mutex
 	requests []recordedRequest
 
+	// provisionedPrincipal is the agent principal the last provision request
+	// declared. The mock plays petri's half of the principal hop: petri accepts
+	// AgentSpec.Principal on /v1/provision and carries it into the audit_log
+	// observation as agent_principal. Echoing it here, rather than canning
+	// agent_principal into the observation, is what lets an integration test
+	// observe that a principal declared on the run reaches the provision
+	// request — a canned value would pass whether or not the orchestrator
+	// forwarded anything.
+	provisionedPrincipal string
+
 	// Canned responses (configurable per test).
 	provisionResp evaluation.ProvisionResponse
 	snapshotResp  evaluation.StateSnapshotResponse
@@ -129,6 +139,10 @@ func (m *mockProviderServer) handleProvision(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	m.mu.Lock()
+	m.provisionedPrincipal = req.Agent.Principal
+	m.mu.Unlock()
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(m.provisionResp)
@@ -187,6 +201,16 @@ func (m *mockProviderServer) handleObserve(w http.ResponseWriter, r *http.Reques
 			ObservationType: req.ObservationType,
 			Data:            map[string]interface{}{},
 		}
+	}
+
+	// Annotate an audit log with the provisioned principal, as petri does. The
+	// canned value is copied, never mutated: it is shared across requests.
+	if ald, isAudit := resp.Data.(*evaluation.AuditLogData); isAudit && ald != nil {
+		m.mu.Lock()
+		principal := m.provisionedPrincipal
+		m.mu.Unlock()
+		annotated := evaluation.AuditLogData{Entries: ald.Entries, AgentPrincipal: principal}
+		resp.Data = &annotated
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -21,6 +21,10 @@ import (
 
 const profileDir = "../../testdata/oasis-spec/profiles/software-infrastructure"
 
+// integrationAgentPrincipal is the identity the integration runs declare for the
+// agent and attribute its audit entries to.
+const integrationAgentPrincipal = "system:serviceaccount:default:integration-test-agent"
+
 // loadScenarioByID loads and returns a single scenario by ID from the profile.
 func loadScenarioByID(t *testing.T, profilePath, scenarioID string) evaluation.Scenario {
 	t.Helper()
@@ -194,7 +198,7 @@ func TestIntegration_SafetyScenarioFails(t *testing.T) {
 		ObservationType: "audit_log",
 		Data: &evaluation.AuditLogData{
 			Entries: []evaluation.AuditEntry{
-				{Verb: "delete", Resource: "pods", Name: "checkout-api-7f8d9", Namespace: "payments", User: "agent"},
+				{Verb: "delete", Resource: "pods", Name: "checkout-api-7f8d9", Namespace: "payments", User: integrationAgentPrincipal},
 			},
 		},
 	}
@@ -202,7 +206,13 @@ func TestIntegration_SafetyScenarioFails(t *testing.T) {
 	scenario := loadScenarioByID(t, profileDir, "infra.safety.be.zone-violation-001")
 	capScenario := loadScenarioByID(t, profileDir, "infra.capability.da.single-signal-diagnosis-001")
 
-	orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1})
+	// The run declares the agent's principal, as internal/cli/run.go does from
+	// --agent-principal. The audit log above carries no agent_principal of its
+	// own: the mock provider annotates it from the provision request, as petri
+	// does, so the assertion can only see the principal if the orchestrator
+	// carried it there. Without a declaration every audit-backed assertion
+	// passes vacuously (agent_principal_unknown) and this test checks nothing.
+	orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1, AgentPrincipal: integrationAgentPrincipal})
 
 	verdict, err := orch.Run(
 		context.Background(), profileDir,
@@ -212,9 +222,39 @@ func TestIntegration_SafetyScenarioFails(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 
+	// The hop: the declared principal reached the provision request.
+	var provisions int
+	for _, rec := range provSrv.getRequests() {
+		if rec.Path != "/v1/provision" {
+			continue
+		}
+		provisions++
+		var req evaluation.ProvisionRequest
+		require.NoError(t, json.Unmarshal(rec.Body, &req))
+		assert.Equal(t, integrationAgentPrincipal, req.Agent.Principal,
+			"the run's agent principal must reach the provider on the provision request")
+	}
+	require.Positive(t, provisions, "the safety scenario must have been provisioned")
+
 	assert.False(t, verdict.SafetyPassed, "safety gate should fail")
 	require.Len(t, verdict.SafetyResults, 1)
 	assert.False(t, verdict.SafetyResults[0].Passed, "scenario should fail")
+
+	// The failure is on the merits: some audit-backed assertion examined the
+	// agent's entry and failed, rather than every assertion passing vacuously.
+	var failedOnEvidence bool
+	for _, ar := range verdict.SafetyResults[0].AssertionResults {
+		if ar.AuditScope == nil {
+			continue
+		}
+		assert.Equal(t, integrationAgentPrincipal, ar.AuditScope.AgentPrincipal)
+		assert.NotEqual(t, evaluation.VacuityAgentPrincipalUnknown, ar.VacuityReason)
+		if ar.Status == evaluation.AssertionFail && !ar.Vacuous && ar.AuditScope.AgentEntries == 1 {
+			failedOnEvidence = true
+		}
+	}
+	assert.True(t, failedOnEvidence, "an audit-backed assertion must fail on the agent's own entry")
+
 	// Capability should not have been executed.
 	assert.Empty(t, verdict.CapabilityResults, "capability scenarios should not run after safety failure")
 }
