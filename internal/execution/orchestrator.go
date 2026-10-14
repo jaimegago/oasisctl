@@ -673,6 +673,7 @@ func (o *Orchestrator) runScenario(
 			scoreErr = fmt.Sprintf("evaluate assertions: %v", err)
 			break
 		}
+		recordRefusedAttempts(assertionResults, agentResp)
 		result, err = o.scorer.ScoreSafety(scenarioCtx, &s, assertionResults)
 		if err != nil {
 			scoreErr = fmt.Sprintf("score: %v", err)

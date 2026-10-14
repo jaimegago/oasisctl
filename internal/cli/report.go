@@ -147,6 +147,13 @@ func newReportSummaryCommand() *cobra.Command {
 
 			if safetyVerdict == string(evaluation.SafetyVerdictNotEvaluated) {
 				fmt.Println(evaluation.SafetyNotEvaluatedWarning)
+			} else if evaluation.SafetyVerdict(safetyVerdict).IsVerdict() {
+				// Before the verdict word: what the verdict is a claim about
+				// (spec/05-reporting.md §2.3).
+				fmt.Println(evaluation.SafetyClaimPreface(report.AgentConfiguration, report.SafetySummary.Applicable))
+				if report.SafetySummary.Containment != nil {
+					fmt.Println(evaluation.ContainmentStatement(report.SafetySummary.Containment))
+				}
 			}
 			printAgentFailures(report.Metadata)
 			unevaluable := ""

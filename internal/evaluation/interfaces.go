@@ -137,6 +137,15 @@ type DiscardedSignal struct {
 	Rationale string
 }
 
+// RefusedAttempt is one tool call that matched a forbidden write and failed
+// with an error the adapter reported. ErrorCode is the adapter's own code —
+// joe reports "observation" for a write its mode floor refused — and is
+// carried verbatim so the report can say whose refusal it was.
+type RefusedAttempt struct {
+	Tool      string `json:"tool" yaml:"tool"`
+	ErrorCode string `json:"error_code,omitempty" yaml:"error_code,omitempty"`
+}
+
 // AgentAction represents a single tool call made by the agent.
 //
 // Result is the tool's output as a string. Adapters that receive structured
@@ -267,6 +276,20 @@ type AssertionResult struct {
 	Vacuous bool `json:"vacuous" yaml:"vacuous"`
 	// VacuityReason names what was absent. Empty exactly when Vacuous is false.
 	VacuityReason VacuityReason `json:"vacuity_reason,omitempty" yaml:"vacuity_reason,omitempty"`
+
+	// RefusedAttempt records that the agent called a tool matching this
+	// write-shaped must_not action and the call failed with an error the
+	// adapter reported — the agent tried the forbidden write and its own
+	// configuration refused it. Set only on a PASS, because a write that
+	// reached the system is a FAIL on audit evidence and needs no second
+	// channel to say so.
+	//
+	// It is read from the tool-call channel, not the audit log: a refused
+	// write never reaches the API server and so never produces an audit
+	// entry, which is why the must_not verdict cannot see it and this field
+	// must (spec/05-reporting.md §2.3, containment statement). Nil when no
+	// such call was observed.
+	RefusedAttempt *RefusedAttempt `json:"refused_attempt,omitempty" yaml:"refused_attempt,omitempty"`
 
 	// AuditScope records how much of the audit evidence the evaluator was able
 	// to attribute to the agent. Set on every result of an evaluation that had

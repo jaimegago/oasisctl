@@ -2,6 +2,7 @@ package evaluation
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -792,6 +793,17 @@ const SafetyNotEvaluatedWarning = "SAFETY NOT EVALUATED — THIS IS NOT AN OASIS
 	"No safety scenario was evaluated in this run. It makes no safety claim and no conformance claim; " +
 	"its only value is a quick check of capability behaviour."
 
+// IsVerdict reports whether the safety result is one of the three verdict
+// statuses of spec/01-core.md §3.6 — the cases a configuration-indexed claim
+// is made about. NOT_EVALUATED and the zero value are not.
+func (s SafetyVerdict) IsVerdict() bool {
+	switch s {
+	case SafetyVerdictPass, SafetyVerdictFail, SafetyVerdictProviderFailure:
+		return true
+	}
+	return false
+}
+
 // PermitsCapabilityPhase reports whether Phase 2 may run on this safety
 // result: a PASS, or a run that evaluated no safety scenario at all. The
 // second is permitted by §3.6.5 and constrained only in what it may claim.
@@ -942,6 +954,58 @@ type SafetySummary struct {
 	// metadata.agent_failure_scenarios, which also covers capability.
 	UnevaluableIDs    []string `json:"unevaluable_ids,omitempty" yaml:"unevaluable_ids,omitempty"`
 	HumanReviewNeeded bool     `json:"human_review_needed" yaml:"human_review_needed"`
+	// Containment is the run-level containment statement of
+	// spec/05-reporting.md §1 and §2.3, present only when the agent's
+	// configuration declares operational_mode read_only. Against that
+	// configuration the population of write-shaped must_not assertions that
+	// passed on an absence is the finding, stated positively; against
+	// read_write the same population reads as scenarios that did not exercise
+	// the agent, and the field is omitted.
+	Containment *ContainmentSummary `json:"containment,omitempty" yaml:"containment,omitempty"`
+}
+
+// ContainmentSummary counts the write-shaped must_not assertions that held
+// under a read_only configuration, split by whether the tool-call channel
+// showed an attempt the agent's own configuration refused.
+//
+// Per-assertion vacuity is unchanged by this: each such assertion still
+// records that it passed on an absence. The marker says what the evidence
+// was; this says what the run established about the configuration.
+type ContainmentSummary struct {
+	WriteProhibitionsHeld int                  `json:"write_prohibitions_held" yaml:"write_prohibitions_held"`
+	NoAttemptObserved     int                  `json:"no_attempt_observed" yaml:"no_attempt_observed"`
+	AttemptsObserved      int                  `json:"attempts_observed" yaml:"attempts_observed"`
+	Attempts              []ContainmentAttempt `json:"attempts,omitempty" yaml:"attempts,omitempty"`
+}
+
+// ContainmentAttempt is one refused write attempt, named by the scenario it
+// occurred in.
+type ContainmentAttempt struct {
+	ScenarioID string `json:"scenario_id" yaml:"scenario_id"`
+	Tool       string `json:"tool" yaml:"tool"`
+	ErrorCode  string `json:"error_code,omitempty" yaml:"error_code,omitempty"`
+}
+
+// ContainmentStatement renders the containment summary as the one-line
+// positive statement spec/05-reporting.md §2.3 asks for.
+func ContainmentStatement(c *ContainmentSummary) string {
+	if c == nil {
+		return ""
+	}
+	s := fmt.Sprintf("Containment (read_only): %d write prohibition(s) held, %d with no attempt observed, %d with an attempt the agent's configuration refused.",
+		c.WriteProhibitionsHeld, c.NoAttemptObserved, c.AttemptsObserved)
+	if len(c.Attempts) > 0 {
+		parts := make([]string, 0, len(c.Attempts))
+		for _, a := range c.Attempts {
+			if a.ErrorCode != "" {
+				parts = append(parts, fmt.Sprintf("%s: %s (%s)", a.ScenarioID, a.Tool, a.ErrorCode))
+			} else {
+				parts = append(parts, fmt.Sprintf("%s: %s", a.ScenarioID, a.Tool))
+			}
+		}
+		s += " Attempts: " + strings.Join(parts, "; ") + "."
+	}
+	return s
 }
 
 // SubcategoryResult holds pass/fail counts for a subcategory.

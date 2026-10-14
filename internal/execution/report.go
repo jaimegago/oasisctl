@@ -114,6 +114,9 @@ var htmlFuncMap = template.FuncMap{
 	"formatTime":          func(t time.Time) string { return t.Format("2006-01-02 15:04:05 UTC") },
 	"pct":                 func(f float64) float64 { return f * 100 },
 	"agentFailureWarning": evaluation.AgentFailureWarning,
+	"safetyClaimPreface":  evaluation.SafetyClaimPreface,
+	"containment":         evaluation.ContainmentStatement,
+	"isVerdict":           func(s evaluation.SafetyVerdict) bool { return s.IsVerdict() },
 	"rowClass": func(sr evaluation.ScenarioResult) string {
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			return "row-na"
@@ -244,7 +247,6 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 		AgentFailureScenarios: evaluation.CollectAgentFailures(v.SafetyResults, v.CapabilityResults),
 	}
 	r.Metadata.AgentFailures = len(r.Metadata.AgentFailureScenarios)
-	r.Metadata.EvaluationNote = evaluationNote(v.EvaluationMode, v.Safety, r.Metadata.AgentFailures)
 
 	r.Environment = evaluation.ReportEnvironment{
 		TierClaimed: v.Tier,
@@ -254,6 +256,7 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 	r.ConfigurationCoverage = v.ConfigurationCoverage
 
 	r.SafetySummary = buildSafetySummary(v)
+	r.Metadata.EvaluationNote = evaluationNote(v.EvaluationMode, v.Safety, r.Metadata.AgentFailures, v.AgentConfiguration, r.SafetySummary.Applicable, r.SafetySummary.Containment)
 
 	if v.PermitsCapabilityPhase() && !v.EvaluationMode.SafetyOnly && len(v.CapabilityResults) > 0 {
 		r.CapabilitySummary = buildCapabilitySummary(v)
@@ -357,6 +360,9 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 	}
 
 	ss.CategoryResults = categoryPass
+	if v.AgentConfiguration.OperationalMode() == evaluation.OperationalModeReadOnly {
+		ss.Containment = buildContainment(v.SafetyResults)
+	}
 	if hasSubcategories {
 		ss.SubcategoryResults = make(map[string]evaluation.SubcategoryResult)
 		for k, v := range subcatResults {
@@ -364,6 +370,40 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 		}
 	}
 	return ss
+}
+
+// buildContainment counts, over the evaluated safety scenarios, the
+// write-shaped must_not.action assertions that held, and splits them by
+// whether recordRefusedAttempts saw the agent try. It is called only under a
+// read_only configuration; the caller decides that, because the same counts
+// mean something else under read_write.
+func buildContainment(results []evaluation.ScenarioResult) *evaluation.ContainmentSummary {
+	c := &evaluation.ContainmentSummary{}
+	for _, sr := range results {
+		if sr.Status == evaluation.ScenarioNotApplicable || sr.Status == evaluation.ScenarioProviderFailure || sr.IsUnevaluable() {
+			continue
+		}
+		for _, ar := range sr.AssertionResults {
+			if ar.Status != evaluation.AssertionPass || ar.Assertion.Behavior != "" || ar.Assertion.Action == "" {
+				continue
+			}
+			if !isWriteShapedAction(ar.Assertion.Action) {
+				continue
+			}
+			c.WriteProhibitionsHeld++
+			if ar.RefusedAttempt != nil {
+				c.AttemptsObserved++
+				c.Attempts = append(c.Attempts, evaluation.ContainmentAttempt{
+					ScenarioID: sr.ScenarioID,
+					Tool:       ar.RefusedAttempt.Tool,
+					ErrorCode:  ar.RefusedAttempt.ErrorCode,
+				})
+			} else {
+				c.NoAttemptObserved++
+			}
+		}
+	}
+	return c
 }
 
 func buildCapabilitySummary(v *evaluation.Verdict) *evaluation.CapabilitySummary {
@@ -382,10 +422,19 @@ func buildCapabilitySummary(v *evaluation.Verdict) *evaluation.CapabilitySummary
 // NOT_APPLICABLE verified as little as a filtered one. A run carrying agent
 // failure reports says so next (§3.6.6), still ahead of the mode note and of
 // any capability figure.
-func evaluationNote(mode evaluation.EvaluationMode, safety evaluation.SafetyVerdict, agentFailures int) string {
+//
+// A run that did evaluate safety leads instead with the configuration its
+// verdict is indexed by and the applicable count it rests on, then the
+// containment statement where there is one (spec/05-reporting.md §2.3).
+func evaluationNote(mode evaluation.EvaluationMode, safety evaluation.SafetyVerdict, agentFailures int, config evaluation.AgentConfiguration, applicable int, containment *evaluation.ContainmentSummary) string {
 	var parts []string
 	if safety == evaluation.SafetyVerdictNotEvaluated {
 		parts = append(parts, evaluation.SafetyNotEvaluatedWarning)
+	} else if safety.IsVerdict() {
+		parts = append(parts, evaluation.SafetyClaimPreface(config, applicable))
+		if containment != nil {
+			parts = append(parts, evaluation.ContainmentStatement(containment))
+		}
 	}
 	if agentFailures > 0 {
 		parts = append(parts, evaluation.AgentFailureWarning(agentFailures))

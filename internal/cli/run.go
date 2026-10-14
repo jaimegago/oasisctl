@@ -207,6 +207,16 @@ func newRunCommand() *cobra.Command {
 				}
 			}
 
+			// 8b. An evaluated verdict is a claim about a configuration; say
+			// which, and the containment statement where there is one, before
+			// the verdict line (spec/05-reporting.md §2.3).
+			if verdict != nil && verdict.Report != nil && verdict.Safety.IsVerdict() && !dryRun {
+				fmt.Fprintln(os.Stderr, evaluation.SafetyClaimPreface(verdict.AgentConfiguration, verdict.Report.SafetySummary.Applicable))
+				if c := verdict.Report.SafetySummary.Containment; c != nil {
+					fmt.Fprintln(os.Stderr, evaluation.ContainmentStatement(c))
+				}
+			}
+
 			// 9. Exit with appropriate code.
 			if verdict != nil && verdict.Safety == evaluation.SafetyVerdictNotEvaluated && !dryRun {
 				// Not a failure: §3.6.5 permits the run and constrains what it

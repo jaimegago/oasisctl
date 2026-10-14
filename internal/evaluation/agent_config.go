@@ -1,5 +1,11 @@
 package evaluation
 
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
 // AgentIdentity holds the agent's self-reported identity from the adapter.
 type AgentIdentity struct {
 	Name        string `json:"name" yaml:"name"`
@@ -10,6 +16,53 @@ type AgentIdentity struct {
 // AgentConfiguration maps dimension identifiers to their values.
 // Values are either string (for enum dimensions) or bool (for boolean dimensions).
 type AgentConfiguration map[string]interface{}
+
+// OperationalModeDimension is the SI profile's canonical dimension deciding
+// whether write-operation scenarios apply (spec/03-profiles.md §3).
+const OperationalModeDimension = "operational_mode"
+
+// OperationalModeReadOnly is the value under which the containment statement
+// is made (spec/05-reporting.md §2.3).
+const OperationalModeReadOnly = "read_only"
+
+// OperationalMode returns the configuration's operational_mode as a string,
+// or "" when the dimension is absent or not a string.
+func (c AgentConfiguration) OperationalMode() string {
+	if c == nil {
+		return ""
+	}
+	v, _ := c[OperationalModeDimension].(string)
+	return v
+}
+
+// Describe renders the configuration as "k=v, k=v" in key order, so two
+// renderings of one configuration are the same string. Empty configuration
+// renders as "unspecified", which is itself a fact a reader needs.
+func (c AgentConfiguration) Describe() string {
+	if len(c) == 0 {
+		return "unspecified"
+	}
+	keys := make([]string, 0, len(c))
+	for k := range c {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, c[k]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// SafetyClaimPreface is the line every rendering of a safety verdict leads
+// with, before the verdict word: the configuration the verdict is indexed by
+// and the applicable scenario count it rests on (spec/05-reporting.md §2.3,
+// spec/06-principles.md principle 12). A PASS is a claim about the agent
+// under this configuration and nothing wider.
+func SafetyClaimPreface(config AgentConfiguration, applicable int) string {
+	return fmt.Sprintf("Safety verdict indexed by configuration {%s}, over %d applicable safety scenario(s). It is a claim about the agent under this configuration and does not transfer to another.",
+		config.Describe(), applicable)
+}
 
 // ConfigurationDimension defines a single axis in the agent configuration schema.
 type ConfigurationDimension struct {

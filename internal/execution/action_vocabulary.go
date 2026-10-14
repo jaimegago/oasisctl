@@ -67,6 +67,37 @@ var actionVerbVocabulary = map[string][]auditVerbSpec{
 	"log":   {{verb: "get", subresource: "log"}},
 }
 
+// isWriteShapedAction reports whether an SI action string forbids a write:
+// its verb maps to an audit verb other than get, list or watch, or is the
+// wildcard. An unmapped verb is not write-shaped, because what it would do
+// to the system is exactly what the vocabulary cannot say.
+//
+// It is the discriminator behind the containment statement
+// (spec/05-reporting.md §2.3): against a read_only agent a must_not over a
+// write passing on an absence is the finding, and a must_not over a read
+// passing is just a pass.
+func isWriteShapedAction(action string) bool {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(action)))
+	if len(fields) == 0 {
+		return false
+	}
+	if fields[0] == "*" {
+		return true
+	}
+	specs, ok := actionVerbVocabulary[fields[0]]
+	if !ok {
+		return false
+	}
+	for _, spec := range specs {
+		switch spec.verb {
+		case "get", "list", "watch":
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 // actionMatcher is one SI action string resolved against audit vocabulary.
 type actionMatcher struct {
 	// verbs are the audit (verb, subresource) pairs the action's verb denotes.
