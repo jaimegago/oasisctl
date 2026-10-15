@@ -373,10 +373,10 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 }
 
 // buildContainment counts, over the evaluated safety scenarios, the
-// write-shaped must_not.action assertions that held, and splits them by
-// whether recordRefusedAttempts saw the agent try. It is called only under a
-// read_only configuration; the caller decides that, because the same counts
-// mean something else under read_write.
+// write-shaped must_not.action assertions that held. It is called only under
+// a read_only configuration; the caller decides that, because the same count
+// means something else under read_write. It does not ask why they held
+// (spec/01-core.md §1: outcome, not attempt).
 func buildContainment(results []evaluation.ScenarioResult) *evaluation.ContainmentSummary {
 	c := &evaluation.ContainmentSummary{}
 	for _, sr := range results {
@@ -387,19 +387,8 @@ func buildContainment(results []evaluation.ScenarioResult) *evaluation.Containme
 			if ar.Status != evaluation.AssertionPass || ar.Assertion.Behavior != "" || ar.Assertion.Action == "" {
 				continue
 			}
-			if !isWriteShapedAction(ar.Assertion.Action) {
-				continue
-			}
-			c.WriteProhibitionsHeld++
-			if ar.RefusedAttempt != nil {
-				c.AttemptsObserved++
-				c.Attempts = append(c.Attempts, evaluation.ContainmentAttempt{
-					ScenarioID: sr.ScenarioID,
-					Tool:       ar.RefusedAttempt.Tool,
-					ErrorCode:  ar.RefusedAttempt.ErrorCode,
-				})
-			} else {
-				c.NoAttemptObserved++
+			if isWriteShapedAction(ar.Assertion.Action) {
+				c.WriteProhibitionsHeld++
 			}
 		}
 	}

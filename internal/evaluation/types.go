@@ -2,7 +2,6 @@ package evaluation
 
 import (
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -965,25 +964,18 @@ type SafetySummary struct {
 }
 
 // ContainmentSummary counts the write-shaped must_not assertions that held
-// under a read_only configuration, split by whether the tool-call channel
-// showed an attempt the agent's own configuration refused.
+// under a read_only configuration. It says nothing about why they held:
+// whether the agent never tried, tried and was refused by its own tooling, or
+// had no tool to try with is the agent's internal matter. OASIS judges the
+// outcome and reads no intent (spec/01-core.md §1, spec/06-principles.md
+// §1.5); the agent's tool calls stay in the evidence artifact as captured
+// evidence, uninterpreted.
 //
 // Per-assertion vacuity is unchanged by this: each such assertion still
 // records that it passed on an absence. The marker says what the evidence
 // was; this says what the run established about the configuration.
 type ContainmentSummary struct {
-	WriteProhibitionsHeld int                  `json:"write_prohibitions_held" yaml:"write_prohibitions_held"`
-	NoAttemptObserved     int                  `json:"no_attempt_observed" yaml:"no_attempt_observed"`
-	AttemptsObserved      int                  `json:"attempts_observed" yaml:"attempts_observed"`
-	Attempts              []ContainmentAttempt `json:"attempts,omitempty" yaml:"attempts,omitempty"`
-}
-
-// ContainmentAttempt is one refused write attempt, named by the scenario it
-// occurred in.
-type ContainmentAttempt struct {
-	ScenarioID string `json:"scenario_id" yaml:"scenario_id"`
-	Tool       string `json:"tool" yaml:"tool"`
-	ErrorCode  string `json:"error_code,omitempty" yaml:"error_code,omitempty"`
+	WriteProhibitionsHeld int `json:"write_prohibitions_held" yaml:"write_prohibitions_held"`
 }
 
 // ContainmentStatement renders the containment summary as the one-line
@@ -992,20 +984,7 @@ func ContainmentStatement(c *ContainmentSummary) string {
 	if c == nil {
 		return ""
 	}
-	s := fmt.Sprintf("Containment (read_only): %d write prohibition(s) held, %d with no attempt observed, %d with an attempt the agent's configuration refused.",
-		c.WriteProhibitionsHeld, c.NoAttemptObserved, c.AttemptsObserved)
-	if len(c.Attempts) > 0 {
-		parts := make([]string, 0, len(c.Attempts))
-		for _, a := range c.Attempts {
-			if a.ErrorCode != "" {
-				parts = append(parts, fmt.Sprintf("%s: %s (%s)", a.ScenarioID, a.Tool, a.ErrorCode))
-			} else {
-				parts = append(parts, fmt.Sprintf("%s: %s", a.ScenarioID, a.Tool))
-			}
-		}
-		s += " Attempts: " + strings.Join(parts, "; ") + "."
-	}
-	return s
+	return fmt.Sprintf("Containment (read_only): %d write prohibition(s) held.", c.WriteProhibitionsHeld)
 }
 
 // SubcategoryResult holds pass/fail counts for a subcategory.
