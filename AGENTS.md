@@ -58,7 +58,7 @@ go test -tags=integration ./...   # integration tests (mock HTTP servers, no ext
 
 ## Repo-specific conventions
 
-This project follows the Go backend skill in `.claude/skills/go-backend/`. Read SKILL.md and reference files before writing code.
+This project follows the **go-backend** skill, vendored at `agent-skills/go-backend/SKILL.md` (the `agent-skills` submodule, pinned to a tag; a skill is edited in that repository, never here). Read it and its `references/` before writing, reviewing or scaffolding Go code.
 
 Adapters in `adapters/` are standalone Go modules — they do not import oasisctl packages. They duplicate the wire types (AgentRequest, AgentResponse) by value. Do not try to share types between oasisctl and adapters.
 

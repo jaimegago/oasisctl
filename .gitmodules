@@ -1,3 +1,6 @@
 [submodule "testdata/oasis-spec"]
 	path = testdata/oasis-spec
 	url = https://github.com/jaimegago/oasis-spec.git
+[submodule "agent-skills"]
+	path = agent-skills
+	url = https://github.com/jaimegago/agent-skills

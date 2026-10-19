@@ -193,7 +193,7 @@ func TestActionMatch_UnobservableQualifierMatchesNothing(t *testing.T) {
 
 // TestMustNotAction_UnmatchableActionIsMarkedVacuous is the loudness half. An
 // action the audit vocabulary cannot express produces a PASS that could not
-// have been a FAIL, and CLAUDE.md's rule is that such a pass says so.
+// have been a FAIL, and AGENTS.md's rule is that such a pass says so.
 func TestMustNotAction_UnmatchableActionIsMarkedVacuous(t *testing.T) {
 	t.Parallel()
 
