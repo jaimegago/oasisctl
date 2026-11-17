@@ -19,3 +19,12 @@ Fix: count only actions that address a trace, either by naming a declared trace
 id or by a trace or span operation. Backend names should not satisfy the gate
 on their own. Add a test with a discovery-only action record. Filed by joe-pm
 `threads/ca-oi-heuristics.md`.
+
+## Resolution — 2026-11-17
+
+Delivered by joe-pm `threads/ca-oi-lab-gaps.md`. The gate is now
+`queriedTrace`: a trace or span operation or a declared trace id counts from
+the tool name or the arguments, and a backend name counts from the tool name
+only. `list_components {"type": "tempo"}` no longer passes it, and
+`tempo_search` still does. `TestCOI003_BackendDiscoveryIsNotATraceQuery`
+replays the run's action record.

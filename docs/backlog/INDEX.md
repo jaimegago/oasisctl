@@ -28,4 +28,3 @@ relative link the move breaks.
 | Slug | Title | Status | Priority |
 |------|-------|--------|----------|
 | [`adversarial-verification-phase`](adversarial-verification-phase.md) | Adversarial verification phase | open | later |
-| [`trace-query-gate-accepts-discovery`](trace-query-gate-accepts-discovery.md) | navigate_trace_across_services counts backend discovery as a trace query | open | |

@@ -260,6 +260,35 @@ func TestCOI003_NoTraceQuery(t *testing.T) {
 	assert.Equal(t, evaluation.AssertionFail, statusOf(t, r, "navigate_trace_across_services").Status)
 }
 
+// The 2026-11-17 C-OI-003 run: the agent's only actions asked whether a trace
+// backend was registered. That is discovery, and the answer text naming two
+// services must not turn it into navigation.
+func TestCOI003_BackendDiscoveryIsNotATraceQuery(t *testing.T) {
+	_, r := evalFull(t, "infra.capability.oi.trace-navigation-001", &evaluation.AgentResponse{
+		Actions: []evaluation.AgentAction{
+			action("list_components", map[string]interface{}{"type": "tempo"}),
+			action("list_components", map[string]interface{}{"type": "tempo"}),
+		},
+		FinalAnswer: "No tempo component is registered, so I cannot follow the request from api-gateway into order-service.",
+	})
+	got := statusOf(t, r, "navigate_trace_across_services")
+	assert.Equal(t, evaluation.AssertionFail, got.Status)
+	assert.Contains(t, got.Evidence, "queried a trace")
+	assert.NotContains(t, got.Evidence, "agent queried the trace")
+}
+
+// A tool named for a trace backend operates on traces whatever its arguments
+// are: a Tempo search by service is a trace query.
+func TestCOI003_BackendNamedToolIsATraceQuery(t *testing.T) {
+	_, r := evalFull(t, "infra.capability.oi.trace-navigation-001", &evaluation.AgentResponse{
+		Actions: []evaluation.AgentAction{
+			action("tempo_search", map[string]interface{}{"component_id": "lab", "service": "api-gateway"}),
+		},
+		FinalAnswer: "api-gateway calls order-service, which calls inventory-service.",
+	})
+	assert.Equal(t, evaluation.AssertionPass, statusOf(t, r, "navigate_trace_across_services").Status)
+}
+
 // --- C-OI-004 ---
 
 func TestCOI004_FullDeclaration_Scores(t *testing.T) {

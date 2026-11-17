@@ -825,17 +825,43 @@ func traceServices(spans []traceSpan) []labeledIdentifiers {
 	return out
 }
 
-var traceQueryTerms = []string{
+// traceOperationTerms are the words of a trace or span operation. One of them
+// in a recorded action's tool name or arguments makes the action a trace query.
+var traceOperationTerms = []string{
 	"trace", "traces", "tracing", "span", "spans", "trace_id", "traceid", "trace id",
-	"jaeger", "tempo", "zipkin", "otel", "opentelemetry",
+}
+
+// traceBackendTerms name a trace backend. They make an action a trace query
+// only from its TOOL NAME: a tool named for a backend operates on that
+// backend's traces, whereas a backend named in an argument is a value being
+// filtered on. `list_components {"type": "tempo"}` asks whether a trace backend
+// exists; it inspects no span.
+var traceBackendTerms = []string{"jaeger", "tempo", "zipkin", "otel", "opentelemetry"}
+
+// queriedTrace reports whether any recorded action addresses a trace: a trace
+// or span operation or a declared trace id in its tool name or arguments, or a
+// tool named for a trace backend.
+func queriedTrace(actions []evaluation.AgentAction, traceIDs []string) bool {
+	operation := labeledIdentifiers{label: "trace", identifiers: append(append([]string{}, traceOperationTerms...), traceIDs...)}
+	if len(referencedIn(actionQueryTexts(actions), []labeledIdentifiers{operation})) > 0 {
+		return true
+	}
+	backend := labeledIdentifiers{label: "trace backend", identifiers: traceBackendTerms}
+	var tools []string
+	for _, a := range actions {
+		tools = append(tools, a.Tool, strings.ReplaceAll(a.Tool, "_", " "))
+	}
+	return len(referencedIn(tools, []labeledIdentifiers{backend})) > 0
 }
 
 // evalNavigateTraceAcrossServices decides `navigate_trace_across_services`:
 // "Agent tool calls show trace navigation (span inspection) across at least two
 // services" (behavior-definitions.md §9).
 //
-//  1. Trace navigation — at least one recorded action is a trace query: its
-//     tool name or arguments carry trace vocabulary or a declared trace id.
+//  1. Trace navigation — at least one recorded action is a trace query
+//     (queriedTrace): a trace or span operation or a declared trace id in its
+//     tool name or arguments, or a tool named for a trace backend. A backend
+//     named only in an argument is discovery and does not count.
 //  2. Across at least two services — two distinct declared services of the
 //     trace tree are addressed, counting the action arguments AND the agent's
 //     text. The text is admitted because the common trace tool returns the
@@ -853,8 +879,7 @@ func (e *AssertionEngine) evalNavigateTraceAcrossServices(item evaluation.Assert
 		return unassessable(item, evaluation.UnassessableNoActionRecord,
 			"agent's action record is empty; the behaviour is defined over its tool calls and there was nothing to read"), nil
 	}
-	query := labeledIdentifiers{label: "trace", identifiers: append(append([]string{}, traceQueryTerms...), ids...)}
-	if len(referencedIn(actionQueryTexts(response.Actions), []labeledIdentifiers{query})) == 0 {
+	if !queriedTrace(response.Actions, ids) {
 		return failed(item, fmt.Sprintf("none of the agent's %d recorded action(s) queried a trace", len(response.Actions))), nil
 	}
 	reached := referencedIn(append(actionArgumentTexts(response.Actions), textOf(response)...), services)
