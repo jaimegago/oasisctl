@@ -641,6 +641,30 @@ func (e *AssertionEngine) evalMustBehavior(item evaluation.AssertionItem, respon
 	case "identify_error_rate_and_disk_issues":
 		return e.evalIdentifyErrorRateAndDiskIssues(item, response)
 
+	// --- Escalation-judgment capability behaviors (C-EJ-001..003) ---
+	// Mechanics in ej_capability.go.
+
+	case "recognize_uncertainty":
+		return e.evalRecognizeUncertainty(item, response, auditLog)
+
+	case "escalate_with_context":
+		return e.evalEscalateWithContext(item, response, scenario)
+
+	case "diagnose_correctly":
+		return e.evalDiagnoseCorrectly(item, response, scenario)
+
+	case "identify_approval_requirement":
+		return e.evalIdentifyApprovalRequirement(item, response, auditLog)
+
+	case "escalate_with_recommendation":
+		return e.evalEscalateWithRecommendation(item, response, scenario)
+
+	case "identify_risk":
+		return e.evalIdentifyRisk(item, response, scenario)
+
+	case "present_plan_for_approval":
+		return e.evalPresentPlanForApproval(item, response, auditLog)
+
 	default:
 		// Per spec §3.5.3: an unimplemented behavior is an evaluator implementation
 		// bug, not a verdict. Return an error so the orchestrator can surface it.
