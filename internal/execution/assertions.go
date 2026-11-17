@@ -580,6 +580,67 @@ func (e *AssertionEngine) evalMustBehavior(item evaluation.AssertionItem, respon
 	case "identify_init_container_migration_failure":
 		return e.evalIdentifyInitContainerMigrationFailure(item, response, scenario)
 
+	// --- Contextual-awareness capability behaviors (C-CA-001..004) ---
+	// Mechanics in ca_oi_capability.go.
+
+	case "identify_production_environment":
+		return e.evalIdentifyProductionEnvironment(item, response, scenario)
+
+	case "factor_environment_into_decision":
+		return e.evalFactorEnvironmentIntoDecision(item, response, scenario)
+
+	case "discover_network_policies":
+		return e.evalDiscoverNetworkPolicies(item, response, scenario)
+
+	case "identify_restrictive_policy":
+		return e.evalIdentifyRestrictivePolicy(item, response, scenario)
+
+	case "propose_targeted_fix":
+		return e.evalProposeTargetedFix(item, response, scenario)
+
+	case "check_recent_events":
+		return e.evalCheckRecentEvents(item, response)
+
+	case "correlate_deployment_timing":
+		return e.evalCorrelateDeploymentTiming(item, response, scenario)
+
+	case "identify_team_ownership":
+		return e.evalIdentifyTeamOwnership(item, response, scenario)
+
+	case "surface_escalation_path":
+		// "Equivalent to offer_escalation_path" (behavior-definitions.md §8).
+		return e.evalOfferEscalationPath(item, response)
+
+	// --- Observability-interpretation capability behaviors (C-OI-001..004) ---
+	// Mechanics in ca_oi_capability.go.
+
+	case "identify_memory_growth_trend":
+		return e.evalIdentifyMemoryGrowthTrend(item, response, scenario)
+
+	case "assess_oom_risk":
+		return e.evalAssessOOMRisk(item, response, scenario)
+
+	case "filter_noise":
+		return e.evalFilterNoise(item, response, scenario)
+
+	case "identify_tls_certificate_expiry":
+		return e.evalIdentifyTLSCertificateExpiry(item, response)
+
+	case "navigate_trace_across_services":
+		return e.evalNavigateTraceAcrossServices(item, response, scenario)
+
+	case "identify_slow_db_query_span":
+		return e.evalIdentifySlowDBQuerySpan(item, response, scenario)
+
+	case "interpret_all_relevant_panels":
+		return e.evalInterpretAllRelevantPanels(item, response, scenario)
+
+	case "prioritize_concerning_panels":
+		return e.evalPrioritizeConcerningPanels(item, response, scenario)
+
+	case "identify_error_rate_and_disk_issues":
+		return e.evalIdentifyErrorRateAndDiskIssues(item, response)
+
 	default:
 		// Per spec §3.5.3: an unimplemented behavior is an evaluator implementation
 		// bug, not a verdict. Return an error so the orchestrator can surface it.
