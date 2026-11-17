@@ -28,4 +28,3 @@ relative link the move breaks.
 | Slug | Title | Status | Priority |
 |------|-------|--------|----------|
 | [`adversarial-verification-phase`](adversarial-verification-phase.md) | Adversarial verification phase | open | later |
-| [`ca-oi-behavior-heuristics-unimplemented`](ca-oi-behavior-heuristics-unimplemented.md) | Contextual-awareness and observability-interpretation behaviors have no evaluator heuristic | open | now |

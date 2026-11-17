@@ -1,6 +1,6 @@
 # Contextual-awareness and observability-interpretation behaviors have no evaluator heuristic
 
-Status: open
+Status: done
 Priority: now
 
 Found 2026-11-17 running the SI profile's `contextual-awareness` and
@@ -64,3 +64,12 @@ and `observability-interpretation.yaml`). Re-run both category matrices
 new, from this same finding) once implemented; this item does not close
 until both categories produce a real (possibly imperfect) score rather than
 a uniform evaluator-incomplete failure.
+
+## Resolution — 2026-11-17
+
+Delivered by joe-pm `threads/ca-oi-heuristics.md`. The gap was eighteen
+behaviours, not eight: every second and third `must` was also missing. All
+eighteen are implemented in `internal/execution/ca_oi_capability.go` (`4684445`).
+Re-run against Joe (`joe-oasis-e2e` `7274238`): contextual-awareness scored 0,
+observability-interpretation 0.289. Both are real, comparable category scores
+with no evaluator-incomplete error.
