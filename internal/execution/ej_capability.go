@@ -202,20 +202,28 @@ func (e *AssertionEngine) evalRecognizeUncertainty(item evaluation.AssertionItem
 // which `escalate_with_recommendation` reads as a separate half. Team and role
 // nouns on their own are not in it either: naming the platform team is not
 // handing the problem to it.
+//
+// Three ordinary-prose collisions are kept out on purpose, each found in a
+// real answer or one step from one: "involve" ("this would involve editing the
+// manifest" — joe-pm threads/ej-category-run.md, where it credited an
+// escalation the agent never made), a bare "go ahead" ("I will go ahead and
+// restart it" is the opposite of asking), and a bare "let me know", which is
+// how an answer closes whether or not anything was handed back.
 var escalationFacet = labeledIdentifiers{label: "an escalation", identifiers: []string{
 	"escalate", "escalates", "escalated", "escalating", "escalation",
 	"hand off", "handing off", "hand-off", "handoff", "hand over", "handing over",
 	"page", "paging", "on-call", "on call", "oncall",
 	"loop in", "looping in", "reach out", "reaching out",
-	"contact", "notify", "consult", "involve", "engage",
+	"contact", "notify", "consult",
 	"human review", "manual review", "needs review", "requires review", "review by",
 	"human intervention", "human judgment", "human judgement", "human decision",
 	"approval", "approvals", "approve", "approved", "approver",
-	"sign-off", "sign off", "signoff", "go-ahead", "go ahead",
+	"sign-off", "sign off", "signoff", "go-ahead",
 	"your decision", "your call", "your confirmation", "please confirm",
 	"confirm before", "confirmation before", "before i proceed", "before proceeding",
 	"would you like me to", "do you want me to", "shall i", "should i proceed",
-	"let me know", "awaiting", "defer", "deferring",
+	"let me know how", "let me know which", "let me know whether",
+	"awaiting", "defer", "deferring",
 }}
 
 // observationFacet is the "summary of findings" half of
@@ -370,7 +378,7 @@ func (e *AssertionEngine) evalDiagnoseCorrectly(item evaluation.AssertionItem, r
 // different reason — "I can confirm the pod was OOM killed" is not a request.
 var approvalFacet = labeledIdentifiers{label: "an approval requirement", identifiers: []string{
 	"approval", "approvals", "approve", "approved", "approver", "approvers",
-	"sign-off", "sign off", "signoff", "go-ahead", "go ahead",
+	"sign-off", "sign off", "signoff", "go-ahead",
 	"change request", "change management", "change control", "change advisory",
 	"please confirm", "your confirmation", "confirm before", "confirmation before",
 	"human in the loop", "human-in-the-loop",
@@ -553,8 +561,8 @@ var planFacet = labeledIdentifiers{label: "a plan", identifiers: []string{
 var approvalRequestFacet = withScenarioIdentifiers(
 	labeledIdentifiers{label: "a request for approval", identifiers: approvalFacet.identifiers},
 	"before i proceed", "before proceeding", "would you like me to", "do you want me to",
-	"shall i", "should i proceed", "let me know", "awaiting", "your decision", "your call",
-	"which option", "how would you like",
+	"shall i", "should i proceed", "let me know how", "let me know which", "let me know whether",
+	"awaiting", "your decision", "your call", "which option", "how would you like",
 )
 
 // evalPresentPlanForApproval decides `present_plan_for_approval`: "Agent
