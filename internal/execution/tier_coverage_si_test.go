@@ -83,17 +83,24 @@ func TestCoverage_SIReadOnly_OperationalExecutionExcludedAndMinimumMet(t *testin
 	}
 
 	// Every safety category, and every capability category the configuration
-	// leaves open, is met; nothing but the excluded category is out of the count.
+	// leaves open, is met. Operational Execution is pinned by name above; any
+	// other category the vendored profile closes to read_only is excluded on
+	// the same ground — no applicable archetype — and on no other.
 	for _, c := range cm.Categories {
-		if c.Category == operationalExecution {
+		if c.Status == evaluation.CoverageExcluded {
+			assert.Equal(t, evaluation.ClassificationCapability, c.Classification, "%s: only a capability category can be excluded", c.Category)
+			assert.Zero(t, c.ArchetypesApplicable, "%s: excluded with an applicable archetype", c.Category)
 			continue
 		}
 		assert.Equal(t, evaluation.CoverageMet, c.Status, c.Category)
 		assert.Equal(t, 1, c.ArchetypesRequired, c.Category)
 		assert.GreaterOrEqual(t, len(c.ArchetypesEvaluated), 1, c.Category)
+		assert.Positive(t, c.ArchetypesApplicable, c.Category)
 		assert.Equal(t, c.ArchetypesDeclared, len(c.ArchetypesEvaluated)+len(c.ArchetypesSkipped),
 			"%s: evaluated and skipped must account for every declared archetype", c.Category)
 	}
+	assert.Equal(t, evaluation.CoverageMet, categoryByID(t, cm, diagnosticAccuracy).Status,
+		"a category read_only can run is never excluded")
 	for _, cat := range p.SafetyCategories {
 		c := categoryByID(t, cm, cat.ID)
 		assert.Equal(t, evaluation.ClassificationSafety, c.Classification)
@@ -141,14 +148,21 @@ func TestCoverage_SIReadOnly_CapabilityPhaseNeverRan(t *testing.T) {
 	for _, cat := range p.SafetyCategories {
 		assert.Equal(t, evaluation.CoverageMet, categoryByID(t, cm, cat.ID).Status, cat.ID)
 	}
+	// A capability category is unmet when the configuration leaves it open
+	// and excluded when it does not; which ones are open is the profile's.
+	open := 0
 	for _, cat := range p.CapabilityCategories {
-		want := evaluation.CoverageUnmet
-		if cat.ID == operationalExecution {
-			want = evaluation.CoverageExcluded
+		c := categoryByID(t, cm, cat.ID)
+		if c.ArchetypesApplicable == 0 {
+			assert.Equal(t, evaluation.CoverageExcluded, c.Status, cat.ID)
+			continue
 		}
-		assert.Equal(t, want, categoryByID(t, cm, cat.ID).Status, cat.ID)
+		open++
+		assert.Equal(t, evaluation.CoverageUnmet, c.Status, cat.ID)
 	}
-	assert.Len(t, cm.Unmet, len(p.CapabilityCategories)-1)
+	assert.Equal(t, evaluation.CoverageExcluded, categoryByID(t, cm, operationalExecution).Status)
+	assert.Equal(t, evaluation.CoverageUnmet, categoryByID(t, cm, diagnosticAccuracy).Status)
+	assert.Len(t, cm.Unmet, open)
 }
 
 // Under read_write nothing is excluded: Operational Execution counts, and is
