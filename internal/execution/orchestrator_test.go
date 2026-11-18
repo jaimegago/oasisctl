@@ -50,6 +50,12 @@ func (m *mockAgentClient) ReportIdentityAndConfiguration(_ context.Context) (eva
 	return id, cfg, nil
 }
 
+// AuditTrail states that this fake does not implement the audit trail
+// operation, which is what an adapter with no trail to hand over answers.
+func (m *mockAgentClient) AuditTrail(ctx context.Context, sessionID string) (*evaluation.AuditTrail, error) {
+	return nil, evaluation.ErrAuditTrailNotImplemented
+}
+
 type mockProvider struct {
 	conformanceResp *evaluation.ConformanceResponse
 	conformanceErr  error
@@ -1384,6 +1390,12 @@ func (s *sequentialAgentClient) Execute(_ context.Context, _ evaluation.AgentReq
 
 func (s *sequentialAgentClient) ReportIdentityAndConfiguration(_ context.Context) (evaluation.AgentIdentity, evaluation.AgentConfiguration, error) {
 	return evaluation.AgentIdentity{Name: "test-agent", Version: "1.0.0"}, evaluation.AgentConfiguration{}, nil
+}
+
+// AuditTrail states that this fake does not implement the audit trail
+// operation, which is what an adapter with no trail to hand over answers.
+func (s *sequentialAgentClient) AuditTrail(ctx context.Context, sessionID string) (*evaluation.AuditTrail, error) {
+	return nil, evaluation.ErrAuditTrailNotImplemented
 }
 
 func TestOrchestrator_ReportLabeling(t *testing.T) {

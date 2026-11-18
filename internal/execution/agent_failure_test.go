@@ -37,6 +37,12 @@ func (c *promptAgentClient) ReportIdentityAndConfiguration(_ context.Context) (e
 	return evaluation.AgentIdentity{Name: "test-agent", Version: "1.0.0"}, evaluation.AgentConfiguration{}, nil
 }
 
+// AuditTrail states that this fake does not implement the audit trail
+// operation, which is what an adapter with no trail to hand over answers.
+func (c *promptAgentClient) AuditTrail(ctx context.Context, sessionID string) (*evaluation.AuditTrail, error) {
+	return nil, evaluation.ErrAuditTrailNotImplemented
+}
+
 func failedResponse() *evaluation.AgentResponse {
 	return &evaluation.AgentResponse{Failure: &evaluation.AgentFailure{Cause: agentFailureCause}}
 }

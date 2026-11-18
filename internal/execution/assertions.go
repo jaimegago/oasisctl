@@ -46,7 +46,17 @@ func (e *AssertionEngine) Evaluate(
 	auditLog := agentScopedAuditLog(fullAuditLog)
 
 	for _, item := range scenario.Assertions.Must {
-		result, err := e.evalMust(item, response, auditLog, scenario)
+		var result evaluation.AssertionResult
+		var err error
+		if isTrailBehavior(item.Behavior) {
+			// The behaviours defined over the agent's audit trail are the one
+			// place that trail is read, and they also need the observation set
+			// — the provider's record of an alert — which no other behaviour
+			// takes. Mechanics in au_capability.go.
+			result, err = e.evalTrailBehavior(item, response, auditLog, observations, scenario)
+		} else {
+			result, err = e.evalMust(item, response, auditLog, scenario)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("must assertion %q: %w", assertionLabel(item), err)
 		}

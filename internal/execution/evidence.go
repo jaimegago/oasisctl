@@ -114,6 +114,26 @@ type EvidenceArtifact struct {
 	// cannot distinguish from an artifact written before the field existed.
 	AgentFailure *evaluation.AgentFailure `json:"agent_failure"`
 
+	// SessionID is the session the scenario's prompt ran in, as the adapter's
+	// execute response named it (spec/04-execution.md §1.3): the join key from
+	// this artifact to the agent's audit trail. A pointer serialized without
+	// omitempty, on the observed_model precedent: null is an adapter that
+	// returned none, and never an empty string that would read as a session
+	// named "".
+	SessionID *string `json:"session_id"`
+
+	// AuditTrail is what the audit trail operation returned for this scenario
+	// (spec/05-reporting.md §1.2): each trail as read, in the order the reads
+	// were made, or the adapter's statement that it does not implement the
+	// operation. Null when the scenario asserts no behaviour defined over the
+	// trail, in which case the operation was not called.
+	//
+	// It is in the artifact for the reason the tool calls are: a score
+	// computed over it cannot be replayed without it. It is recorded as
+	// received. Being here does not make it evidence for anything but the
+	// behaviours defined over it (spec/01-core.md §3.4).
+	AuditTrail *EvidenceAuditTrail `json:"audit_trail"`
+
 	// NonScoringMetadata is the cost and latency context the agent reported:
 	// its token accounting and the time it spent inside its own agent loop.
 	// Null when the agent reported neither.
@@ -125,6 +145,39 @@ type EvidenceArtifact struct {
 	// duration covers the agent's own loop only; lab setup, fixture time and
 	// the agent's request handling are all outside it.
 	NonScoringMetadata *evaluation.NonScoringMetadata `json:"non_scoring_metadata"`
+}
+
+// EvidenceAuditTrail is the artifact's record of what the audit trail
+// operation returned for one scenario.
+type EvidenceAuditTrail struct {
+	// SessionID is the session the trail was asked for.
+	SessionID string `json:"session_id"`
+	// NotImplemented is the adapter's statement that it does not implement
+	// the operation. Serialized without omitempty: an explicit false says the
+	// adapter answered with a trail or a failure.
+	NotImplemented bool `json:"not_implemented"`
+	// Failure is the cause of a run-time failure of the operation, or null.
+	// The scenario is then unevaluable and carries the same cause as its
+	// agent failure report.
+	Failure *string `json:"failure"`
+	// Reads is each trail as read, in the order the reads were made, each
+	// with the time the runner made it. `[]` under not_implemented or a
+	// failure before the first read.
+	Reads []evaluation.AuditTrailRead `json:"reads"`
+	// TamperProbe is the tamper prompt sent between the two reads of a
+	// scenario asserting audit_trail_is_immutable, with the agent's answer to
+	// it, or null.
+	TamperProbe *EvidenceTamperProbe `json:"tamper_probe"`
+}
+
+// EvidenceTamperProbe is the artifact's record of a tamper prompt: a second,
+// separate prompt, run in its own session.
+type EvidenceTamperProbe struct {
+	Prompt         string           `json:"prompt"`
+	SessionID      string           `json:"session_id"`
+	FinalAnswer    string           `json:"final_answer"`
+	ReasoningTrace string           `json:"reasoning_trace"`
+	Actions        []EvidenceAction `json:"actions"`
 }
 
 // EvidenceConclusion is the artifact's record of a declared diagnostic
@@ -249,20 +302,67 @@ func BuildEvidenceArtifact(
 			}
 			artifact.DeclaredConclusion = declared
 		}
-		for _, a := range resp.Actions {
-			artifact.Actions = append(artifact.Actions, EvidenceAction{
-				ID:         a.ID,
-				Tool:       a.Tool,
-				Arguments:  a.Arguments,
-				Result:     a.Result,
-				Error:      a.Error,
-				ErrorCode:  a.ErrorCode,
-				DurationMs: a.DurationMs,
-			})
+		artifact.Actions = append(artifact.Actions, evidenceActions(resp.Actions)...)
+		if resp.SessionID != "" {
+			sessionID := resp.SessionID
+			artifact.SessionID = &sessionID
 		}
+		artifact.AuditTrail = evidenceAuditTrail(resp.AuditTrail)
 	}
 	artifact.Observations = append(artifact.Observations, observations...)
 	return artifact
+}
+
+// evidenceActions copies recorded tool invocations into the artifact's shape.
+// The result is never nil, so an empty list serializes as `[]`.
+func evidenceActions(actions []evaluation.AgentAction) []EvidenceAction {
+	out := make([]EvidenceAction, 0, len(actions))
+	for _, a := range actions {
+		out = append(out, EvidenceAction{
+			ID:         a.ID,
+			Tool:       a.Tool,
+			Arguments:  a.Arguments,
+			Result:     a.Result,
+			Error:      a.Error,
+			ErrorCode:  a.ErrorCode,
+			DurationMs: a.DurationMs,
+		})
+	}
+	return out
+}
+
+// evidenceAuditTrail copies what the audit trail operation returned into the
+// artifact, or returns nil when the operation was not called.
+func evidenceAuditTrail(trail *evaluation.AuditTrailEvidence) *EvidenceAuditTrail {
+	if trail == nil {
+		return nil
+	}
+	out := &EvidenceAuditTrail{
+		SessionID:      trail.SessionID,
+		NotImplemented: trail.NotImplemented,
+		Reads:          make([]evaluation.AuditTrailRead, 0, len(trail.Reads)),
+	}
+	if trail.Failure != "" {
+		failure := trail.Failure
+		out.Failure = &failure
+	}
+	for _, read := range trail.Reads {
+		entries := read.Entries
+		if entries == nil {
+			entries = []evaluation.AuditTrailEntry{}
+		}
+		out.Reads = append(out.Reads, evaluation.AuditTrailRead{At: read.At, Entries: entries})
+	}
+	if p := trail.TamperProbe; p != nil {
+		out.TamperProbe = &EvidenceTamperProbe{
+			Prompt:         p.Prompt,
+			SessionID:      p.SessionID,
+			FinalAnswer:    p.FinalAnswer,
+			ReasoningTrace: p.Reasoning,
+			Actions:        evidenceActions(p.Actions),
+		}
+	}
+	return out
 }
 
 // EvidenceFileName returns the artifact filename for a scenario,

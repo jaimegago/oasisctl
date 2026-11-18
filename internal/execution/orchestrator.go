@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -527,9 +528,17 @@ func (o *Orchestrator) runScenario(
 	classification evaluation.Classification,
 	agentConfig evaluation.AgentConfiguration,
 	evidence evidenceTarget,
-) evaluation.ScenarioResult {
+) (out evaluation.ScenarioResult) {
 	scenarioCtx, cancel := context.WithTimeout(ctx, o.cfg.Timeout)
 	defer cancel()
+
+	// The session_id is per-scenario provenance and is recorded on whatever
+	// result the scenario ends in, once the adapter has returned one
+	// (spec/04-execution.md §1.3, spec/05-reporting.md §1.2). It is the value
+	// received, never one minted here, so a scenario that never reached the
+	// agent records none.
+	var sessionID string
+	defer func() { out.SessionID = sessionID }()
 
 	if o.cfg.Verbose {
 		o.logger.Info("running scenario", "id", s.ID, "classification", string(classification))
@@ -565,14 +574,29 @@ func (o *Orchestrator) runScenario(
 	// principal is the run's, and is merged rather than declared by the corpus.
 	provisionAgent := s.Preconditions.Agent
 	provisionAgent.Principal = o.cfg.AgentPrincipal
+	//
+	// The scenario's temporal conditions go to the provider here and nowhere
+	// else. A temporal condition is a change in the environment: the provider
+	// applies it at the timing it declares, and nothing about it is sent to
+	// the agent, which learns of the change only by looking
+	// (spec/04-execution.md §2.4). buildAgentRequest below reads the operator
+	// prompt alone.
 	provResp, err := o.provider.Provision(scenarioCtx, evaluation.ProvisionRequest{
 		ScenarioID:  s.ID,
 		Environment: s.Preconditions.Environment,
 		Agent:       provisionAgent,
 		Tier:        o.cfg.Tier,
+		Stimuli:     temporalConditions(s.Stimuli),
 	})
 	if err != nil {
 		return errorResult(s, fmt.Sprintf("provision: %v", err))
+	}
+	// A provider that cannot apply a timed stimulus fails the provision and
+	// says so in the response (SI provider-guide.md §3.3, §4.1). The scenario
+	// is not run against an environment its stimulus never happened in: that
+	// would score the agent on a condition that was not there.
+	if provResp != nil && provResp.Status == "error" {
+		return errorResult(s, fmt.Sprintf("provision: provider reported an error: %s", provResp.Error))
 	}
 
 	// The provider resolved the scenario's declared namespace tokens; from
@@ -600,6 +624,9 @@ func (o *Orchestrator) runScenario(
 	agentResp, err := o.agent.Execute(scenarioCtx, agentReq)
 	if err != nil {
 		return errorResult(s, fmt.Sprintf("agent execute: %v", err))
+	}
+	if agentResp != nil {
+		sessionID = agentResp.SessionID
 	}
 
 	// d. Check for infrastructure failure before evaluating behavior.
@@ -656,6 +683,23 @@ func (o *Orchestrator) runScenario(
 	// an answer and goes on to be scored like any other.
 	if responseAgentFailure(agentResp) != nil && classification != evaluation.ClassificationSafety {
 		return o.unevaluableCapabilityResult(s, agentResp, evidence)
+	}
+
+	// d3. The agent's audit trail (spec/04-execution.md §1.3). Read only for
+	// a scenario that asserts a behaviour defined over the trail, after the
+	// response has been captured. An adapter that does not implement the
+	// operation scores zero on those behaviours and the scenario goes on to be
+	// scored; an operation that fails at run time is an agent failure, and the
+	// scenario is settled exactly as d2 settles any other.
+	if agentResp != nil && len(trailBehaviorsAsserted(&s)) > 0 {
+		if declErr := o.readAuditTrail(scenarioCtx, &s, agentResp); declErr != "" {
+			r := errorResult(s, declErr)
+			r.AgentFailure = responseAgentFailure(agentResp)
+			return r
+		}
+		if responseAgentFailure(agentResp) != nil && classification != evaluation.ClassificationSafety {
+			return o.unevaluableCapabilityResult(s, agentResp, evidence)
+		}
 	}
 
 	// e. State snapshot.
@@ -990,12 +1034,40 @@ func (o *Orchestrator) scoreFormB(
 func (o *Orchestrator) collectObservations(ctx context.Context, s evaluation.Scenario, envID string) ([]evaluation.ObserveResponse, string) {
 	needed := observationTypesFromVerification(s.Verification)
 
-	var out []evaluation.ObserveResponse
+	// Two behaviours defined over the agent's audit trail are scored against
+	// the provider's audit log, whatever the scenario's verification block
+	// declares: it is the oracle of produce_complete_audit_trail, and it is
+	// what link_actions_to_triggers reads "by then" from (SI
+	// behavior-definitions.md §11).
+	if assertsBehavior(&s, behaviorProduceCompleteAuditTrail) || assertsBehavior(&s, behaviorLinkActionsToTriggers) {
+		needed["audit_log"] = struct{}{}
+	}
+
+	requests := make([]evaluation.ObserveRequest, 0, len(needed))
 	for _, obsType := range sortedObservationTypes(needed) {
-		resp, err := o.provider.Observe(ctx, evaluation.ObserveRequest{
-			EnvironmentID:   envID,
-			ObservationType: obsType,
-		})
+		requests = append(requests, evaluation.ObserveRequest{EnvironmentID: envID, ObservationType: obsType})
+	}
+
+	// The provider's record of each alert the scenario declares, which carries
+	// the time the alert began firing (SI provider-guide.md §3.3). Asked for
+	// by what the SCENARIO declares and never by what the trail cites: an
+	// alert a trail entry names that the environment never held is not a
+	// trigger, and the evaluator does not go looking for it on the agent's
+	// say-so.
+	if assertsBehavior(&s, behaviorLinkActionsToTriggers) {
+		for _, name := range declaredAlerts(&s) {
+			requests = append(requests, evaluation.ObserveRequest{
+				EnvironmentID:   envID,
+				ObservationType: "resource_state",
+				Parameters:      map[string]interface{}{"kind": "alert", "name": name},
+			})
+		}
+	}
+
+	var out []evaluation.ObserveResponse
+	for _, req := range requests {
+		obsType := req.ObservationType
+		resp, err := o.provider.Observe(ctx, req)
 		if err != nil {
 			o.logger.Warn("observe failed", "scenario", s.ID, "type", obsType, "error", err)
 			continue
@@ -1011,6 +1083,143 @@ func (o *Orchestrator) collectObservations(ctx context.Context, s evaluation.Sce
 		out = append(out, *resp)
 	}
 	return out, ""
+}
+
+// temporalConditions returns the scenario's temporal_condition stimuli, as the
+// scenario declares them, for the provision request. Nil when it declares
+// none, so the request omits the field.
+func temporalConditions(stimuli []evaluation.Stimulus) []evaluation.Stimulus {
+	var out []evaluation.Stimulus
+	for _, stim := range stimuli {
+		if stim.Type == evaluation.StimulusTypeTemporalCondition {
+			out = append(out, stim)
+		}
+	}
+	return out
+}
+
+// operatorPrompts returns the values of the scenario's operator_prompt
+// stimuli, in declaration order.
+func operatorPrompts(s *evaluation.Scenario) []string {
+	var out []string
+	for _, stim := range s.Stimuli {
+		if stim.Type == evaluation.StimulusTypeOperatorPrompt {
+			out = append(out, stim.Value)
+		}
+	}
+	return out
+}
+
+// auditTrailFailureCause is the cause recorded for a failed audit trail
+// operation: the adapter's own, verbatim, where its answer carried an agent
+// failure report, and otherwise what the runner received
+// (spec/04-execution.md §1.3).
+func auditTrailFailureCause(err error) string {
+	var reported *evaluation.AuditTrailFailure
+	if errors.As(err, &reported) {
+		return reported.Cause
+	}
+	return fmt.Sprintf("audit trail operation failed: %v", err)
+}
+
+// readAuditTrail calls the audit trail operation for a scenario that asserts a
+// behaviour defined over the trail, and attaches what it returned to the
+// response (spec/04-execution.md §1.3; SI behavior-definitions.md §11).
+//
+// The operation has three answers and each lands somewhere different:
+//
+//   - a trail, which may be empty — recorded as a read and scored;
+//   - a statement of non-implementation — recorded, and the behaviours score
+//     zero. Nothing further is asked of the adapter: there is no trail for a
+//     tamper prompt to change;
+//   - a failure — an agent failure. It is recorded on the response as an agent
+//     failure report naming the cause, and the caller settles the scenario as
+//     it settles any other such report.
+//
+// A scenario asserting audit_trail_is_immutable is a tamper probe: after the
+// first read the runner sends the scenario's tamper prompt — its second
+// operator_prompt stimulus — as a second, separate prompt, and reads the first
+// session's trail again. The tamper prompt is its own Execute and therefore
+// its own fresh session (spec/04-execution.md §1.1); it is not a second turn
+// of the first, and no multi-turn session exists anywhere in this runner.
+//
+// The return is a scenario-declaration error, or "". An agent failure is not
+// one: it is reported through response.Failure.
+func (o *Orchestrator) readAuditTrail(ctx context.Context, s *evaluation.Scenario, response *evaluation.AgentResponse) string {
+	trail := &evaluation.AuditTrailEvidence{SessionID: response.SessionID}
+	response.AuditTrail = trail
+
+	fail := func(cause string) string {
+		trail.Failure = cause
+		response.Failure = &evaluation.AgentFailure{Cause: cause}
+		return ""
+	}
+
+	read := func() (ok bool) {
+		got, err := o.agent.AuditTrail(ctx, response.SessionID)
+		at := time.Now().UTC()
+		switch {
+		case errors.Is(err, evaluation.ErrAuditTrailNotImplemented):
+			if len(trail.Reads) > 0 {
+				// Non-implementation is an answer about the adapter, constant
+				// across the run. One that follows a trail is not that answer.
+				fail("audit trail operation failed: the adapter returned a trail for this session and then stated that it does not implement the operation")
+				return false
+			}
+			trail.NotImplemented = true
+			return false
+		case err != nil:
+			fail(auditTrailFailureCause(err))
+			return false
+		case got == nil:
+			fail("audit trail operation failed: the adapter returned neither a trail nor an error")
+			return false
+		}
+		entries := got.Entries
+		if entries == nil {
+			entries = []evaluation.AuditTrailEntry{}
+		}
+		trail.Reads = append(trail.Reads, evaluation.AuditTrailRead{At: at, Entries: entries})
+		return true
+	}
+
+	if !read() {
+		return ""
+	}
+	if !assertsBehavior(s, behaviorAuditTrailIsImmutable) {
+		return ""
+	}
+
+	prompts := operatorPrompts(s)
+	if len(prompts) < 2 || strings.TrimSpace(prompts[1]) == "" {
+		return fmt.Sprintf(
+			"scenario asserts %s and declares no tamper prompt: the tamper prompt is the scenario's second operator_prompt stimulus (SI behavior-definitions.md §11)",
+			behaviorAuditTrailIsImmutable)
+	}
+
+	tamperReq := buildAgentRequest(*s)
+	tamperReq.Prompt = prompts[1]
+	tamperResp, err := o.agent.Execute(ctx, tamperReq)
+	if err != nil {
+		// A transport error on the tamper prompt is the error it is on the
+		// scenario's first prompt, and is reported the same way.
+		return fmt.Sprintf("agent execute (tamper prompt): %v", err)
+	}
+	probe := &evaluation.TamperProbe{Prompt: prompts[1]}
+	if tamperResp != nil {
+		probe.SessionID = tamperResp.SessionID
+		probe.FinalAnswer = tamperResp.FinalAnswer
+		probe.Reasoning = tamperResp.Reasoning
+		probe.Actions = tamperResp.Actions
+	}
+	trail.TamperProbe = probe
+	if tamperResp != nil && tamperResp.Failure != nil {
+		fail(fmt.Sprintf("agent failure reported on the tamper prompt: %s", tamperResp.Failure.Cause))
+		return ""
+	}
+
+	read()
+	return ""
 }
 
 // observationTypesFromVerification derives the set of provider observation types

@@ -30,4 +30,11 @@ func (c *CLIClient) ReportIdentityAndConfiguration(_ context.Context) (evaluatio
 	return evaluation.AgentIdentity{}, nil, fmt.Errorf("CLI adapter not yet implemented (command: %s %s)", c.command, strings.Join(c.args, " "))
 }
 
+// AuditTrail is not yet implemented for the CLI adapter. The transport does
+// not exist, so this is an error like the other two methods and not a
+// statement that some agent behind it keeps no trail.
+func (c *CLIClient) AuditTrail(_ context.Context, _ string) (*evaluation.AuditTrail, error) {
+	return nil, fmt.Errorf("CLI adapter not yet implemented (command: %s %s", c.command, strings.Join(c.args, " "))
+}
+
 var _ evaluation.AgentClient = (*CLIClient)(nil)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -51,6 +52,10 @@ type agentResponseBody struct {
 	} `json:"actions"`
 	Reasoning   string `json:"reasoning"`
 	FinalAnswer string `json:"final_answer"`
+	// SessionID names the session the prompt ran in (spec/04-execution.md
+	// §1.3). It is carried as received: the runner records it and hands it
+	// back to the audit trail operation, and never mints one.
+	SessionID string `json:"session_id"`
 	// Model is the optional model identifier an adapter may report for the
 	// execution. It is decoded as a plain string precisely so the two ways of
 	// not reporting one — field absent, field empty — arrive here identically
@@ -140,6 +145,7 @@ func (c *HTTPClient) Execute(ctx context.Context, req evaluation.AgentRequest) (
 	agentResp := &evaluation.AgentResponse{
 		Reasoning:   respBody.Reasoning,
 		FinalAnswer: respBody.FinalAnswer,
+		SessionID:   respBody.SessionID,
 	}
 	// The one place a reported model becomes an optional value. An agent that
 	// reports no model — absent field or empty string — yields nil, which the
@@ -266,4 +272,92 @@ func (c *HTTPClient) ReportIdentityAndConfiguration(ctx context.Context) (evalua
 	}
 
 	return identity, evaluation.AgentConfiguration(body.Configuration), nil
+}
+
+// auditTrailResponseBody is the JSON shape of the audit trail operation's
+// answer: the session's entries in the order the agent recorded them, or an
+// agent failure report where the operation failed.
+type auditTrailResponseBody struct {
+	// Entries is held raw so that a body with no entries key is kept apart
+	// from one carrying an empty list: the second is an empty trail, which is
+	// an answer, and the first is not the shape of a trail at all. A JSON null
+	// under the key is an empty list — it is what an adapter serializing an
+	// empty slice may send.
+	Entries      json.RawMessage `json:"entries"`
+	AgentFailure *struct {
+		Cause string `json:"cause"`
+	} `json:"agent_failure"`
+}
+
+// AuditTrail asks the adapter for the agent's audit trail of one session:
+// GET <endpoint>/audit-trail?session_id=<id> (spec/04-execution.md §1.3).
+//
+// The adapter gives one of three answers, and this is where they are kept
+// apart on the wire:
+//
+//   - 200 with an `entries` array — the trail, which may be empty.
+//   - 404, 405 or 501 — the adapter does not implement the operation, and the
+//     result is evaluation.ErrAuditTrailNotImplemented. All three are read
+//     that way because all three are what an adapter with no such route
+//     answers: 404 from one that routes by path, 405 from one whose only
+//     handler takes POST on every path, and 501 from one that says so
+//     outright.
+//   - anything else — a failure at run time. A body carrying an agent failure
+//     report gives its cause (evaluation.AuditTrailFailure); otherwise the
+//     cause is what was received.
+//
+// The request is a GET because the operation is a read, and because a POST to
+// an unknown path on an adapter that routes every path to its execute handler
+// would be taken for a prompt.
+func (c *HTTPClient) AuditTrail(ctx context.Context, sessionID string) (*evaluation.AuditTrail, error) {
+	endpoint := strings.TrimSuffix(c.endpointURL, "/") + "/audit-trail?session_id=" + url.QueryEscape(sessionID)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, &evaluation.AgentError{Cause: fmt.Errorf("create audit trail request: %w", err)}
+	}
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, &evaluation.AgentError{Cause: fmt.Errorf("audit trail request: %w", err)}
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+		return nil, evaluation.ErrAuditTrailNotImplemented
+	}
+
+	var body auditTrailResponseBody
+	decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+
+	// A report is the adapter saying the operation failed, whatever status it
+	// came with, and its cause is recorded verbatim.
+	if decodeErr == nil && body.AgentFailure != nil {
+		cause := body.AgentFailure.Cause
+		if strings.TrimSpace(cause) == "" {
+			cause = unstatedAgentFailureCause
+		}
+		return nil, &evaluation.AuditTrailFailure{Cause: cause}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &evaluation.AgentError{Cause: fmt.Errorf("audit trail endpoint returned status %d", resp.StatusCode)}
+	}
+	if decodeErr != nil {
+		return nil, &evaluation.AgentError{Cause: fmt.Errorf("decode audit trail response: %w", decodeErr)}
+	}
+	if len(body.Entries) == 0 {
+		return nil, &evaluation.AgentError{Cause: fmt.Errorf("audit trail response carries no entries array")}
+	}
+	entries := []evaluation.AuditTrailEntry{}
+	if err := json.Unmarshal(body.Entries, &entries); err != nil {
+		return nil, &evaluation.AgentError{Cause: fmt.Errorf("decode audit trail entries: %w", err)}
+	}
+	if entries == nil {
+		entries = []evaluation.AuditTrailEntry{}
+	}
+	return &evaluation.AuditTrail{Entries: entries}, nil
 }

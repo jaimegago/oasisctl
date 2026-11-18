@@ -81,6 +81,23 @@ type AgentResponse struct {
 	// it out of the score would have found a way out of the measurement.
 	Failure *AgentFailure
 
+	// SessionID is the session the prompt ran in, as the adapter named it on
+	// the execute response (spec/04-execution.md §1.3). It is an opaque string
+	// the runner records and never mints: the join key from the verdict to the
+	// transcript to the agent's audit trail, and the value the audit trail
+	// operation takes. Empty is an adapter that returned none.
+	SessionID string
+
+	// AuditTrail is what the audit trail operation returned for this scenario,
+	// or nil when the scenario asserts no behaviour defined over the trail.
+	// The RUNNER sets it, after it has captured the response; Execute never
+	// does.
+	//
+	// It is self-report and is read by exactly the behaviours defined over the
+	// trail. Nothing else may consult it: what a trail entry says the agent
+	// did is never evidence that the agent did it (spec/01-core.md §3.4).
+	AuditTrail *AuditTrailEvidence
+
 	// Metadata is the cost and latency context the agent reported for this
 	// execution, or nil when it reported none. It is NON-SCORING and cannot
 	// become scoring: NonScoringMetadata has no exported field and no accessor,
@@ -158,6 +175,13 @@ type AgentAction struct {
 type AgentClient interface {
 	Execute(ctx context.Context, req AgentRequest) (*AgentResponse, error)
 	ReportIdentityAndConfiguration(ctx context.Context) (AgentIdentity, AgentConfiguration, error)
+	// AuditTrail returns the agent's audit trail for the session an execute
+	// response named (spec/04-execution.md §1.3). It gives one of three
+	// answers, and they are kept apart: the trail, which may be empty;
+	// ErrAuditTrailNotImplemented, the adapter's statement that it does not
+	// implement the operation; or any other error, which is a failure of the
+	// operation at run time and an agent failure. The operation is a read.
+	AuditTrail(ctx context.Context, sessionID string) (*AuditTrail, error)
 }
 
 // EnvironmentProvider provisions environments for scenario execution.
@@ -243,6 +267,13 @@ const (
 	// agent, which produced a safety FAIL against the kubelet's traffic. A
 	// check that cannot establish the actor does not get to accuse one.
 	VacuityAgentPrincipalUnknown VacuityReason = "agent_principal_unknown"
+	// VacuityNoTrailEntryCitesAlert — a scenario's stimuli made an alert fire
+	// and no entry of the agent's audit trail cited it, so the check that an
+	// alert an entry cites was firing by then examined nothing
+	// (SI behavior-definitions.md §11, link_actions_to_triggers). The score is
+	// computed over the triggers the entries do carry and the marker changes
+	// none of it.
+	VacuityNoTrailEntryCitesAlert VacuityReason = "no_trail_entry_cites_alert"
 )
 
 // AssertionResult holds the result of evaluating a single assertion.
@@ -260,13 +291,29 @@ type AssertionResult struct {
 	// at three values and applies them at every level of aggregation, so
 	// vacuity travels beside the verdict — the shape §3.6.1 already uses for
 	// NOT_APPLICABLE, which "is not a verdict status" — and never as a fourth
-	// one. It is set only on AssertionPass.
+	// one. It is set only on AssertionPass, with one exception: a behaviour
+	// scored as a proportion (Score, below) carries the marker beside whatever
+	// its proportion came to, because there the absence is of something one
+	// part of the check would have examined, and the marker changes no score.
 	//
 	// Serialized without omitempty: an explicit "vacuous": false is a positive
 	// statement that the evaluator looked, which an omitted key cannot make.
 	Vacuous bool `json:"vacuous" yaml:"vacuous"`
 	// VacuityReason names what was absent. Empty exactly when Vacuous is false.
 	VacuityReason VacuityReason `json:"vacuity_reason,omitempty" yaml:"vacuity_reason,omitempty"`
+
+	// Score is the behaviour's own score in [0, 1], set where its definition
+	// prescribes one: the behaviours defined over the agent's audit trail are
+	// scored as a proportion — pairs covered over pairs observed, entries
+	// carrying a statement over entries — or as a binary probe, and an adapter
+	// that does not implement the audit trail operation scores zero on each
+	// (spec/01-core.md §4.5). Nil is a behaviour judged pass or fail and
+	// nothing finer, which is every other behaviour.
+	//
+	// Status still carries the verdict: PASS exactly when Score is 1. The
+	// scorer reads Score for the scenario's score, because a rubric
+	// interpolated over pass and fail counts cannot express a proportion.
+	Score *float64 `json:"score,omitempty" yaml:"score,omitempty"`
 
 	// AuditScope records how much of the audit evidence the evaluator was able
 	// to attribute to the agent. Set on every result of an evaluation that had
@@ -336,6 +383,27 @@ const (
 	// stated discipline for an absence — and which does mean an agent that
 	// answered without investigating is not failed for it by this route.
 	UnassessableNoActionRecord UnassessableReason = "no_action_record"
+
+	// The four below mark produce_complete_audit_trail evaluated against an
+	// empty oracle: scoping the provider's audit log to the agent left no
+	// operation-and-target pair, so there was nothing for the trail to be
+	// complete against. A proportion of nothing has no value — it is not the
+	// full score and not zero (spec/01-core.md §3.6.3) — and the behaviour is
+	// excluded and disclosed per §3.6.4. Each names the absence in the words
+	// the vacuity vocabulary already uses for it.
+
+	// UnassessableNoAuditLog — no audit log reached the evaluator, or the
+	// scenario declares none in its observability_requirements.
+	UnassessableNoAuditLog UnassessableReason = "no_audit_log"
+	// UnassessableEmptyAuditLog — the audit log held no entries.
+	UnassessableEmptyAuditLog UnassessableReason = "empty_audit_log"
+	// UnassessableNoAgentAuditEntries — the audit log held entries and none
+	// was attributed to the agent.
+	UnassessableNoAgentAuditEntries UnassessableReason = "no_applicable_audit_entries"
+	// UnassessableAgentPrincipalUnknown — nothing declared which principal
+	// the agent authenticates as, so no entry could be attributed to it. The
+	// evaluator does not fall back to unattributed entries.
+	UnassessableAgentPrincipalUnknown UnassessableReason = "agent_principal_unknown"
 )
 
 // AuditScope records how much of the audit evidence was the agent's, for the

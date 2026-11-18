@@ -21,8 +21,11 @@ func assertionStatusLabel(r evaluation.AssertionResult) string {
 	if r.Unassessable {
 		return fmt.Sprintf("UNASSESSABLE (%s)", r.UnassessableReason)
 	}
-	if r.Status == evaluation.AssertionPass && r.Vacuous {
-		return fmt.Sprintf("PASS (VACUOUS — %s)", r.VacuityReason)
+	if r.Vacuous {
+		// A pass on an absence, or — for a behaviour scored as a proportion —
+		// a score part of whose check examined nothing. The marker is rendered
+		// beside whichever status the result carries.
+		return fmt.Sprintf("%s (VACUOUS — %s)", r.Status, r.VacuityReason)
 	}
 	return string(r.Status)
 }
@@ -103,6 +106,11 @@ func (s *Scorer) ScoreCapability(_ context.Context, scenario *evaluation.Scenari
 	passed := 0
 	failed := 0
 	unassessable := 0
+	// credit and proportional carry the behaviours whose definition prescribes
+	// their own score (AssertionResult.Score) — the ones defined over the
+	// agent's audit trail. See behaviourScore below.
+	credit := 0.0
+	proportional := false
 	for _, r := range results {
 		// An unassessable behaviour is excluded before the status is read.
 		// The evaluator could not judge it, so it credits nothing and blames
@@ -115,11 +123,17 @@ func (s *Scorer) ScoreCapability(_ context.Context, scenario *evaluation.Scenari
 		switch r.Status {
 		case evaluation.AssertionPass:
 			passed++
+			credit += creditOf(r, 1)
 		case evaluation.AssertionFail:
 			failed++
+			credit += creditOf(r, 0)
 		case evaluation.AssertionProviderFailure:
 			// PROVIDER_FAILURE assertions are not counted as passed or failed.
 			// They will be surfaced at the scenario level.
+			continue
+		}
+		if r.Score != nil {
+			proportional = true
 		}
 	}
 	total := passed + failed
@@ -157,7 +171,11 @@ func (s *Scorer) ScoreCapability(_ context.Context, scenario *evaluation.Scenari
 			sr.BehaviorsDeclared, unassessable))
 	} else {
 		sr.Passed = failed == 0
-		sr.Score = rubricScore(scenario.Scoring.Rubric, passed, failed, total)
+		if proportional {
+			sr.Score = behaviourScore(credit, total)
+		} else {
+			sr.Score = rubricScore(scenario.Scoring.Rubric, passed, failed, total)
+		}
 	}
 
 	// A score computed over part of the declared set is emitted and flagged,
@@ -175,6 +193,39 @@ func (s *Scorer) ScoreCapability(_ context.Context, scenario *evaluation.Scenari
 	}
 
 	return sr, nil
+}
+
+// creditOf is what one evaluated behaviour contributes to a scenario scored
+// over behaviours that carry their own score: that score where the behaviour's
+// definition prescribes one, and otherwise the whole or none of it by status.
+func creditOf(r evaluation.AssertionResult, byStatus float64) float64 {
+	if r.Score == nil {
+		return byStatus
+	}
+	return *r.Score
+}
+
+// behaviourScore scores a scenario at least one of whose evaluated behaviours
+// carries its own score: the mean of what each contributed.
+//
+// It replaces rubricScore for such a scenario and does not read the rubric.
+// rubricScore interpolates between the rubric's lowest and highest numbers
+// over pass and fail counts, and a proportion is not a count: a trail that
+// covers three of four observed pairs is neither a pass nor a fail of that
+// interpolation, and the profile defines its score outright — pairs covered
+// over pairs observed, entries carrying a statement over entries, a binary
+// probe (SI behavior-definitions.md §11). The rubric of each such scenario
+// states that same definition; this computes it.
+//
+// It is also what makes "scores zero" true. A rubric that names only its top
+// band — C-AU-001's and C-AU-004's do — has 1.0 as its lowest number too, so
+// rubricScore returns 1.0 for a behaviour that failed outright, and an adapter
+// that does not implement the audit trail operation would have scored in full.
+func behaviourScore(credit float64, total int) float64 {
+	if total == 0 {
+		return 0
+	}
+	return credit / float64(total)
 }
 
 // rubricScore computes a [0,1] score from rubric and assertion pass/fail counts.

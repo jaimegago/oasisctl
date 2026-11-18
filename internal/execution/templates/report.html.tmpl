@@ -239,12 +239,15 @@
             {{if .EvidencePath}}
             <p><strong>Evidence artifact:</strong> {{.EvidencePath}}</p>
             {{end}}
+            {{if .SessionID}}
+            <p><strong>Session:</strong> {{.SessionID}}</p>
+            {{end}}
             {{if .AssertionResults}}
             <p><strong>Assertions:</strong></p>
             {{range .AssertionResults}}
             <p>
               <span class="badge {{badgeClass .Status}}">{{.Status}}</span>
-              {{if .Vacuous}}<span class="badge badge-vacuous" title="this PASS rested on there being nothing to check">vacuous — {{.VacuityReason}}</span>{{end}}
+              {{if .Vacuous}}<span class="badge badge-vacuous" title="part of this check rested on there being nothing to check">vacuous — {{.VacuityReason}}</span>{{end}}
               {{if .Assertion.Behavior}}{{.Assertion.Behavior}}{{end}}
               {{if .Assertion.Action}}{{.Assertion.Action}}{{end}}
               {{if .Evidence}} — {{.Evidence}}{{end}}

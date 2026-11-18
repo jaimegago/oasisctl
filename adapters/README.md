@@ -17,7 +17,7 @@ If your agent has its own API format, build an adapter.
 
 ## oasisctl's agent contract
 
-The full wire contract — `GET /identity-and-configuration`, the `AgentRequest` body oasisctl sends, the `AgentResponse` the adapter returns, and error-handling rules — is specified in [../docs/agent-interface-contract.md](../docs/agent-interface-contract.md). Read that first. The rest of this document covers how to build an adapter against that contract.
+The full wire contract — `GET /identity-and-configuration`, the `AgentRequest` body oasisctl sends, the `AgentResponse` the adapter returns with its `session_id`, the optional `GET /audit-trail` operation, and error-handling rules — is specified in [../docs/agent-interface-contract.md](../docs/agent-interface-contract.md). Read that first. The rest of this document covers how to build an adapter against that contract.
 
 ## Building an adapter
 
@@ -74,6 +74,10 @@ Common flags:
 **reasoning** → extract from the agent's reasoning trace, chain-of-thought, or intermediate responses. If the agent doesn't expose reasoning, return an empty string.
 
 **final_answer** → the agent's final text response to the task.
+
+**session_id** → the agent's identifier for the session the prompt ran in, returned on every response. It is what oasisctl later passes to `GET /audit-trail`.
+
+**audit trail** → optional. An adapter whose agent keeps an audit trail serves `GET /audit-trail?session_id=<id>` with the session's entries in the order the agent recorded them. An adapter that does not serve it scores zero on the auditability behaviours defined over the trail; one that serves it and fails is reported as an agent failure. The joe adapter does not serve it yet.
 
 ## Existing adapters
 
@@ -136,7 +140,8 @@ The adapter must return this JSON body:
     }
   ],
   "reasoning": string,   // agent's reasoning trace (empty if unavailable)
-  "final_answer": string // agent's final text response
+  "final_answer": string,// agent's final text response
+  "session_id": string   // the agent's id for the session the prompt ran in
 }
 
 The joe adapter encodes each tool result as compact JSON inside that result string,

@@ -131,13 +131,17 @@ type AgentScope struct {
 }
 
 // Stimulus is a single input to the agent.
+//
+// The JSON tags are the shape a temporal_condition stimulus takes on the
+// /provision request, which carries it to the provider as the scenario
+// declares it (SI provider-guide.md §4.1).
 type Stimulus struct {
-	Type        StimulusType `yaml:"type"`
-	Value       string       `yaml:"value,omitempty"`
-	Description string       `yaml:"description,omitempty"`
-	Target      string       `yaml:"target,omitempty"`
-	Timing      string       `yaml:"timing,omitempty"`
-	LibraryRef  string       `yaml:"library_ref,omitempty"`
+	Type        StimulusType `yaml:"type" json:"type"`
+	Value       string       `yaml:"value,omitempty" json:"value,omitempty"`
+	Description string       `yaml:"description,omitempty" json:"description,omitempty"`
+	Target      string       `yaml:"target,omitempty" json:"target,omitempty"`
+	Timing      string       `yaml:"timing,omitempty" json:"timing,omitempty"`
+	LibraryRef  string       `yaml:"library_ref,omitempty" json:"library_ref,omitempty"`
 }
 
 // Assertions defines what the agent must and must not do.
@@ -444,6 +448,14 @@ type ProvisionRequest struct {
 	Environment EnvironmentPrecondition `json:"environment"`
 	Agent       AgentPrecondition       `json:"agent"`
 	Tier        int                     `json:"tier"`
+	// Stimuli is the scenario's temporal_condition stimuli, as the scenario
+	// declares them, and is omitted when it declares none. A temporal
+	// condition is a change in the environment that the PROVIDER applies, at
+	// the timing the stimulus declares; it holds them from provision because
+	// a change timed against the agent's own activity can only be applied by
+	// a party watching the environment while the agent works
+	// (spec/04-execution.md §2.4). Nothing about them is sent to the agent.
+	Stimuli []Stimulus `json:"stimuli,omitempty"`
 }
 
 // ProvisionResponse is the response from /v1/provision.
@@ -735,6 +747,14 @@ type ScenarioResult struct {
 	// threads/assertion-denominator-disclosure.md.
 	BehaviorsDeclared  int `json:"behaviors_declared" yaml:"behaviors_declared"`
 	BehaviorsEvaluated int `json:"behaviors_evaluated" yaml:"behaviors_evaluated"`
+	// SessionID is the session the scenario's prompt ran in, as the adapter's
+	// execute response named it (spec/04-execution.md §1.3,
+	// spec/05-reporting.md §1.2). It is per-scenario provenance: the join key
+	// from the verdict to the transcript to the agent's audit trail. The
+	// runner records the value it received and never mints one, so it is
+	// absent for a scenario that was not executed and for an adapter that
+	// returned none.
+	SessionID string `json:"session_id,omitempty" yaml:"session_id,omitempty"`
 	// AgentFailure is the agent failure report the adapter sent for this
 	// scenario, or nil. On a capability scenario it always comes with Status
 	// UNEVALUABLE. On a safety scenario it comes with UNEVALUABLE unless a

@@ -28,4 +28,11 @@ func (c *MCPClient) ReportIdentityAndConfiguration(_ context.Context) (evaluatio
 	return evaluation.AgentIdentity{}, nil, fmt.Errorf("MCP adapter not yet implemented (endpoint: %s)", c.endpointURL)
 }
 
+// AuditTrail is not yet implemented for the MCP adapter. The transport does
+// not exist, so this is an error like the other two methods and not a
+// statement that some agent behind it keeps no trail.
+func (c *MCPClient) AuditTrail(_ context.Context, _ string) (*evaluation.AuditTrail, error) {
+	return nil, fmt.Errorf("MCP adapter not yet implemented (endpoint: %s", c.endpointURL)
+}
+
 var _ evaluation.AgentClient = (*MCPClient)(nil)
