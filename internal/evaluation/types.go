@@ -2,6 +2,7 @@ package evaluation
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -252,15 +253,24 @@ type Suite struct {
 
 // Profile is the full in-memory representation of a loaded domain profile.
 type Profile struct {
-	Metadata                        ProfileMetadata
-	Vocabulary                      []VocabularyEntry
-	BehaviorDefinitions             map[string]BehaviorDefinition
-	InterfaceTypes                  []string
-	StimulusLibrary                 map[string]Stimulus
-	SafetyCategories                []Category
-	CapabilityCategories            []Category
-	ScoringModel                    ScoringModel
-	TierRequirements                map[int]TierRequirement
+	Metadata             ProfileMetadata
+	Vocabulary           []VocabularyEntry
+	BehaviorDefinitions  map[string]BehaviorDefinition
+	InterfaceTypes       []string
+	StimulusLibrary      map[string]Stimulus
+	SafetyCategories     []Category
+	CapabilityCategories []Category
+	ScoringModel         ScoringModel
+	// TierRequirements is the profile's minimum evaluation coverage per
+	// complexity tier (spec/03-profiles.md §2.7), keyed by tier. A tier the
+	// profile does not state a minimum for has no entry, and coverage for a
+	// claim at that tier cannot be established.
+	TierRequirements map[int]TierRequirement
+	// Scenarios is the profile's whole scenario suite (spec/03-profiles.md
+	// §2.8), whatever subset a run selects. Minimum coverage is computed
+	// against it: which archetypes a configuration can run is a fact about the
+	// profile, and a run's filters must not be able to change it.
+	Scenarios                       []Scenario
 	Subcategories                   []SubcategoryDefinition
 	IntentPromotion                 IntentPromotionConfig
 	AgentConfigurationSchema        *AgentConfigurationSchema
@@ -396,12 +406,36 @@ type DimensionConfig struct {
 	ContributingCategories map[string]float64
 }
 
-// TierRequirement specifies what an environment must provide at a given tier.
+// TierRequirement is a complexity tier's minimum evaluation coverage, as the
+// profile states it (spec/03-profiles.md §2.7, spec/01-core.md §5).
+//
+// It carries coverage only. What an environment must provide at the tier is
+// verified by the provider, which returns TierEvidence; the evaluator checks
+// that evidence and does not re-derive it.
 type TierRequirement struct {
-	Tier               int
-	Description        string
-	RequiredInterfaces []string
-	MinCoverage        map[string]int
+	Tier int
+	// Safety and Capability are the minimum number of archetypes per category
+	// for each classification.
+	Safety     CoverageMinimum
+	Capability CoverageMinimum
+	// Uncomputed holds, verbatim, every minimum-coverage requirement the
+	// profile states for this tier that is not an archetypes-per-category
+	// figure. The evaluator cannot compute them, so a claim at a tier that
+	// carries any is reported as not having met minimum coverage, with the
+	// requirement named, and never as having met it by omission.
+	Uncomputed []string
+}
+
+// CoverageMinimum is a tier's minimum archetype coverage per category for one
+// classification.
+type CoverageMinimum struct {
+	// Declared is false when the profile states no figure for the
+	// classification at this tier.
+	Declared bool
+	// All means every archetype applicable to the agent's configuration.
+	All bool
+	// Archetypes is the minimum count per category when All is false.
+	Archetypes int
 }
 
 // ProvisionRequest is the body sent to /v1/provision.
@@ -768,7 +802,15 @@ type EvaluationMode struct {
 	SafetyOnly    bool     `json:"safety_only" yaml:"safety_only"`
 	Categories    []string `json:"categories,omitempty" yaml:"categories,omitempty"`
 	Subcategories []string `json:"subcategories,omitempty" yaml:"subcategories,omitempty"`
-	Complete      bool     `json:"complete" yaml:"complete"`
+	// Complete is true only when no filter was active, the capability phase
+	// ran, and minimum coverage for the claimed tier was met
+	// (spec/05-reporting.md §2.5, §3.3). It used to mean only that no filter
+	// was passed, which let a run stopped at the safety gate report itself
+	// complete.
+	Complete bool `json:"complete" yaml:"complete"`
+	// IncompleteReasons says why Complete is false, one entry per cause.
+	// Empty exactly when Complete is true.
+	IncompleteReasons []string `json:"incomplete_reasons,omitempty" yaml:"incomplete_reasons,omitempty"`
 }
 
 // SafetyVerdict represents the top-level safety outcome per spec/01-core.md §3.6.
@@ -832,9 +874,14 @@ type Verdict struct {
 	CategoryScores        map[string]CategoryScore
 	ArchetypeScores       map[string]ArchetypeScore
 	OASISCoreSpec         string
-	Report                *Report
-	Aborted               bool
-	AbortReason           string
+	// Environment is the claimed tier and the provider's evidence that the
+	// environment meets it, verified before any scenario ran.
+	Environment ReportEnvironment
+	// CoverageMatrix is the run's coverage against the claimed tier's minimum.
+	CoverageMatrix *CoverageMatrix
+	Report         *Report
+	Aborted        bool
+	AbortReason    string
 }
 
 // Report is the full evaluation report.
@@ -845,7 +892,7 @@ type Report struct {
 	ConfigurationCoverage *ConfigurationCoverage `json:"configuration_coverage,omitempty" yaml:"configuration_coverage,omitempty"`
 	SafetySummary         SafetySummary          `json:"safety_summary" yaml:"safety_summary"`
 	CapabilitySummary     *CapabilitySummary     `json:"capability_summary,omitempty" yaml:"capability_summary,omitempty"`
-	CoverageMatrix        map[string][]string    `json:"coverage_matrix,omitempty" yaml:"coverage_matrix,omitempty"`
+	CoverageMatrix        *CoverageMatrix        `json:"coverage_matrix,omitempty" yaml:"coverage_matrix,omitempty"`
 	ScenarioDetails       []ScenarioResult       `json:"scenario_details" yaml:"scenario_details"`
 }
 
@@ -913,10 +960,188 @@ func CollectAgentFailures(results ...[]ScenarioResult) []AgentFailureRecord {
 	return out
 }
 
-// ReportEnvironment captures environment details for the report.
+// ReportEnvironment captures environment details for the report
+// (spec/05-reporting.md §2.2).
 type ReportEnvironment struct {
-	TierClaimed int    `json:"tier_claimed" yaml:"tier_claimed"`
-	Evidence    string `json:"evidence" yaml:"evidence"`
+	TierClaimed int `json:"tier_claimed" yaml:"tier_claimed"`
+	// Evidence is the one-line rendering of TierEvidence. It is never empty on
+	// a run that started: a provider that returns no tier evidence aborts the
+	// run before any scenario.
+	Evidence string `json:"evidence" yaml:"evidence"`
+	// TierEvidence is the provider's evidence that the environment meets the
+	// claimed tier, verbatim.
+	TierEvidence *TierEvidence `json:"tier_evidence,omitempty" yaml:"tier_evidence,omitempty"`
+}
+
+// TierEvidence is what a provider returns to show that the environment meets
+// a complexity tier's requirements (spec/08-provider-conformance.md §3.6).
+//
+// The spec requires the evidence and does not fix its shape. This is the shape
+// the petri provider produces, accepted as it stands: the tier the provider
+// verified against, when it read the environment, and one check per
+// requirement saying what the tier asks, what was observed, and the outcome.
+type TierEvidence struct {
+	// Tier is the complexity tier the checks belong to.
+	Tier int `json:"tier" yaml:"tier"`
+	// Met is the provider's own conclusion: true when no check is unmet.
+	Met bool `json:"met" yaml:"met"`
+	// ObservedAt is when the provider read the environment, when it says.
+	ObservedAt *time.Time  `json:"observed_at,omitempty" yaml:"observed_at,omitempty"`
+	Checks     []TierCheck `json:"checks" yaml:"checks"`
+}
+
+// TierCheck is one tier requirement beside what the environment shows.
+// Requirement, Required and Observed are the provider's words and are not
+// parsed.
+type TierCheck struct {
+	Requirement string          `json:"requirement" yaml:"requirement"`
+	Required    string          `json:"required" yaml:"required"`
+	Observed    string          `json:"observed" yaml:"observed"`
+	Status      TierCheckStatus `json:"status" yaml:"status"`
+}
+
+// TierCheckStatus is the outcome of one tier check. The vocabulary is closed:
+// evidence carrying any other value is rejected.
+type TierCheckStatus string
+
+const (
+	// TierCheckMet: the environment shows what the tier requires.
+	TierCheckMet TierCheckStatus = "met"
+	// TierCheckUnmet: it does not, or it could not be read.
+	TierCheckUnmet TierCheckStatus = "unmet"
+	// TierCheckNotAssessed: the observation is reported and no verdict is
+	// drawn from it. It never fails verification, and it is never read as
+	// met: the verdict's evidence names it as not assessed.
+	TierCheckNotAssessed TierCheckStatus = "not_assessed"
+)
+
+// TierEvidenceSummary renders tier evidence as the one-line summary the
+// verdict format asks for (spec/05-reporting.md §1, `tier_evidence`). Checks
+// the provider reported without assessing are listed apart, so a reader never
+// takes them for requirements shown to be met.
+func TierEvidenceSummary(provider, providerVersion string, ev *TierEvidence) string {
+	if ev == nil {
+		return ""
+	}
+	who := strings.TrimSpace(provider + " " + providerVersion)
+	if who == "" {
+		who = "provider"
+	}
+	var met, notAssessed []string
+	for _, c := range ev.Checks {
+		line := fmt.Sprintf("%s: %s", c.Requirement, c.Observed)
+		if c.Required != "" {
+			line += fmt.Sprintf(" (required: %s)", c.Required)
+		}
+		if c.Status == TierCheckNotAssessed {
+			notAssessed = append(notAssessed, line)
+		} else {
+			met = append(met, line)
+		}
+	}
+	out := fmt.Sprintf("%s verified the environment against tier %d", who, ev.Tier)
+	if ev.ObservedAt != nil {
+		out += " at " + ev.ObservedAt.UTC().Format(time.RFC3339)
+	}
+	out += ": " + strings.Join(met, "; ")
+	if len(notAssessed) > 0 {
+		out += ". Reported and not assessed: " + strings.Join(notAssessed, "; ")
+	}
+	return out
+}
+
+// CoverageMatrix is the report's coverage section (spec/05-reporting.md
+// §2.5): per category, the archetypes evaluated and skipped, and whether
+// minimum coverage for the claimed tier was met.
+type CoverageMatrix struct {
+	// Tier is the claimed complexity tier the minimum was taken from.
+	Tier int `json:"tier" yaml:"tier"`
+	// MinimumCoverageMet is true only when every category that is not
+	// excluded met the tier's minimum, and the tier carries no requirement the
+	// evaluator cannot compute. Emitted when false.
+	MinimumCoverageMet bool `json:"minimum_coverage_met" yaml:"minimum_coverage_met"`
+	// Unmet says why MinimumCoverageMet is false, one entry per cause. Empty
+	// exactly when it is true.
+	Unmet []string `json:"unmet,omitempty" yaml:"unmet,omitempty"`
+	// Categories lists every category the profile declares, safety first, in
+	// the profile's declaration order.
+	Categories []CategoryCoverage `json:"categories" yaml:"categories"`
+}
+
+// CoverageStatement renders whether minimum coverage for the claimed tier was
+// met, in one line, naming every cause when it was not
+// (spec/05-reporting.md §2.5).
+func CoverageStatement(cm *CoverageMatrix) string {
+	if cm == nil {
+		return ""
+	}
+	if cm.MinimumCoverageMet {
+		return fmt.Sprintf("Minimum coverage for tier %d: met.", cm.Tier)
+	}
+	return fmt.Sprintf("Minimum coverage for tier %d: NOT MET — %s. This evaluation is incomplete.", cm.Tier, strings.Join(cm.Unmet, "; "))
+}
+
+// CoverageStatus is a category's standing against the tier's minimum.
+type CoverageStatus string
+
+const (
+	// CoverageMet: the category evaluated at least the minimum.
+	CoverageMet CoverageStatus = "met"
+	// CoverageUnmet: it did not.
+	CoverageUnmet CoverageStatus = "unmet"
+	// CoverageExcluded: the category has no archetype applicable to the
+	// agent's configuration, so it is out of the count — not a failure to
+	// cover (spec/05-reporting.md §3.3; SI profile §8.1).
+	CoverageExcluded CoverageStatus = "excluded"
+)
+
+// CategoryCoverage is one category's coverage.
+type CategoryCoverage struct {
+	Category       string         `json:"category" yaml:"category"`
+	Classification Classification `json:"classification" yaml:"classification"`
+	Status         CoverageStatus `json:"status" yaml:"status"`
+	// ArchetypesDeclared is how many archetypes the category declares, and
+	// ArchetypesApplicable how many of them have a scenario the agent's
+	// configuration can run.
+	ArchetypesDeclared   int `json:"archetypes_declared" yaml:"archetypes_declared"`
+	ArchetypesApplicable int `json:"archetypes_applicable" yaml:"archetypes_applicable"`
+	// ArchetypesRequired is the tier's minimum for this category. Zero for an
+	// excluded category, and for one whose minimum the profile does not state.
+	ArchetypesRequired int `json:"archetypes_required" yaml:"archetypes_required"`
+	// ArchetypesEvaluated names the archetypes with at least one scenario that
+	// reached a verdict or a score, in the category's declaration order.
+	// Emitted when empty.
+	ArchetypesEvaluated []string `json:"archetypes_evaluated" yaml:"archetypes_evaluated"`
+	// ArchetypesSkipped names every other declared archetype and why.
+	ArchetypesSkipped []SkippedArchetype `json:"archetypes_skipped,omitempty" yaml:"archetypes_skipped,omitempty"`
+}
+
+// SkipReason is why a declared archetype was not evaluated. The vocabulary is
+// closed so a consumer never has to parse Detail to learn it.
+type SkipReason string
+
+const (
+	// SkipNotApplicable: the agent's configuration excludes every scenario of
+	// the archetype.
+	SkipNotApplicable SkipReason = "not_applicable"
+	// SkipNoScenario: the profile's suite holds no scenario of the archetype
+	// at or below the claimed tier.
+	SkipNoScenario SkipReason = "no_scenario"
+	// SkipNotRun: a scenario exists and applies, and the run did not execute
+	// it — a filter excluded it, or its phase did not run.
+	SkipNotRun SkipReason = "not_run"
+	// SkipNotEvaluated: a scenario ran and reached neither a verdict nor a
+	// score — a provision error, a provider failure, an agent failure, or
+	// every behaviour unassessable.
+	SkipNotEvaluated SkipReason = "not_evaluated"
+)
+
+// SkippedArchetype is one declared archetype that was not evaluated, with its
+// justification (spec/05-reporting.md §2.5).
+type SkippedArchetype struct {
+	Archetype string     `json:"archetype" yaml:"archetype"`
+	Reason    SkipReason `json:"reason" yaml:"reason"`
+	Detail    string     `json:"detail,omitempty" yaml:"detail,omitempty"`
 }
 
 // SafetySummary holds the safety gate outcome.
@@ -1050,6 +1275,10 @@ type ConformanceResponse struct {
 	Supported             bool                    `json:"supported"`
 	Requirements          ConformanceRequirements `json:"requirements"`
 	UnmetRequirements     []UnmetRequirement      `json:"unmet_requirements,omitempty"`
+	// TierEvidence is the provider's evidence that the environment meets a
+	// complexity tier (spec/08-provider-conformance.md §3.6). A response
+	// without it fails tier verification: the run aborts before any scenario.
+	TierEvidence *TierEvidence `json:"tier_evidence,omitempty"`
 }
 
 // UnmetRequirement describes a single requirement the provider cannot satisfy.

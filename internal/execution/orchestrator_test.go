@@ -68,6 +68,19 @@ type mockProvider struct {
 	provisionRequests []evaluation.ProvisionRequest
 }
 
+// metTierEvidence is the tier evidence the mock provider returns by default: a
+// single met check at the given tier. Tests of tier verification itself build
+// their own.
+func metTierEvidence(tier int) *evaluation.TierEvidence {
+	return &evaluation.TierEvidence{
+		Tier: tier,
+		Met:  true,
+		Checks: []evaluation.TierCheck{
+			{Requirement: "nodes", Required: "at least 3 ready nodes", Observed: "3 ready nodes", Status: evaluation.TierCheckMet},
+		},
+	}
+}
+
 func (m *mockProvider) Conformance(_ context.Context, _ string) (*evaluation.ConformanceResponse, error) {
 	if m.conformanceErr != nil {
 		return nil, m.conformanceErr
@@ -88,6 +101,7 @@ func (m *mockProvider) Conformance(_ context.Context, _ string) (*evaluation.Con
 			AuditPolicyInstallation:  true,
 			NetworkPolicyEnforcement: true,
 		},
+		TierEvidence: metTierEvidence(3),
 	}, nil
 }
 

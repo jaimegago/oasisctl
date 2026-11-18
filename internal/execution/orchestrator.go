@@ -196,7 +196,8 @@ func (o *Orchestrator) Run(
 
 	// Step 0: Preflight conformance check per spec/04-execution.md §3.
 	// Runs after dry-run so dry-run mode does not require provider connectivity.
-	if err := o.preflightConformanceCheck(ctx, profile); err != nil {
+	conformance, err := o.preflightConformanceCheck(ctx, profile)
+	if err != nil {
 		return nil, err
 	}
 
@@ -216,6 +217,16 @@ func (o *Orchestrator) Run(
 		}
 	} else {
 		effectiveConfig = rawConfig
+	}
+
+	// 3d. Verify the environment against the claimed complexity tier, from
+	// the evidence the provider returned (spec/04-execution.md §3 step 3;
+	// spec/08-provider-conformance.md §3.6). An environment that does not meet
+	// the tier aborts the run here: no scenario is executed and no verdict
+	// file is produced, exactly as for an unmet conformance requirement.
+	tierEvidence, err := VerifyTierEvidence(conformance, o.cfg.Tier)
+	if err != nil {
+		return nil, err
 	}
 
 	// Use agent identity for verdict metadata.
@@ -243,6 +254,33 @@ func (o *Orchestrator) Run(
 		EvaluationMode:     evalMode,
 		AgentConfiguration: effectiveConfig,
 		OASISCoreSpec:      profile.Metadata.OASISCore,
+		Environment: evaluation.ReportEnvironment{
+			TierClaimed:  o.cfg.Tier,
+			Evidence:     evaluation.TierEvidenceSummary(conformance.Provider, conformance.ProviderVersion, tierEvidence),
+			TierEvidence: tierEvidence,
+		},
+	}
+
+	// Coverage is computed against the profile's whole suite, so that what a
+	// run's filters left out reads as uncovered. A loader that carries no
+	// suite on the profile leaves the scenarios this run was handed.
+	suite := profile.Scenarios
+	if len(suite) == 0 {
+		suite = scenarios
+	}
+
+	// finish computes what every exit below owes the report — configuration
+	// coverage, the coverage matrix against the claimed tier's minimum, and
+	// whether the evaluation is complete — and writes it.
+	finish := func(capabilityRan bool) (*evaluation.Verdict, error) {
+		allResults := append(append([]evaluation.ScenarioResult{}, verdict.SafetyResults...), verdict.CapabilityResults...)
+		verdict.ConfigurationCoverage = ComputeConfigurationCoverage(allResults)
+		verdict.CoverageMatrix = ComputeCoverage(profile, suite, effectiveConfig, o.cfg.Tier, allResults)
+		verdict.EvaluationMode = o.finalizeEvaluationMode(verdict, capabilityRan)
+		if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
+			return verdict, fmt.Errorf("write report: %w", err)
+		}
+		return verdict, nil
 	}
 
 	// 4b. Resolve where per-scenario evidence artifacts are written. Fixed for
@@ -266,11 +304,7 @@ func (o *Orchestrator) Run(
 
 	// 6b. Safety-only mode: skip capability phase entirely.
 	if o.cfg.SafetyOnly {
-		verdict.ConfigurationCoverage = ComputeConfigurationCoverage(verdict.SafetyResults)
-		if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
-			return verdict, fmt.Errorf("write report: %w", err)
-		}
-		return verdict, nil
+		return finish(false)
 	}
 
 	if verdict.Safety == evaluation.SafetyVerdictNotEvaluated {
@@ -278,11 +312,7 @@ func (o *Orchestrator) Run(
 	}
 
 	if !verdict.PermitsCapabilityPhase() {
-		verdict.ConfigurationCoverage = ComputeConfigurationCoverage(verdict.SafetyResults)
-		if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
-			return verdict, fmt.Errorf("write report: %w", err)
-		}
-		return verdict, nil
+		return finish(false)
 	}
 
 	// 7. Phase 2 — Capability scoring.
@@ -306,16 +336,8 @@ func (o *Orchestrator) Run(
 		verdict.CapabilityScore = total / float64(len(dimensionScores))
 	}
 
-	// 9. Compute configuration coverage across all results.
-	allResults := append(verdict.SafetyResults, verdict.CapabilityResults...)
-	verdict.ConfigurationCoverage = ComputeConfigurationCoverage(allResults)
-
-	// 10. Build and emit report.
-	if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
-		return verdict, fmt.Errorf("write report: %w", err)
-	}
-
-	return verdict, nil
+	// 9. Compute coverage across all results, then build and emit the report.
+	return finish(true)
 }
 
 // computeSafetyVerdict determines the top-level safety verdict from scenario results.
@@ -361,10 +383,16 @@ func computeSafetyVerdict(results []evaluation.ScenarioResult) (evaluation.Safet
 // preflightConformanceCheck calls the provider's conformance endpoint and validates
 // the response against the profile's requirements. Per spec/04-execution.md §3,
 // this is step 0 before any scenarios are executed.
-func (o *Orchestrator) preflightConformanceCheck(ctx context.Context, profile *evaluation.Profile) error {
+//
+// It returns the provider's response so the tier evidence it carries can be
+// verified at step 3 and recorded in the verdict.
+func (o *Orchestrator) preflightConformanceCheck(ctx context.Context, profile *evaluation.Profile) (*evaluation.ConformanceResponse, error) {
 	resp, err := o.provider.Conformance(ctx, profile.Metadata.Identifier)
 	if err != nil {
-		return fmt.Errorf("preflight conformance check: %w", err)
+		return nil, fmt.Errorf("preflight conformance check: %w", err)
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("preflight conformance check: provider returned no conformance response")
 	}
 
 	// If the provider reports unmet requirements, abort immediately.
@@ -373,17 +401,20 @@ func (o *Orchestrator) preflightConformanceCheck(ctx context.Context, profile *e
 		for _, u := range resp.UnmetRequirements {
 			reasons = append(reasons, fmt.Sprintf("%s: %s", u.Requirement, u.Reason))
 		}
-		return fmt.Errorf("provider does not satisfy profile requirements: %s", joinStrings(reasons))
+		return nil, fmt.Errorf("provider does not satisfy profile requirements: %s", joinStrings(reasons))
 	}
 
 	reqs := profile.ProviderConformanceRequirements
 	if reqs == nil {
 		// Profile does not declare provider conformance requirements;
 		// the unmet-requirements check above is sufficient.
-		return nil
+		return resp, nil
 	}
 
-	return validateConformanceResponse(resp, reqs, o.cfg.Tier)
+	if err := validateConformanceResponse(resp, reqs, o.cfg.Tier); err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 // validateConformanceResponse checks the provider's conformance response against
@@ -1121,6 +1152,10 @@ func (o *Orchestrator) applyFilters(scenarios []evaluation.Scenario) []evaluatio
 }
 
 // buildEvaluationMode returns the EvaluationMode reflecting the current config.
+//
+// Complete here means only that no filter is active. That is all that can be
+// known before a run, and it is what the dry-run summary reports. A run that
+// executes replaces it with finalizeEvaluationMode's answer.
 func (o *Orchestrator) buildEvaluationMode() evaluation.EvaluationMode {
 	mode := evaluation.EvaluationMode{
 		SafetyOnly:    o.cfg.SafetyOnly,
@@ -1128,6 +1163,36 @@ func (o *Orchestrator) buildEvaluationMode() evaluation.EvaluationMode {
 		Subcategories: o.cfg.Subcategories,
 	}
 	mode.Complete = !o.cfg.SafetyOnly && len(o.cfg.Categories) == 0 && len(o.cfg.Subcategories) == 0 && len(o.cfg.ScenarioIDs) == 0
+	return mode
+}
+
+// finalizeEvaluationMode decides, after the run, whether the evaluation is
+// complete, and says why when it is not.
+//
+// An evaluation is complete only when nothing was filtered out, the capability
+// phase ran, and minimum coverage for the claimed tier was met
+// (spec/05-reporting.md §2.5, §3.3). The second condition is the one that was
+// missing: a whole-profile run stopped at the safety gate passed no filter,
+// and reported complete: true over a capability phase that never started.
+func (o *Orchestrator) finalizeEvaluationMode(v *evaluation.Verdict, capabilityRan bool) evaluation.EvaluationMode {
+	mode := v.EvaluationMode
+	var reasons []string
+
+	if o.cfg.SafetyOnly {
+		reasons = append(reasons, "safety-only run: capability scenarios were not executed")
+	}
+	if len(o.cfg.Categories) > 0 || len(o.cfg.Subcategories) > 0 || len(o.cfg.ScenarioIDs) > 0 {
+		reasons = append(reasons, "filtered run: only the selected scenarios were executed")
+	}
+	if !capabilityRan && !o.cfg.SafetyOnly {
+		reasons = append(reasons, fmt.Sprintf("the capability phase did not run: the safety verdict is %s", v.Safety))
+	}
+	if v.CoverageMatrix != nil && !v.CoverageMatrix.MinimumCoverageMet {
+		reasons = append(reasons, fmt.Sprintf("minimum coverage for tier %d was not met", v.CoverageMatrix.Tier))
+	}
+
+	mode.Complete = len(reasons) == 0
+	mode.IncompleteReasons = reasons
 	return mode
 }
 

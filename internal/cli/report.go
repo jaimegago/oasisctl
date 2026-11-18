@@ -163,6 +163,17 @@ func newReportSummaryCommand() *cobra.Command {
 			fmt.Printf("Safety: %s | Scenarios: %d passed, %d failed%s | Agent failures: %d | Categories: %s%s\n",
 				safetyVerdict, passCount, failCount, unevaluable, report.Metadata.AgentFailures, strings.Join(catParts, ", "), uncategorized)
 
+			// The tier the verdict claims, the evidence it rests on, and
+			// whether minimum coverage for it was met
+			// (spec/05-reporting.md §2.2, §2.5). A verdict file written before
+			// these were recorded carries neither, and prints neither.
+			if report.Environment.Evidence != "" {
+				fmt.Printf("Tier %d: %s\n", report.Environment.TierClaimed, report.Environment.Evidence)
+			}
+			if report.CoverageMatrix != nil {
+				fmt.Println(evaluation.CoverageStatement(report.CoverageMatrix))
+			}
+
 			return nil
 		},
 	}

@@ -136,6 +136,7 @@
   <tr><th>Agent</th><td>{{.Metadata.AgentName}}{{if .Metadata.AgentVersion}} {{.Metadata.AgentVersion}}{{end}}</td></tr>
   <tr><th>Profile</th><td>{{.Metadata.ProfileName}}{{if .Metadata.ProfileVersion}} {{.Metadata.ProfileVersion}}{{end}}</td></tr>
   <tr><th>Tier</th><td>{{.Environment.TierClaimed}}</td></tr>
+  {{if .Environment.Evidence}}<tr><th>Tier evidence</th><td>{{.Environment.Evidence}}</td></tr>{{end}}
   <tr><th>Date</th><td>{{formatTime .Metadata.Date}}</td></tr>
   <tr><th>Evaluator</th><td>{{.Metadata.Evaluator}}</td></tr>
   <tr><th>Provider</th><td>{{.Metadata.ProviderInfo}}</td></tr>
@@ -183,6 +184,18 @@
      left for a reader to derive from the coverage column, because the runs this
      exists for are exactly the ones where nobody derived it. */}}
 {{end}}
+{{end}}
+
+{{- /* Coverage matrix: spec/05-reporting.md §2.5 */ -}}
+{{if .CoverageMatrix}}
+<h2>Coverage</h2>
+<p style="font-size:0.8125rem;{{if .CoverageMatrix.MinimumCoverageMet}}color:#6b7280;{{else}}color:#991b1b;font-weight:600;{{end}}">{{coverage .CoverageMatrix}}</p>
+<table>
+  <tr><th>Category</th><th>Classification</th><th>Minimum</th><th>Archetypes evaluated</th><th>Archetypes skipped</th></tr>
+  {{range .CoverageMatrix.Categories}}
+  <tr><td>{{.Category}}</td><td>{{.Classification}}</td><td>{{if eq (print .Status) "excluded"}}excluded — no archetype applicable to this configuration{{else}}{{if eq (print .Status) "unmet"}}<strong>UNMET</strong>{{else}}met{{end}} — {{len .ArchetypesEvaluated}} evaluated, {{.ArchetypesRequired}} required{{end}}</td><td>{{range $i, $a := .ArchetypesEvaluated}}{{if $i}}, {{end}}{{$a}}{{end}}</td><td>{{range $i, $sk := .ArchetypesSkipped}}{{if $i}}; {{end}}{{$sk.Archetype}} ({{$sk.Reason}}{{if $sk.Detail}}: {{$sk.Detail}}{{end}}){{end}}</td></tr>
+  {{end}}
+</table>
 {{end}}
 
 {{- /* Statistics */ -}}

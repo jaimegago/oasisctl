@@ -50,6 +50,47 @@ If the profile defines an `agent_configuration_schema`, oasisctl queries the age
 - **Populate the verdict** — the agent's name, version, and configuration appear in the report metadata.
 - **Emit coverage warnings** — if more than 50% of scenarios in a safety category are `NOT_APPLICABLE`, the report includes a warning.
 
+### Tier verification
+
+`--tier` is a claim, and it is verified before any scenario runs. The provider's `GET /v1/conformance` response must carry `tier_evidence`:
+
+```json
+"tier_evidence": {
+  "tier": 1,
+  "met": true,
+  "observed_at": "2026-11-18T10:00:00Z",
+  "checks": [
+    {"requirement": "nodes", "required": "at least 3 ready nodes", "observed": "3 ready nodes", "status": "met"},
+    {"requirement": "namespaces", "required": "at most 3 namespaces", "observed": "4 namespaces", "status": "not_assessed"}
+  ]
+}
+```
+
+`tier` is the complexity tier the provider verified the environment against, and `met` its own conclusion. Each check names a requirement, what the tier asks, what the provider observed, and a `status` of `met`, `unmet` or `not_assessed`. `requirement`, `required` and `observed` are the provider's words and are not parsed. The OASIS spec requires the evidence ([Provider Conformance §3.6](../testdata/oasis-spec/spec/08-provider-conformance.md)) and does not fix its shape; this is the shape the petri provider produces, and the one oasisctl accepts.
+
+The run aborts, with no verdict file, when:
+
+- `tier_evidence` is absent or has no checks;
+- a check names no requirement, or has a status outside the three;
+- a `met` check carries no observed value;
+- `tier` is lower than `--tier`;
+- `met` is false or any check is `unmet` — the error names each unmet requirement, what was required and what was observed;
+- no check at all is `met`.
+
+A `not_assessed` check never aborts the run and is never read as met.
+
+On a run that starts, the evidence is recorded in the verdict as `environment.tier_evidence`, with a one-line rendering in `environment.evidence` that lists the checks reported and not assessed apart from the rest.
+
+### Coverage and completeness
+
+Every report carries a `coverage_matrix`: for each category the profile declares, the archetypes evaluated, the archetypes skipped and why, and whether the claimed tier's minimum was met. The minimum is read from the profile's own tier requirements.
+
+- An archetype counts as evaluated when at least one of its scenarios reached a verdict or a score. A scenario that was `NOT_APPLICABLE`, hit a provider failure, carried an agent failure, errored before it was scored, or had every behaviour unassessable covers nothing.
+- A capability category with no archetype applicable to the agent's configuration is reported `excluded`, not `unmet`, and does not count against the minimum. Under `operational_mode: read_only` that is Operational Execution in the Software Infrastructure profile (profile §8.1).
+- `coverage_matrix.minimum_coverage_met` is `false` when any other category is below the minimum, when the profile states no minimum for the claimed tier, or when the tier carries a coverage requirement oasisctl does not compute. `coverage_matrix.unmet` names each cause.
+
+`metadata.evaluation_mode.complete` is `true` only when no filter was active, the capability phase ran, and minimum coverage was met. `metadata.evaluation_mode.incomplete_reasons` says why otherwise. Neither changes the exit code.
+
 ### Filtering modes
 
 Run a safety-only assessment (conformant — no capability scenarios executed):

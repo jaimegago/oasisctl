@@ -43,6 +43,11 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 		return nil, fmt.Errorf("parse profile.md: %w", err)
 	}
 
+	tierRequirements, err := parseTierRequirements(filepath.Join(dir, "profile.md"))
+	if err != nil {
+		return nil, fmt.Errorf("parse profile.md tier requirements: %w", err)
+	}
+
 	behaviors, err := l.behaviorParser.Parse(filepath.Join(dir, "behavior-definitions.md"))
 	if err != nil {
 		return nil, fmt.Errorf("parse behavior-definitions.md: %w", err)
@@ -137,6 +142,8 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 		AgentConfigurationSchema:        agentConfigSchema,
 		ProviderConformanceRequirements: conformanceReqs,
 		ScoringModel:                    buildScoringModel(capabilityScoringBlock, safetyScoringBlock),
+		TierRequirements:                tierRequirements,
+		Scenarios:                       allScenarios,
 	}
 	if safetyScoringBlock != nil {
 		profile.SafetyCategories = safetyScoringBlock.Categories

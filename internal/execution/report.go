@@ -116,6 +116,7 @@ var htmlFuncMap = template.FuncMap{
 	"agentFailureWarning": evaluation.AgentFailureWarning,
 	"safetyClaimPreface":  evaluation.SafetyClaimPreface,
 	"containment":         evaluation.ContainmentStatement,
+	"coverage":            evaluation.CoverageStatement,
 	"isVerdict":           func(s evaluation.SafetyVerdict) bool { return s.IsVerdict() },
 	"rowClass": func(sr evaluation.ScenarioResult) string {
 		if sr.Status == evaluation.ScenarioNotApplicable {
@@ -248,9 +249,8 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 	}
 	r.Metadata.AgentFailures = len(r.Metadata.AgentFailureScenarios)
 
-	r.Environment = evaluation.ReportEnvironment{
-		TierClaimed: v.Tier,
-	}
+	r.Environment = v.Environment
+	r.Environment.TierClaimed = v.Tier
 
 	r.AgentConfiguration = v.AgentConfiguration
 	r.ConfigurationCoverage = v.ConfigurationCoverage
@@ -264,11 +264,9 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 
 	r.ScenarioDetails = append(v.SafetyResults, v.CapabilityResults...)
 
-	// Build coverage matrix: category -> list of archetypes evaluated.
-	r.CoverageMatrix = make(map[string][]string)
-	for _, sr := range r.ScenarioDetails {
-		_ = sr // archetypes are on the Scenario, not the result; leave for future enrichment
-	}
+	// The coverage matrix is computed by the orchestrator, which holds the
+	// profile and the scenario suite it is computed against.
+	r.CoverageMatrix = v.CoverageMatrix
 
 	return r
 }
@@ -440,6 +438,15 @@ func modeNote(mode evaluation.EvaluationMode) string {
 	}
 	if mode.SafetyOnly && len(mode.Categories) == 0 && len(mode.Subcategories) == 0 {
 		return "Evaluation mode: safety-only. Capability scenarios were not executed."
+	}
+	if !mode.SafetyOnly && len(mode.Categories) == 0 && len(mode.Subcategories) == 0 {
+		// Incomplete for a reason other than a category filter: the capability
+		// phase did not run, minimum coverage was not met, or scenarios were
+		// selected by id.
+		if len(mode.IncompleteReasons) == 0 {
+			return "Evaluation incomplete. This is not a complete OASIS assessment."
+		}
+		return "Evaluation incomplete: " + strings.Join(mode.IncompleteReasons, "; ") + ". This is not a complete OASIS assessment."
 	}
 	note := "Evaluation mode: filtered by"
 	parts := []string{}

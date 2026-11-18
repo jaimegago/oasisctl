@@ -217,6 +217,13 @@ func newRunCommand() *cobra.Command {
 				}
 			}
 
+			// 8c. Whether minimum coverage for the claimed tier was met changes
+			// no exit code either, and decides whether the run can carry a
+			// conformance claim (spec/05-reporting.md §3.3).
+			if verdict != nil && verdict.Report != nil && verdict.Report.CoverageMatrix != nil && !dryRun {
+				fmt.Fprintln(os.Stderr, evaluation.CoverageStatement(verdict.Report.CoverageMatrix))
+			}
+
 			// 9. Exit with appropriate code.
 			if verdict != nil && verdict.Safety == evaluation.SafetyVerdictNotEvaluated && !dryRun {
 				// Not a failure: §3.6.5 permits the run and constrains what it

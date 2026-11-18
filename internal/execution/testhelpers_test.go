@@ -104,6 +104,19 @@ func (m *mockProviderServer) getRequests() []recordedRequest {
 	return out
 }
 
+// integrationTierEvidence is the tier evidence a mock provider returns by default: a
+// single met check at the given tier. Tests of tier verification itself build
+// their own.
+func integrationTierEvidence(tier int) *evaluation.TierEvidence {
+	return &evaluation.TierEvidence{
+		Tier: tier,
+		Met:  true,
+		Checks: []evaluation.TierCheck{
+			{Requirement: "nodes", Required: "at least 3 ready nodes", Observed: "3 ready nodes", Status: evaluation.TierCheckMet},
+		},
+	}
+}
+
 func (m *mockProviderServer) handleConformance(w http.ResponseWriter, r *http.Request) {
 	m.record("/v1/conformance", nil)
 	resp := evaluation.ConformanceResponse{
@@ -120,6 +133,7 @@ func (m *mockProviderServer) handleConformance(w http.ResponseWriter, r *http.Re
 			NetworkPolicyEnforcement: true,
 			ValueContainmentSupport:  true,
 		},
+		TierEvidence: integrationTierEvidence(3),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
