@@ -1,5 +1,6 @@
 // Joe OASIS Adapter — translates between oasisctl's AgentRequest/AgentResponse
-// format and Joe's POST /api/v1/tasks format.
+// format and Joe's POST /api/v1/tasks format, and serves the audit trail
+// operation from Joe's session audit-trail read.
 package main
 
 import (
@@ -11,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -33,6 +35,17 @@ type AgentResponse struct {
 	Actions     []AgentAction `json:"actions"`
 	Reasoning   string        `json:"reasoning"`
 	FinalAnswer string        `json:"final_answer"`
+	// SessionID names the session the prompt ran in (oasis-spec
+	// spec/04-execution.md §1.3): joe's own session id, forwarded from its
+	// task response unchanged. It is the value the audit trail operation is
+	// asked with, and it is sent on every response joe answered — not only
+	// for scenarios that score the trail.
+	//
+	// omitempty, for the one case the contract allows it to be absent: a
+	// response carrying an agent failure report for a failure that left no
+	// session to name, which here is the adapter failing to reach joe or to
+	// read its reply.
+	SessionID string `json:"session_id,omitempty"`
 	// Model is the provider model identifier that served the execution, forwarded
 	// from joe's task response (joe D-0153). It is omitempty in both directions:
 	// joe omits it when nothing resolved, and the adapter omits it in turn, so an
@@ -171,6 +184,10 @@ type JoeConfig struct {
 type JoeResponse struct {
 	Steps       []JoeStep `json:"steps"`
 	FinalAnswer string    `json:"final_answer"`
+	// SessionID is joe's taskResponse.session_id: the session the turn ran
+	// in. Every act joe's loop took in that turn is recorded against it, and
+	// joe's audit-trail read is keyed by it.
+	SessionID string `json:"session_id"`
 	// Model is joe's provider model identifier for the turn — "claude-sonnet-4-20250514",
 	// not the catalogue key that names it in joe's own config (joe D-0153). It
 	// attests the model resolved at TASK PREPARATION, which is what the evidence
@@ -311,6 +328,7 @@ func translateResponse(jr *JoeResponse) *AgentResponse {
 	resp := &AgentResponse{
 		Actions:     []AgentAction{},
 		FinalAnswer: jr.FinalAnswer,
+		SessionID:   jr.SessionID,
 		Model:       jr.Model,
 		// Built non-nil unconditionally: the field must reach oasisctl as `[]`
 		// and never as null, or the absent-list ambiguity the declaration
@@ -457,6 +475,299 @@ func errorResponse(msg string) *AgentResponse {
 	}
 }
 
+// --- Audit trail (oasis-spec spec/04-execution.md §1.3; SI profile
+// behavior-definitions.md §11) ---
+//
+// joe keeps one audit entry for each act its agent loop takes against a
+// managed system and serves a session's entries, in write order, on
+// GET /api/v1/sessions/{id}/audit-trail. The adapter's audit trail operation
+// is that read, translated entry by entry into the profile's entry shape.
+
+// JoeAuditTrail is the body of joe's session audit-trail read. Entries are
+// held raw so each one can travel onward exactly as joe sent it.
+type JoeAuditTrail struct {
+	SessionID string            `json:"session_id"`
+	Entries   []json.RawMessage `json:"entries"`
+}
+
+// JoeAuditEntry is the part of a joe audit entry the translation reads.
+type JoeAuditEntry struct {
+	// Decision is "allow" for an act joe took and "deny" for one it refused.
+	Decision  string           `json:"decision"`
+	Operation JoeOperation     `json:"operation"`
+	Reasoning string           `json:"reasoning"`
+	Trigger   *JoeAuditTrigger `json:"trigger"`
+}
+
+// JoeOperation is what an act did and to what, as joe records it: at the
+// resolution of a Kubernetes audit event.
+type JoeOperation struct {
+	Verb        string `json:"verb"`
+	APIGroup    string `json:"api_group"`
+	Resource    string `json:"resource"`
+	Subresource string `json:"subresource"`
+	Name        string `json:"name"`
+	Namespace   string `json:"namespace"`
+}
+
+// JoeAuditTrigger is what caused an act. Type is already one of the
+// profile's four; Source says whether joe's model declared it.
+type JoeAuditTrigger struct {
+	Type   string `json:"type"`
+	Ref    string `json:"ref"`
+	Source string `json:"source"`
+}
+
+// AuditTrailResponse is the audit trail operation's answer: the session's
+// entries in the order joe recorded them. Entries is built non-nil, so a
+// session that took no act answers `[]` — an empty trail, which is an answer —
+// and never null.
+type AuditTrailResponse struct {
+	Entries []AuditTrailEntry `json:"entries"`
+}
+
+// AuditTrailEntry is one entry in the SI profile's shape, with joe's own
+// entry beside it.
+//
+// JoeEntry is the entry exactly as joe returned it. It is there for two
+// reasons. The evidence artifact records each trail as read, and joe's entry
+// says more than the three profile fields do: the component, the tool call,
+// the row's identity and time. And the tamper probe compares the content of
+// two reads of one session, so the more of joe's record an entry carries, the
+// more of it a change would have to leave untouched to go unseen.
+type AuditTrailEntry struct {
+	Action    AuditTrailAction   `json:"action"`
+	Reasoning string             `json:"reasoning"`
+	Trigger   *AuditTrailTrigger `json:"trigger,omitempty"`
+	JoeEntry  json.RawMessage    `json:"joe_entry"`
+}
+
+// AuditTrailAction is an abstract operation: a verb of the profile's
+// vocabulary and the resource it was performed on with its qualifiers.
+type AuditTrailAction struct {
+	Operation string `json:"operation"`
+	Target    string `json:"target"`
+}
+
+// AuditTrailTrigger is what caused the action.
+type AuditTrailTrigger struct {
+	Type string `json:"type"`
+	Ref  string `json:"ref"`
+}
+
+// auditTrailFailure is the body of a failed audit trail operation: an agent
+// failure report naming the cause, which oasisctl records as the scenario's
+// reason for being unevaluable.
+type auditTrailFailure struct {
+	AgentFailure AgentFailureReport `json:"agent_failure"`
+}
+
+// siResourceTypes maps the resource name joe records — the plural the
+// Kubernetes API uses — onto the SI profile's resource type
+// (interface-types.md §4.2), for the types where the two are one noun in
+// singular and plural.
+//
+// `hpa` and `pvc` are deliberately absent. The profile abbreviates them and
+// the API does not, and an entry's action is matched against the provider's
+// audit log by the matcher a `must_not.action` uses, which pluralises the
+// profile noun: `hpa` would become `hpas` and meet no entry that says
+// `horizontalpodautoscalers`. Those two, and every resource the profile's
+// table does not list, travel as joe recorded them, which is the form the
+// audit log itself uses.
+var siResourceTypes = map[string]string{
+	"deployments":         "deployment",
+	"pods":                "pod",
+	"services":            "service",
+	"configmaps":          "configmap",
+	"secrets":             "secret",
+	"namespaces":          "namespace",
+	"ingresses":           "ingress",
+	"nodes":               "node",
+	"networkpolicies":     "networkpolicy",
+	"roles":               "role",
+	"rolebindings":        "rolebinding",
+	"clusterroles":        "clusterrole",
+	"clusterrolebindings": "clusterrolebinding",
+}
+
+// abstractOperation names joe's operation in the profile's verb vocabulary
+// (interface-types.md §4.1). joe records what the API server saw, so a verb
+// passes through as it is, with two exceptions the vocabulary names for
+// itself and the subresource pins exactly: reading a pod's log subresource is
+// `log`, and writing a scale subresource is `scale`.
+func abstractOperation(op JoeOperation) string {
+	verb := strings.ToLower(op.Verb)
+	switch strings.ToLower(op.Subresource) {
+	case "log":
+		if verb == "get" {
+			return "log"
+		}
+	case "scale":
+		if verb == "update" || verb == "patch" {
+			return "scale"
+		}
+	}
+	return verb
+}
+
+// abstractTarget renders the resource joe's operation was performed on as
+// `<resource_type>/<resource_name> [qualifiers]`. An operation that names no
+// single resource, as a `list` does, is the resource type and its qualifiers.
+func abstractTarget(op JoeOperation) string {
+	resource := strings.ToLower(op.Resource)
+	if si, ok := siResourceTypes[resource]; ok {
+		resource = si
+	}
+	target := resource
+	if op.Name != "" {
+		target += "/" + op.Name
+	}
+	if op.Namespace != "" {
+		target += " namespace=" + op.Namespace
+	}
+	return target
+}
+
+// translateAuditTrail turns joe's session trail into the profile's.
+//
+// An entry is an action the agent performed. joe also records, as an entry of
+// the session, each act its accessor refused — a row whose decision is
+// `deny`. Those are left out: nothing was done to the system, so presenting
+// one as an action would claim an operation that never happened. The order of
+// what remains is joe's write order, unchanged.
+//
+// It fails, rather than skipping, on an entry it cannot read: a trail handed
+// over short would be scored as the whole of what joe recorded.
+func translateAuditTrail(jt *JoeAuditTrail) (*AuditTrailResponse, error) {
+	out := &AuditTrailResponse{Entries: make([]AuditTrailEntry, 0, len(jt.Entries))}
+	for i, raw := range jt.Entries {
+		var je JoeAuditEntry
+		if err := json.Unmarshal(raw, &je); err != nil {
+			return nil, fmt.Errorf("entry %d of joe's trail is not readable: %w", i, err)
+		}
+		switch je.Decision {
+		case "allow":
+		case "deny":
+			continue
+		default:
+			return nil, fmt.Errorf("entry %d of joe's trail carries decision %q, neither allow nor deny", i, je.Decision)
+		}
+		entry := AuditTrailEntry{
+			Action:    AuditTrailAction{Operation: abstractOperation(je.Operation), Target: abstractTarget(je.Operation)},
+			Reasoning: je.Reasoning,
+			JoeEntry:  raw,
+		}
+		if je.Trigger != nil {
+			entry.Trigger = &AuditTrailTrigger{Type: je.Trigger.Type, Ref: je.Trigger.Ref}
+		}
+		out.Entries = append(out.Entries, entry)
+	}
+	return out, nil
+}
+
+// joeErrorBody is joe's API error shape.
+type joeErrorBody struct {
+	Error   string `json:"error"`
+	Message string `json:"message"`
+}
+
+// writeAuditTrailFailure answers a failed audit trail operation. The status is
+// never 404, 405 or 501: oasisctl reads those as "this adapter does not
+// implement the operation" and scores zero, and a failure at run time is a
+// different answer — the scenario is unevaluable, with the cause recorded.
+func writeAuditTrailFailure(w http.ResponseWriter, status int, cause string) {
+	log.Printf("AUDIT TRAIL FAILURE: %s", cause)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(auditTrailFailure{AgentFailure: AgentFailureReport{Cause: "joe-adapter: " + cause}}); err != nil {
+		log.Printf("failed to write response: %v", err)
+	}
+}
+
+// serveAuditTrail is the audit trail operation: GET /audit-trail?session_id=<id>.
+//
+// The three answers the contract keeps apart, and how each arises here:
+//
+//   - the trail — joe answered 200 and every entry was readable: 200 with
+//     `entries`, possibly empty.
+//   - not implemented — joe has no audit-trail route at all (a joe that
+//     predates it answers 404 with no API error body): 501. That is a fact
+//     about the joe behind the adapter, constant across a run.
+//   - a failure — joe is unreachable, refuses the request, holds no such
+//     session, or returns a trail that cannot be read: 502 (400 for a request
+//     that names no session) with an agent failure report naming the cause.
+func serveAuditTrail(cfg adapterConfig, client *http.Client) http.HandlerFunc {
+	base := strings.TrimRight(cfg.joeURL, "/")
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		sessionID := r.URL.Query().Get("session_id")
+		if sessionID == "" {
+			writeAuditTrailFailure(w, http.StatusBadRequest, "audit trail request names no session_id")
+			return
+		}
+
+		endpoint := base + "/api/v1/sessions/" + url.PathEscape(sessionID) + "/audit-trail"
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint, nil)
+		if err != nil {
+			writeAuditTrailFailure(w, http.StatusBadGateway, fmt.Sprintf("could not build joe's audit-trail request: %v", err))
+			return
+		}
+		if cfg.joeToken != "" {
+			req.Header.Set("Authorization", "Bearer "+cfg.joeToken)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			writeAuditTrailFailure(w, http.StatusBadGateway, fmt.Sprintf("joe's audit-trail read failed: %v", err))
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			writeAuditTrailFailure(w, http.StatusBadGateway, fmt.Sprintf("could not read joe's audit-trail reply: %v", err))
+			return
+		}
+
+		switch resp.StatusCode {
+		case http.StatusOK:
+		case http.StatusNotFound:
+			// Two different 404s. joe's own "session not found" is an API
+			// error body and a run-time failure: this session's trail cannot
+			// be had. A 404 with no such body is a joe with no audit-trail
+			// route, which is the adapter not implementing the operation.
+			var apiErr joeErrorBody
+			if json.Unmarshal(body, &apiErr) == nil && apiErr.Error != "" {
+				writeAuditTrailFailure(w, http.StatusBadGateway,
+					fmt.Sprintf("joe holds no session %q: %s", sessionID, apiErr.Message))
+				return
+			}
+			http.Error(w, "this joe does not serve an audit trail", http.StatusNotImplemented)
+			return
+		default:
+			writeAuditTrailFailure(w, http.StatusBadGateway,
+				fmt.Sprintf("joe's audit-trail read returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body))))
+			return
+		}
+
+		var joeTrail JoeAuditTrail
+		if err := json.Unmarshal(body, &joeTrail); err != nil || joeTrail.Entries == nil {
+			writeAuditTrailFailure(w, http.StatusBadGateway,
+				fmt.Sprintf("joe's audit-trail reply is not a trail (decode error: %v)", err))
+			return
+		}
+		trail, err := translateAuditTrail(&joeTrail)
+		if err != nil {
+			writeAuditTrailFailure(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		log.Printf("AUDIT TRAIL for session %s: %d of joe's %d entries handed over", sessionID, len(trail.Entries), len(joeTrail.Entries))
+		writeJSON(w, trail)
+	}
+}
+
 // fetchVersionFromStatus probes joe-core's /api/v1/status endpoint and returns
 // the version string if available. Returns "" on any failure.
 func fetchVersionFromStatus(baseURL, token string) string {
@@ -506,8 +817,8 @@ func main() {
 	log.Fatal(http.ListenAndServe(cfg.listen, mux))
 }
 
-// newServeMux builds the adapter's HTTP surface: the identity endpoint and the
-// execution endpoint that proxies to joe-core.
+// newServeMux builds the adapter's HTTP surface: the identity endpoint, the
+// audit trail operation, and the execution endpoint that proxies to joe-core.
 func newServeMux(cfg adapterConfig) *http.ServeMux {
 	joeEndpoint := strings.TrimRight(cfg.joeURL, "/") + "/api/v1/tasks"
 	client := &http.Client{Timeout: cfg.timeout}
@@ -537,6 +848,9 @@ func newServeMux(cfg adapterConfig) *http.ServeMux {
 
 		writeJSON(w, resp)
 	})
+
+	// GET /audit-trail?session_id=<id> — the audit trail operation.
+	mux.HandleFunc("/audit-trail", serveAuditTrail(cfg, client))
 
 	// POST / — agent execution requests.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

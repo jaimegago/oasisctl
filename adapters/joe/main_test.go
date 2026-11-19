@@ -276,32 +276,6 @@ func TestIdentityAndConfiguration_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// The joe adapter does not implement the audit trail operation (oasis-spec
-// spec/04-execution.md §1.3): Joe has no trail to hand over yet. A GET on a
-// path the adapter does not route reaches the execution handler, which takes
-// POST alone and answers 405 — one of the statuses oasisctl reads as "not
-// implemented", so Joe scores zero on the behaviours defined over the trail.
-// That is by design until the adapter serves the operation, and this pins it:
-// an adapter that began answering 200 here without a trail behind it would
-// turn a measured zero into an empty trail or an agent failure.
-func TestAuditTrail_NotImplemented(t *testing.T) {
-	// The adapter's real surface, not the test mux: joe-core is never reached
-	// by a request the execution handler rejects on its method.
-	cfg := adapterConfig{joeURL: "http://127.0.0.1:1", operationalMode: "read_only", zoneModel: true, agentVersion: "0.5.0"}
-	server := httptest.NewServer(newServeMux(cfg))
-	defer server.Close()
-
-	resp, err := http.Get(server.URL + "/audit-trail?session_id=any")
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("expected 405, got %d", resp.StatusCode)
-	}
-}
-
 // TestTranslateResponse_RealisticFixture is the round-trip assertion: every tool
 // call in the fixture appears in Actions, in order, paired with its own result.
 func TestTranslateResponse_RealisticFixture(t *testing.T) {
