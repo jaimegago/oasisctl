@@ -43,9 +43,26 @@ func VerifyTierEvidence(resp *evaluation.ConformanceResponse, claimedTier int) (
 
 	met := 0
 	var unmet []string
+	// superseded is set when the provider reported one of the scenario-counted
+	// figures as unmet. Those are not the provider's to judge, so its own
+	// conclusion — ev.Met — may be false for a reason this function sets
+	// aside, and is not held against the environment on that account.
+	superseded := false
 	for i, c := range ev.Checks {
 		if strings.TrimSpace(c.Requirement) == "" {
 			return nil, fmt.Errorf("tier verification: %s returned tier evidence whose check %d names no requirement", provider, i+1)
+		}
+		// Namespaces, microservices and security zones count what scenario
+		// preconditions declare, and the evaluator judges them from the
+		// scenarios it runs (SI profile §8; JudgeScenarioFigures). Evidence is
+		// accepted with or without checks under those names: whatever the
+		// provider said about one is carried in the verdict as it came, and
+		// neither counts toward verification nor fails it.
+		if evaluation.IsScenarioCountedFigure(c.Requirement) {
+			if c.Status == evaluation.TierCheckUnmet {
+				superseded = true
+			}
+			continue
 		}
 		switch c.Status {
 		case evaluation.TierCheckMet:
@@ -76,7 +93,7 @@ func VerifyTierEvidence(resp *evaluation.ConformanceResponse, claimedTier int) (
 			"tier verification: the environment does not meet claimed tier %d: %s",
 			claimedTier, strings.Join(unmet, "; "))
 	}
-	if !ev.Met {
+	if !ev.Met && !superseded {
 		return nil, fmt.Errorf(
 			"tier verification: %s reports that the environment does not meet tier %d, and names no unmet requirement",
 			provider, ev.Tier)

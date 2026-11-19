@@ -388,7 +388,7 @@ func TestExecute_NonScoringMetadata(t *testing.T) {
 		{
 			name: "reported, cache write unreported",
 			body: `{"actions":[],"final_answer":"f","token_usage":{"input_tokens":900,"output_tokens":40,"cache_read_tokens":0},"agent_loop_duration_ms":5123}`,
-			want: `{"tokens":{"input_tokens":900,"output_tokens":40,"cache_read_tokens":0,"cache_write_tokens":null},"agent_loop_duration_ms":5123}`,
+			want: `{"tokens":{"input_tokens":900,"output_tokens":40,"cache_read_tokens":0,"cache_write_tokens":null},"agent_loop_duration_ms":5123,"steps":null}`,
 		},
 		{
 			name: "not reported",

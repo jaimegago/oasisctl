@@ -28,6 +28,8 @@ oasisctl run \
 | `--tier` | int | | Claimed complexity tier (1, 2, or 3) — required |
 | `--output` | string | stdout | Report output file path (required when `--format html`) |
 | `--evidence-dir` | string | alongside `--output` | Directory for per-scenario evidence artifacts; defaults to the working directory when the report goes to stdout |
+| `--agent-principal` | string | | Identity the agent authenticates to the environment as, e.g. `system:serviceaccount:default:my-agent`. Without it, audit-backed assertions resolve vacuous |
+| `--evaluator` | string | | Organization or individual running the evaluation, recorded as the verdict's `evaluator`. Without it the evaluator is `null` and the run does not support a conformance claim |
 | `--format` | string | `yaml` | Report format: `yaml`, `json`, or `html` |
 | `--open` | bool | `false` | Open HTML report in default browser (only with `--format html`) |
 | `--parallel` | int | `1` | Max concurrent scenarios |
@@ -81,6 +83,19 @@ A `not_assessed` check never aborts the run and is never read as met.
 
 On a run that starts, the evidence is recorded in the verdict as `environment.tier_evidence`, with a one-line rendering in `environment.evidence` that lists the checks reported and not assessed apart from the rest.
 
+#### Figures counted from scenarios
+
+Three of a tier's environment figures count what scenario preconditions declare, not what the environment holds: namespaces, microservices and security zones (Software Infrastructure profile §8). The provider cannot judge them. oasisctl does, from the scenarios the run executed, and records each in `environment.scenario_figures` with what it counted:
+
+- **Namespaces and microservices bound one scenario's environment.** Each is compared with the largest number any one executed scenario's preconditions declare.
+- **Security zones are met across the run.** The figure is compared with the distinct zones the executed scenarios' preconditions declare between them.
+
+A namespace is a name declared as `resource: namespace/<name>` or as another resource's `namespace`. A microservice is a `deployment/`, `statefulset/`, `daemonset/` or `service/` entry, counted once per namespace and name. A zone is an entry's `zone`. A scenario the agent's configuration excludes was never provisioned and is not counted.
+
+The figure itself is read from the profile's tier section. A figure the profile does not state for the claimed tier, or states as one arm of an alternative, is recorded `not_assessed` and never read as met.
+
+Provider evidence is accepted with or without `namespaces`, `microservices` and `security-zones` checks. Whatever status the provider gave one, it is carried in `environment.tier_evidence` as it came and neither counts toward verification nor fails it. A figure that is unmet or not judged does not abort the run: the scenarios have run by then. It is named in `metadata.conformance_claim`, and the run does not support a claim.
+
 ### Coverage and completeness
 
 Every report carries a `coverage_matrix`: for each category the profile declares, the archetypes evaluated, the archetypes skipped and why, and whether the claimed tier's minimum was met. The minimum is read from the profile's own tier requirements.
@@ -90,6 +105,19 @@ Every report carries a `coverage_matrix`: for each category the profile declares
 - `coverage_matrix.minimum_coverage_met` is `false` when any other category is below the minimum, when the profile states no minimum for the claimed tier, or when the tier carries a coverage requirement oasisctl does not compute. `coverage_matrix.unmet` names each cause.
 
 `metadata.evaluation_mode.complete` is `true` only when no filter was active, the capability phase ran, and minimum coverage was met. `metadata.evaluation_mode.incomplete_reasons` says why otherwise. Neither changes the exit code.
+
+`configuration_coverage.total_scenarios` counts the profile's whole suite, and every scenario is in exactly one of five counts: `applicable`, `not_applicable`, `unevaluable`, `excluded_by_tier` (above the claimed tier, named in `excluded_by_tier_scenarios`) and `not_run` (at or below the tier, with no result in this run).
+
+### The output document
+
+The file `oasisctl run` writes is one document with two parts.
+
+- **`verdict`** is the evaluation verdict in the standard format of oasis-spec `spec/05-reporting.md` §1, field for field: `safety`, `safety_details`, `capability` (only when safety is PASS), `metadata`, and one `scenario_records` entry per executed scenario. A value that could not be established is an explicit `null` beside a field naming it — `metadata.agent_identity.not_established`, `capability.dropped_dimensions` — and is never an invented value.
+- **Everything else** is the evaluation report of §2: `metadata`, `environment`, `agent_configuration`, `configuration_coverage`, `safety_summary`, `capability_summary`, `coverage_matrix` and `scenario_details`.
+
+`metadata.conformance_claim` says whether the run supports a conformance claim (§3.2, §3.3) and lists every reason it does not: an incomplete evaluation, an agent failure, an abort, an agent identity fact not established, a scenario with no observed model, a tier figure unmet or not judged, or no declared evaluator. It reads no result: a FAIL is a verdict a claim can state.
+
+A core dimension none of whose contributing categories was scored has no score. It is `null` under `verdict.capability.core_dimensions`, named with the reason under `dropped_dimensions`, and listed with the categories and weights behind it under `capability_summary.dimension_detail`.
 
 ### Filtering modes
 

@@ -292,8 +292,11 @@ func TestIntegration_CapabilityScenarioScored(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 
-	// No safety scenarios, so safety passes by default.
-	assert.True(t, verdict.SafetyPassed)
+	// No safety scenario was evaluated, so there is no safety verdict: the run
+	// is NOT_EVALUATED and did not pass (spec/01-core.md §3.6.5). Capability
+	// is still scored, which is what this test is about.
+	assert.Equal(t, evaluation.SafetyVerdictNotEvaluated, verdict.Safety)
+	assert.False(t, verdict.SafetyPassed)
 	require.Len(t, verdict.CapabilityResults, 1)
 
 	result := verdict.CapabilityResults[0]

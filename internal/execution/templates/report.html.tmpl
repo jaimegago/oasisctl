@@ -137,10 +137,46 @@
   <tr><th>Profile</th><td>{{.Metadata.ProfileName}}{{if .Metadata.ProfileVersion}} {{.Metadata.ProfileVersion}}{{end}}</td></tr>
   <tr><th>Tier</th><td>{{.Environment.TierClaimed}}</td></tr>
   {{if .Environment.Evidence}}<tr><th>Tier evidence</th><td>{{.Environment.Evidence}}</td></tr>{{end}}
+  {{range .Environment.ScenarioFigures}}<tr><th>Tier figure: {{.Requirement}}</th><td>{{if eq (print .Status) "met"}}met{{else}}<strong style="color:#991b1b">{{.Status}}</strong>{{end}} — {{.Observed}} (required: {{.Required}})</td></tr>{{end}}
   <tr><th>Date</th><td>{{formatTime .Metadata.Date}}</td></tr>
-  <tr><th>Evaluator</th><td>{{.Metadata.Evaluator}}</td></tr>
-  <tr><th>Provider</th><td>{{.Metadata.ProviderInfo}}</td></tr>
+  <tr><th>Evaluator</th><td>{{text .Metadata.Evaluator "not declared"}}</td></tr>
+  {{with .Metadata.EvaluationImplementation}}<tr><th>Evaluation implementation</th><td>{{.Name}} {{.Version}}{{if .Commit}} ({{.Commit}}){{end}}</td></tr>{{end}}
+  <tr><th>OASIS core specification</th><td>{{.Metadata.OASISCoreSpec}}</td></tr>
+  <tr><th>Provider</th><td>{{with .Metadata.Provider}}{{.Name}} {{.Version}}{{if .Endpoint}} at {{.Endpoint}}{{end}}{{else}}{{.Metadata.ProviderInfo}}{{end}}</td></tr>
+  {{with .Metadata.ConformanceCheck}}<tr><th>Preflight conformance check</th><td>{{.Summary}}</td></tr>{{end}}
+  {{range $k, $v := .AgentConfiguration}}<tr><th>Configuration: {{$k}}</th><td>{{$v}}</td></tr>{{end}}
 </table>
+
+{{- /* Agent identity declaration: spec/05-reporting.md §1.2, §2.1 */ -}}
+{{with .Metadata.AgentIdentity}}
+<h2>Agent Identity</h2>
+<table>
+  <tr><th>Binary version</th><td>{{text .BinaryVersion "not established"}}</td></tr>
+  <tr><th>Binary SHA</th><td>{{text .BinarySHA "not established"}}</td></tr>
+  <tr><th>Configuration hash</th><td>{{text .ConfigHash "not established"}}</td></tr>
+  <tr><th>System-prompt hash</th><td>{{text .SystemPromptHash "not established"}}</td></tr>
+  <tr><th>Declared model</th><td>{{text .DeclaredModel "not established"}}</td></tr>
+  <tr><th>Declared provider</th><td>{{text .DeclaredProvider "not established"}}</td></tr>
+  <tr><th>Fixed wrapper text</th><td>{{text .FixedWrapperText "none"}}</td></tr>
+</table>
+<p style="font-size:0.875rem;"><strong>{{heterogeneity .}}</strong></p>
+{{if .NotEstablished}}
+<p style="font-size:0.875rem;color:#991b1b;"><strong>Not established:</strong></p>
+<ul>
+{{range .NotEstablished}}  <li><strong>{{.Fact}}</strong>: {{.Reason}}</li>
+{{end}}</ul>
+{{end}}
+{{end}}
+
+{{- /* Whether the run supports a conformance claim: §3.2, §3.3 */ -}}
+{{with .Metadata.ConformanceClaim}}{{if not .Supported}}
+<div class="eval-note" style="background:#fef3c7;color:#92400e;">
+<strong>This run does not support a conformance claim.</strong>
+<ul>
+{{range .Reasons}}  <li>{{.}}</li>
+{{end}}</ul>
+</div>
+{{end}}{{end}}
 
 {{- /* Category overview */ -}}
 <h2>Safety Categories</h2>
@@ -149,6 +185,40 @@
   <div class="cat-cell {{if $passed}}cat-pass{{else}}cat-fail{{end}}">{{$cat}}</div>
 {{end}}
 </div>
+
+{{- /* Per-category counts: spec/05-reporting.md §2.3 */ -}}
+{{if .SafetySummary.Categories}}
+<table>
+  <tr><th>Safety category</th><th>Result</th><th>Applicable</th><th>NOT_APPLICABLE</th><th>Passed</th><th>Failed</th><th>Provider failure</th></tr>
+  {{range $cat, $r := .SafetySummary.Categories}}
+  <tr><td>{{$cat}}</td><td>{{$r.Result}}</td><td>{{$r.Applicable}}</td><td>{{$r.NotApplicable}}</td><td>{{$r.Passed}}</td><td>{{$r.Failed}}</td><td>{{$r.ProviderFailure}}</td></tr>
+  {{end}}
+</table>
+{{end}}
+
+{{- /* Excluded scenarios, apart from every count: §2.3 */ -}}
+{{if .SafetySummary.NotApplicableScenarios}}
+<h2>Safety Scenarios Not Applicable</h2>
+<table>
+  <tr><th>Scenario</th><th>Category</th><th>Excluded because it requires</th></tr>
+  {{range .SafetySummary.NotApplicableScenarios}}
+  <tr><td>{{.ScenarioID}}</td><td>{{.Category}}</td><td>{{.Conditions}}</td></tr>
+  {{end}}
+</table>
+{{end}}
+{{if .SafetySummary.NotApplicableStatement}}<p style="font-size:0.8125rem;color:#6b7280;">{{.SafetySummary.NotApplicableStatement}}</p>{{end}}
+
+{{- /* Human review: a sanity-check signal, never a verdict status — §2.3.1 */ -}}
+{{if .SafetySummary.HumanReview}}
+<h2>Human Review Required</h2>
+<p style="font-size:0.8125rem;color:#92400e;">These scenarios are PASS. Each passed under non-zero tolerance and is listed for a reviewer to check the tolerance against.</p>
+<table>
+  <tr><th>Scenario</th><th>Tolerance</th><th>Measured deviation</th><th>Result</th></tr>
+  {{range .SafetySummary.HumanReview}}
+  <tr><td>{{.ScenarioID}}</td><td>{{.Tolerance}}</td><td>{{text .MeasuredDeviation "not measured by this evaluator"}}</td><td>{{.Result}}</td></tr>
+  {{end}}
+</table>
+{{end}}
 
 {{- /* Subcategory results */ -}}
 {{if .SafetySummary.SubcategoryResults}}
@@ -169,6 +239,18 @@
   <tr><th>Core dimension</th><th>Score</th></tr>
   {{range $dim, $score := .CapabilitySummary.CoreDimensions}}
   <tr><td>{{$dim}}</td><td>{{printf "%.1f%%" (pct $score)}}</td></tr>
+  {{end}}
+</table>
+{{end}}
+{{/* Each core dimension with the categories and weights behind it, and a
+     dimension with no score named as dropped rather than left out. */}}
+{{if .CapabilitySummary.DimensionDetail}}
+<table>
+  <tr><th>Core dimension</th><th>Score</th><th>Contributing category</th><th>Declared weight</th><th>Effective weight</th><th>Category score</th></tr>
+  {{range .CapabilitySummary.DimensionDetail}}{{$d := .}}
+  {{range $i, $c := .Contributions}}
+  <tr><td>{{if eq $i 0}}{{$d.Dimension}}{{end}}</td><td>{{if eq $i 0}}{{if $d.Dropped}}<strong style="color:#991b1b">DROPPED</strong> — {{$d.DroppedReason}}{{else}}{{score $d.Score}}{{end}}{{end}}</td><td>{{$c.Category}}{{if ne $c.Status "scored"}} ({{$c.Status}}){{end}}</td><td>{{printf "%.2f" $c.Weight}}</td><td>{{weight $c.EffectiveWeight}}</td><td>{{score $c.CategoryScore}}</td></tr>
+  {{end}}
   {{end}}
 </table>
 {{end}}
@@ -230,6 +312,19 @@
                  Stated whether or not it shrank: a line that appears only on
                  the defective case cannot be relied on to be absent on the
                  sound one. */}}
+            {{if .Description}}<p>{{.Description}}</p>{{end}}
+            {{if .Archetype}}<p><strong>Archetype:</strong> {{.Archetype}}{{if .Tier}} — tier {{.Tier}}{{end}}</p>{{end}}
+            {{if .SafetyTolerance}}<p><strong>Safety tolerance:</strong> {{.SafetyTolerance}}%</p>{{end}}
+            {{if .ExclusionConditions}}<p><strong>Not applicable:</strong> requires {{.ExclusionConditions}}</p>{{end}}
+            {{with .Execution}}
+            {{range .Stimuli}}<p><strong>Stimulus</strong> ({{.Type}}, applied by {{.AppliedBy}}): {{if .Value}}{{.Value}}{{else}}{{.Description}}{{end}}{{if .Note}} <em>— {{.Note}}</em>{{end}}</p>{{end}}
+            {{with .Preconditions}}<p><strong>Preconditions:</strong> environment {{.EnvironmentID}} provisioned by the provider with status {{.Status}}; {{.DeclaredState}} state entr{{if eq .DeclaredState 1}}y{{else}}ies{{end}} declared</p>{{end}}
+            <p><strong>Agent principal:</strong> {{text .AgentPrincipal "not established"}}</p>
+            <p><strong>Observed model:</strong> {{text .ObservedModel "not reported"}}</p>
+            {{with .AgentBehavior}}<p><strong>Agent behaviour:</strong> {{.ToolCalls}} tool call(s){{if .Tools}} ({{range $i, $tool := .Tools}}{{if $i}}, {{end}}{{$tool}}{{end}}){{end}}; final answer {{.FinalAnswerChars}} characters, reasoning trace {{.ReasoningTraceChars}}. The full record is in the evidence artifact.</p>{{end}}
+            {{range .Observations}}<p><strong>Observation</strong> {{.ObservationType}}: evidence source {{with .EvidenceSource}}{{.Type}} ({{.Status}}){{else}}not stated{{end}}</p>{{end}}
+            {{if .NonScoringMetadata}}<p><strong>Non-scoring metadata</strong> (reported, never scored): {{nonScoring .NonScoringMetadata}}</p>{{end}}
+            {{end}}
             {{if .AgentFailure}}
             <p><strong>Agent failure:</strong> {{.AgentFailure.Cause}}</p>
             {{end}}
@@ -278,7 +373,7 @@
 <p style="font-size:0.875rem;color:#92400e;"><strong>Note:</strong> Some scenarios have safety tolerance flags and require human review.</p>
 {{end}}
 
-<p style="font-size:0.75rem;color:#9ca3af;margin-top:2rem;">Generated by {{.Metadata.Evaluator}} on {{formatTime .Metadata.Date}}</p>
+<p style="font-size:0.75rem;color:#9ca3af;margin-top:2rem;">Generated by {{with .Metadata.EvaluationImplementation}}{{.Name}} {{.Version}}{{else}}oasisctl{{end}} on {{formatTime .Metadata.Date}}</p>
 
 </body>
 </html>

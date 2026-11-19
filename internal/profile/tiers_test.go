@@ -92,3 +92,52 @@ func TestLoader_TierMinimumFailsClosedOnUnrecognisedProse(t *testing.T) {
 
 	assert.NotContains(t, p.TierRequirements, 2, "a tier that states no minimum has no entry")
 }
+
+// The three scenario-counted environment figures are read from the vendored
+// profile's own §8, per tier. A figure that is one arm of an alternative —
+// Tier 2's "(≥3 namespaces, distinct ownership)" — is not a bound and is left
+// unread, so the evaluator reports it as not judged instead of applying it.
+func TestLoader_ReadsTheScenarioCountedFiguresFromVendoredProfile(t *testing.T) {
+	p, err := profile.NewLoader().Load(context.Background(), testdataDir)
+	require.NoError(t, err)
+
+	bound := func(r *evaluation.FigureRange) (lo, hi int) {
+		lo, hi = -1, -1
+		if r != nil && r.Min != nil {
+			lo = *r.Min
+		}
+		if r != nil && r.Max != nil {
+			hi = *r.Max
+		}
+		return lo, hi
+	}
+
+	t1 := p.TierRequirements[1].Figures
+	require.NotNil(t, t1.Namespaces)
+	require.NotNil(t, t1.Microservices)
+	require.NotNil(t, t1.SecurityZones)
+	lo, hi := bound(t1.Namespaces)
+	assert.Equal(t, []int{-1, 3}, []int{lo, hi}, "tier 1: at most 3 namespaces")
+	lo, hi = bound(t1.Microservices)
+	assert.Equal(t, []int{1, 5}, []int{lo, hi}, "tier 1: 1 to 5 microservices")
+	lo, hi = bound(t1.SecurityZones)
+	assert.Equal(t, []int{2, -1}, []int{lo, hi}, "tier 1: at least 2 security zones")
+	assert.Equal(t, "≤3 namespaces", t1.Namespaces.Text, "the profile's own words travel with the figure")
+
+	t2 := p.TierRequirements[2].Figures
+	assert.Nil(t, t2.Namespaces, "tier 2 states namespaces inside an alternative, which is not a bound")
+	lo, hi = bound(t2.Microservices)
+	assert.Equal(t, []int{8, 15}, []int{lo, hi})
+	lo, _ = bound(t2.SecurityZones)
+	assert.Equal(t, 3, lo)
+
+	t3 := p.TierRequirements[3].Figures
+	assert.Nil(t, t3.Namespaces)
+	lo, hi = bound(t3.Microservices)
+	assert.Equal(t, []int{15, -1}, []int{lo, hi})
+	lo, _ = bound(t3.SecurityZones)
+	assert.Equal(t, 4, lo)
+
+	// Reading the Environment list leaves the minimum coverage as it was.
+	assert.Equal(t, evaluation.CoverageMinimum{Declared: true, Archetypes: 1}, p.TierRequirements[1].Safety)
+}

@@ -34,6 +34,7 @@ func newRunCommand() *cobra.Command {
 		outputPath     string
 		evidenceDir    string
 		agentPrincipal string
+		evaluator      string
 		format         string
 		parallel       int
 		timeout        string
@@ -95,6 +96,9 @@ func newRunCommand() *cobra.Command {
 				}
 				if !cmd.Flags().Changed("scenario") && len(rc.Evaluation.Scenarios) > 0 {
 					scenarioIDs = rc.Evaluation.Scenarios
+				}
+				if !cmd.Flags().Changed("evaluator") && rc.Evaluation.Evaluator != "" {
+					evaluator = rc.Evaluation.Evaluator
 				}
 			}
 
@@ -180,6 +184,10 @@ func newRunCommand() *cobra.Command {
 				ScenarioIDs:    scenarioIDs,
 				EvidenceDir:    evidenceDir,
 				AgentPrincipal: agentPrincipal,
+				Evaluator:      evaluator,
+				// The evaluation implementation is this binary, named by its
+				// own build identity (spec/05-reporting.md §2.1).
+				Implementation: evaluation.EvaluationImplementation{Name: "oasisctl", Version: Version, Commit: Commit},
 			}
 			orch := execution.NewOrchestrator(loader, agentClient, providerClient, asserter, scorer, reporter, logger, cfg)
 
@@ -217,6 +225,21 @@ func newRunCommand() *cobra.Command {
 				}
 			}
 
+			// 8b2. Whether the run was heterogeneous, and whether it supports a
+			// conformance claim at all, said where an operator watching the
+			// run will see it (spec/05-reporting.md §2.1, §3.2).
+			if verdict != nil && verdict.Report != nil && !dryRun {
+				if id := verdict.Report.Metadata.AgentIdentity; id != nil {
+					fmt.Fprintln(os.Stderr, evaluation.HeterogeneityStatement(*id))
+				}
+				if claim := verdict.Report.Metadata.ConformanceClaim; claim != nil && !claim.Supported {
+					fmt.Fprintln(os.Stderr, "This run does not support a conformance claim:")
+					for _, reason := range claim.Reasons {
+						fmt.Fprintf(os.Stderr, "  - %s\n", reason)
+					}
+				}
+			}
+
 			// 8c. Whether minimum coverage for the claimed tier was met changes
 			// no exit code either, and decides whether the run can carry a
 			// conformance claim (spec/05-reporting.md §3.3).
@@ -251,6 +274,7 @@ func newRunCommand() *cobra.Command {
 	cmd.Flags().StringVar(&outputPath, "output", "", "Report output file path (default: stdout)")
 	cmd.Flags().StringVar(&evidenceDir, "evidence-dir", "", "Directory for per-scenario evidence artifacts (default: alongside --output, or the working directory)")
 	cmd.Flags().StringVar(&agentPrincipal, "agent-principal", "", "Identity the agent authenticates to the environment as, e.g. system:serviceaccount:default:my-agent. Declared by whoever launched the agent; without it, audit-backed assertions resolve vacuous rather than attributing the environment's own traffic to the agent")
+	cmd.Flags().StringVar(&evaluator, "evaluator", "", "Organization or individual running the evaluation, recorded as the verdict's evaluator. Declared by whoever launches the run; without it the verdict's evaluator is null and the run does not support a conformance claim")
 	cmd.Flags().StringVar(&format, "format", "yaml", "Report format: yaml, json, or html")
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "Max concurrent scenarios")
 	cmd.Flags().StringVar(&timeout, "timeout", "5m", "Per-scenario timeout")

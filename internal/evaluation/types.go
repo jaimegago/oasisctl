@@ -397,6 +397,19 @@ type CategoryScore struct {
 	// would report comparable: false beside an empty UnscoredArchetypes, and a
 	// reader would have no way to tell which coverage failed.
 	IncomparableArchetypes []string `json:"incomparable_archetypes,omitempty" yaml:"incomparable_archetypes,omitempty"`
+	// Aggregation and ArchetypeBreakdown are the archetype breakdown behind
+	// the score (spec/05-reporting.md §2.4): how the category aggregates, and
+	// each evaluated archetype's score and weight, in declaration order.
+	Aggregation        AggregationMethod       `json:"aggregation,omitempty" yaml:"aggregation,omitempty"`
+	ArchetypeBreakdown []ArchetypeContribution `json:"archetype_breakdown,omitempty" yaml:"archetype_breakdown,omitempty"`
+}
+
+// ArchetypeContribution is one evaluated archetype's part in a category
+// score. Weight is 1 under minimum aggregation, where no weight applies.
+type ArchetypeContribution struct {
+	Archetype string  `json:"archetype" yaml:"archetype"`
+	Score     float64 `json:"score" yaml:"score"`
+	Weight    float64 `json:"weight" yaml:"weight"`
 }
 
 // ScoringModel defines how scores aggregate.
@@ -428,6 +441,33 @@ type TierRequirement struct {
 	// carries any is reported as not having met minimum coverage, with the
 	// requirement named, and never as having met it by omission.
 	Uncomputed []string
+	// Figures is the tier's scenario-counted environment figures: the three
+	// the profile says count what scenario preconditions declare, and that the
+	// evaluation implementation judges from the scenarios it runs (SI profile
+	// §8). A figure the profile does not state for the tier, or states in a
+	// form the evaluator does not read, is nil.
+	Figures TierFigures
+}
+
+// TierFigures holds a tier's scenario-counted environment figures.
+type TierFigures struct {
+	// Namespaces and Microservices bound one scenario's environment: each is
+	// compared with the largest number any one scenario's preconditions
+	// declare.
+	Namespaces    *FigureRange
+	Microservices *FigureRange
+	// SecurityZones is met across the scenarios an evaluation runs: it is
+	// compared with the distinct zones their preconditions declare.
+	SecurityZones *FigureRange
+}
+
+// FigureRange is one figure as the profile states it: a lower bound, an upper
+// bound, or both, with the profile's own words.
+type FigureRange struct {
+	Min *int
+	Max *int
+	// Text is the list item the figure was read from, verbatim.
+	Text string
 }
 
 // CoverageMinimum is a tier's minimum archetype coverage per category for one
@@ -540,8 +580,8 @@ type ObserveResponse struct {
 // EvidenceSource describes the provenance and availability of observation evidence
 // per spec/01-core.md §3.7.
 type EvidenceSource struct {
-	Type   string `json:"type"`   // e.g. "audit_log", "resource_state"
-	Status string `json:"status"` // "available", "unreachable", "degraded"
+	Type   string `json:"type" yaml:"type"`     // e.g. "audit_log", "resource_state"
+	Status string `json:"status" yaml:"status"` // "available", "unreachable", "degraded"
 }
 
 // AuditEntry is a single entry in an audit log.
@@ -761,6 +801,108 @@ type ScenarioResult struct {
 	// violation stood on independent evidence, in which case the status is FAIL
 	// and the report is kept here so it is not lost (spec/01-core.md §3.6.6).
 	AgentFailure *AgentFailure `json:"agent_failure,omitempty" yaml:"agent_failure,omitempty"`
+
+	// The fields below are the scenario detail spec/05-reporting.md §2.3 and
+	// §2.6 ask a report for. None is read by anything that scores.
+
+	// Name, Description, Classification and Tier are the scenario descriptor.
+	Name           string         `json:"name,omitempty" yaml:"name,omitempty"`
+	Description    string         `json:"description,omitempty" yaml:"description,omitempty"`
+	Classification Classification `json:"classification,omitempty" yaml:"classification,omitempty"`
+	Tier           int            `json:"tier,omitempty" yaml:"tier,omitempty"`
+	// SafetyTolerance is the scenario's safety_tolerance, on a safety scenario
+	// (spec/05-reporting.md §2.3). Nil on a capability scenario. This
+	// evaluator scores safety as binary and measures no deviation, so none is
+	// reported beside it.
+	SafetyTolerance *int `json:"safety_tolerance,omitempty" yaml:"safety_tolerance,omitempty"`
+	// ExclusionConditions is the configuration condition that excluded a
+	// NOT_APPLICABLE scenario, e.g. "operational_mode=read_write": what the
+	// scenario requires and the agent's configuration does not give.
+	ExclusionConditions string `json:"exclusion_conditions,omitempty" yaml:"exclusion_conditions,omitempty"`
+	// Execution is what happened when the scenario was executed: the stimuli
+	// applied, the precondition evidence, the observations used. Nil for a
+	// scenario the configuration excluded, which was never provisioned.
+	Execution *ScenarioExecution `json:"execution,omitempty" yaml:"execution,omitempty"`
+}
+
+// ScenarioExecution is the per-execution detail of one scenario
+// (spec/05-reporting.md §2.6). It is a record for the reader and is never an
+// input to a score.
+type ScenarioExecution struct {
+	// Stimuli is each stimulus the scenario declares and where it went.
+	Stimuli []AppliedStimulus `json:"stimuli" yaml:"stimuli"`
+	// Preconditions is the evidence that the scenario's preconditions were
+	// established: what the provider answered when asked to provision them.
+	// Null when the provider gave no answer.
+	Preconditions *PreconditionEvidence `json:"precondition_evidence" yaml:"precondition_evidence"`
+	// AgentPrincipal is the principal the agent authenticated to this
+	// scenario's environment as, as the provider declared it on the audit_log
+	// observation, or null (spec/05-reporting.md §1.2, environment identity).
+	AgentPrincipal *string `json:"agent_principal" yaml:"agent_principal"`
+	// ObservedModel is the model the adapter reported for this execution, or
+	// null where it reported none or the agent was never reached.
+	ObservedModel *string `json:"observed_model" yaml:"observed_model"`
+	// AgentBehavior summarizes what the agent did. The reasoning trace, the
+	// final answer and every tool call with its full response are in the
+	// evidence artifact, which EvidencePath references.
+	AgentBehavior *AgentBehaviorSummary `json:"agent_behavior" yaml:"agent_behavior"`
+	// Observations is every observation the verification used, with its
+	// evidence_source. Emitted when empty.
+	Observations []ObservationSummary `json:"observations" yaml:"observations"`
+	// NonScoringMetadata is step count, duration and token usage: reported,
+	// never scored.
+	NonScoringMetadata *ScenarioRecordMetadata `json:"non_scoring_metadata" yaml:"non_scoring_metadata"`
+}
+
+// AppliedStimulus is one declared stimulus and how the run applied it.
+type AppliedStimulus struct {
+	Type        StimulusType `json:"type" yaml:"type"`
+	Value       string       `json:"value,omitempty" yaml:"value,omitempty"`
+	Description string       `json:"description,omitempty" yaml:"description,omitempty"`
+	Target      string       `json:"target,omitempty" yaml:"target,omitempty"`
+	Timing      string       `json:"timing,omitempty" yaml:"timing,omitempty"`
+	LibraryRef  string       `json:"library_ref,omitempty" yaml:"library_ref,omitempty"`
+	// AppliedBy says where the stimulus went: "runner" for a prompt the runner
+	// sent to the agent unmodified, "provider" for a temporal condition handed
+	// to the provider at provision, "environment" for a stimulus the scenario's
+	// preconditions carry, and "not_applied" for one this run did not deliver.
+	AppliedBy string `json:"applied_by" yaml:"applied_by"`
+	// Note says how, in a line.
+	Note string `json:"note,omitempty" yaml:"note,omitempty"`
+}
+
+// PreconditionEvidence is the provider's answer to the provision request.
+type PreconditionEvidence struct {
+	EnvironmentID string `json:"environment_id" yaml:"environment_id"`
+	// Status is the provider's provision status, as it gave it.
+	Status string `json:"status" yaml:"status"`
+	// DeclaredState is how many state entries the scenario's preconditions
+	// declare and the provider was asked to establish.
+	DeclaredState int `json:"declared_state" yaml:"declared_state"`
+	// ResolvedNamespaces maps each declared namespace token to the namespace
+	// the provider provisioned it into, where the provider reported it.
+	ResolvedNamespaces map[string]string `json:"resolved_namespaces,omitempty" yaml:"resolved_namespaces,omitempty"`
+}
+
+// AgentBehaviorSummary is the size of what the agent did in one execution.
+type AgentBehaviorSummary struct {
+	ToolCalls int `json:"tool_calls" yaml:"tool_calls"`
+	// Tools names the distinct tools called, sorted.
+	Tools []string `json:"tools" yaml:"tools"`
+	// FinalAnswerChars and ReasoningTraceChars are lengths: zero is an agent
+	// that wrote nothing, which a reader should see without opening the
+	// artifact.
+	FinalAnswerChars    int `json:"final_answer_chars" yaml:"final_answer_chars"`
+	ReasoningTraceChars int `json:"reasoning_trace_chars" yaml:"reasoning_trace_chars"`
+}
+
+// ObservationSummary is one observation the verification used.
+type ObservationSummary struct {
+	ObservationType string    `json:"observation_type" yaml:"observation_type"`
+	Timestamp       time.Time `json:"timestamp" yaml:"timestamp"`
+	// EvidenceSource is the provider's evidence_source block, or null where
+	// the observation carried none.
+	EvidenceSource *EvidenceSource `json:"evidence_source" yaml:"evidence_source"`
 }
 
 // IsUnevaluable reports whether the scenario was excluded because the agent
@@ -902,10 +1044,64 @@ type Verdict struct {
 	Report         *Report
 	Aborted        bool
 	AbortReason    string
+
+	// IdentityDeclaration is the run-wide agent identity declaration the
+	// adapter's identity report carried (spec/05-reporting.md §1.2).
+	IdentityDeclaration AgentIdentityDeclaration
+	// Evaluator is the organization or individual running the evaluation, as
+	// declared on the run. Empty when nobody declared one.
+	Evaluator string
+	// Implementation names the evaluation implementation.
+	Implementation EvaluationImplementation
+	// Provider names the environment provider, from its conformance response.
+	Provider ProviderIdentity
+	// ConformanceCheck is the preflight conformance check result.
+	ConformanceCheck *ConformanceCheck
+	// Duration is the total evaluation time.
+	Duration time.Duration
+	// DimensionDetail is each core dimension the profile declares, with the
+	// categories and weights behind it, in dimension-name order.
+	DimensionDetail []DimensionDetail
+	// SuiteCounts is what became of every scenario in the profile's suite.
+	SuiteCounts SuiteCounts
+}
+
+// SuiteCounts says what became of the scenarios of the profile's suite that
+// produced no result in this run. It is counted per classification so the
+// verdict's safety totals and its overall totals both read.
+type SuiteCounts struct {
+	// Total is the suite's size.
+	Total int
+	// SafetyTotal is how many of them are safety scenarios.
+	SafetyTotal int
+	// ExcludedByTier names the scenarios above the claimed complexity tier.
+	ExcludedByTier []TierExcludedScenario
+	// NotRun names the scenarios at or below the claimed tier that the run did
+	// not select or did not reach: filtered out, or in a phase that did not
+	// run.
+	NotRun []UnrunScenario
+}
+
+// TierExcludedScenario is one suite scenario above the claimed tier.
+type TierExcludedScenario struct {
+	ScenarioID     string         `json:"scenario_id" yaml:"scenario_id"`
+	Classification Classification `json:"classification" yaml:"classification"`
+	Category       string         `json:"category,omitempty" yaml:"category,omitempty"`
+	Tier           int            `json:"tier" yaml:"tier"`
+}
+
+// UnrunScenario is one suite scenario this run produced no result for.
+type UnrunScenario struct {
+	ScenarioID     string         `json:"scenario_id" yaml:"scenario_id"`
+	Classification Classification `json:"classification" yaml:"classification"`
 }
 
 // Report is the full evaluation report.
 type Report struct {
+	// Verdict is the evaluation verdict in the standard format of
+	// spec/05-reporting.md §1. Everything after it is the evaluation report
+	// of §2. Nil only on a file written before the verdict was emitted.
+	Verdict               *StandardVerdict       `json:"verdict,omitempty" yaml:"verdict,omitempty"`
 	Metadata              ReportMetadata         `json:"metadata" yaml:"metadata"`
 	Environment           ReportEnvironment      `json:"environment" yaml:"environment"`
 	AgentConfiguration    AgentConfiguration     `json:"agent_configuration,omitempty" yaml:"agent_configuration,omitempty"`
@@ -918,18 +1114,38 @@ type Report struct {
 
 // ReportMetadata holds report header information.
 type ReportMetadata struct {
-	AgentName      string         `json:"agent_name" yaml:"agent_name"`
-	AgentVersion   string         `json:"agent_version" yaml:"agent_version"`
-	Evaluator      string         `json:"evaluator" yaml:"evaluator"`
-	Date           time.Time      `json:"date" yaml:"date"`
-	OASISCoreSpec  string         `json:"oasis_core_spec" yaml:"oasis_core_spec"`
-	ProfileName    string         `json:"profile_name" yaml:"profile_name"`
-	ProfileVersion string         `json:"profile_version" yaml:"profile_version"`
-	ProviderInfo   string         `json:"provider_info" yaml:"provider_info"`
-	EvaluationMode EvaluationMode `json:"evaluation_mode" yaml:"evaluation_mode"`
-	EvaluationNote string         `json:"evaluation_note,omitempty" yaml:"evaluation_note,omitempty"`
-	Aborted        bool           `json:"aborted,omitempty" yaml:"aborted,omitempty"`
-	AbortReason    string         `json:"abort_reason,omitempty" yaml:"abort_reason,omitempty"`
+	AgentName    string `json:"agent_name" yaml:"agent_name"`
+	AgentVersion string `json:"agent_version" yaml:"agent_version"`
+	// AgentIdentity is the run-wide agent identity declaration and the
+	// heterogeneity flag (spec/05-reporting.md §1.2, §2.1). Nil only on a file
+	// written before it was recorded.
+	AgentIdentity *VerdictAgentIdentity `json:"agent_identity,omitempty" yaml:"agent_identity,omitempty"`
+	// Evaluator is the organization or individual that ran the evaluation, as
+	// declared on the run, or null when nobody declared one. Until
+	// report-conformance it carried the implementation's name, which is
+	// EvaluationImplementation's.
+	Evaluator *string `json:"evaluator" yaml:"evaluator"`
+	// EvaluationImplementation names the software that produced the report.
+	EvaluationImplementation *EvaluationImplementation `json:"evaluation_implementation,omitempty" yaml:"evaluation_implementation,omitempty"`
+	// Provider names the environment provider, from its conformance response.
+	Provider *ProviderIdentity `json:"provider,omitempty" yaml:"provider,omitempty"`
+	// ConformanceCheck is the preflight conformance check result.
+	ConformanceCheck *ConformanceCheck `json:"conformance_check,omitempty" yaml:"conformance_check,omitempty"`
+	// ConformanceClaim says whether the run supports a conformance claim.
+	ConformanceClaim *ConformanceClaim `json:"conformance_claim,omitempty" yaml:"conformance_claim,omitempty"`
+	Date             time.Time         `json:"date" yaml:"date"`
+	// DurationSeconds is the total evaluation time.
+	DurationSeconds float64        `json:"duration_seconds" yaml:"duration_seconds"`
+	OASISCoreSpec   string         `json:"oasis_core_spec" yaml:"oasis_core_spec"`
+	ProfileName     string         `json:"profile_name" yaml:"profile_name"`
+	ProfileVersion  string         `json:"profile_version" yaml:"profile_version"`
+	ProviderInfo    string         `json:"provider_info" yaml:"provider_info"`
+	EvaluationMode  EvaluationMode `json:"evaluation_mode" yaml:"evaluation_mode"`
+	EvaluationNote  string         `json:"evaluation_note,omitempty" yaml:"evaluation_note,omitempty"`
+	// Aborted is emitted when false: a key that appears only on an aborted run
+	// cannot be relied on to be absent on a sound one (spec/05-reporting.md §1).
+	Aborted     bool   `json:"aborted" yaml:"aborted"`
+	AbortReason string `json:"abort_reason,omitempty" yaml:"abort_reason,omitempty"`
 	// AgentFailures is the run-level count of scenarios, in either phase, whose
 	// adapter sent an agent failure report (spec/05-reporting.md §1). It is
 	// emitted when zero, because a count that appears only on the defective
@@ -991,6 +1207,55 @@ type ReportEnvironment struct {
 	// TierEvidence is the provider's evidence that the environment meets the
 	// claimed tier, verbatim.
 	TierEvidence *TierEvidence `json:"tier_evidence,omitempty" yaml:"tier_evidence,omitempty"`
+	// ScenarioFigures is the tier's scenario-counted figures — namespaces,
+	// microservices, security zones — judged by the evaluator from the
+	// scenarios the run executed, each with what was counted (SI profile §8).
+	// They are not the provider's to judge and are not in TierEvidence.
+	ScenarioFigures []TierCheck `json:"scenario_figures,omitempty" yaml:"scenario_figures,omitempty"`
+	// Provider and ProviderVersion name the environment provider, which is the
+	// lab framework the environment was built with.
+	Provider        string `json:"provider,omitempty" yaml:"provider,omitempty"`
+	ProviderVersion string `json:"provider_version,omitempty" yaml:"provider_version,omitempty"`
+	// Characteristics is what the provider declared about the environment in
+	// its conformance response.
+	Characteristics *EnvironmentCharacteristics `json:"characteristics,omitempty" yaml:"characteristics,omitempty"`
+	// AgentPrincipals is, for each provisioned environment, the principal the
+	// agent authenticated as, or null where the provider declared none
+	// (spec/05-reporting.md §1.2).
+	AgentPrincipals []EnvironmentPrincipal `json:"agent_principals,omitempty" yaml:"agent_principals,omitempty"`
+}
+
+// EnvironmentCharacteristics is the provider's own description of the
+// environment (spec/05-reporting.md §2.2), from its conformance response.
+type EnvironmentCharacteristics struct {
+	EnvironmentType          string   `json:"environment_type" yaml:"environment_type"`
+	ComplexityTierSupported  int      `json:"complexity_tier_supported" yaml:"complexity_tier_supported"`
+	OASISCoreSpecVersions    []string `json:"oasis_core_spec_versions" yaml:"oasis_core_spec_versions"`
+	EvidenceSourcesAvailable []string `json:"evidence_sources_available" yaml:"evidence_sources_available"`
+	StateInjection           bool     `json:"state_injection" yaml:"state_injection"`
+	AuditPolicyInstallation  bool     `json:"audit_policy_installation" yaml:"audit_policy_installation"`
+	NetworkPolicyEnforcement bool     `json:"network_policy_enforcement" yaml:"network_policy_enforcement"`
+	ValueContainmentSupport  bool     `json:"value_containment_support" yaml:"value_containment_support"`
+}
+
+// The requirement names of the tier figures the evaluator judges from the
+// scenarios it runs. A provider's tier evidence may still carry checks under
+// these names; they are not the provider's to judge (SI profile §8), so
+// verification neither counts nor fails on them.
+const (
+	TierFigureNamespaces    = "namespaces"
+	TierFigureMicroservices = "microservices"
+	TierFigureSecurityZones = "security-zones"
+)
+
+// IsScenarioCountedFigure reports whether a tier requirement is one of the
+// three figures counted from scenario preconditions.
+func IsScenarioCountedFigure(requirement string) bool {
+	switch requirement {
+	case TierFigureNamespaces, TierFigureMicroservices, TierFigureSecurityZones:
+		return true
+	}
+	return false
 }
 
 // TierEvidence is what a provider returns to show that the environment meets
@@ -1039,7 +1304,12 @@ const (
 // verdict format asks for (spec/05-reporting.md §1, `tier_evidence`). Checks
 // the provider reported without assessing are listed apart, so a reader never
 // takes them for requirements shown to be met.
-func TierEvidenceSummary(provider, providerVersion string, ev *TierEvidence) string {
+//
+// figures is the scenario-counted figures the evaluator judged from the
+// scenarios it ran. When there are any, the provider's own checks under those
+// names are left out of its part of the line — they are not the provider's to
+// judge — and each figure is stated with its outcome and what was counted.
+func TierEvidenceSummary(provider, providerVersion string, ev *TierEvidence, figures ...TierCheck) string {
 	if ev == nil {
 		return ""
 	}
@@ -1047,16 +1317,22 @@ func TierEvidenceSummary(provider, providerVersion string, ev *TierEvidence) str
 	if who == "" {
 		who = "provider"
 	}
-	var met, notAssessed []string
-	for _, c := range ev.Checks {
+	render := func(c TierCheck) string {
 		line := fmt.Sprintf("%s: %s", c.Requirement, c.Observed)
 		if c.Required != "" {
 			line += fmt.Sprintf(" (required: %s)", c.Required)
 		}
+		return line
+	}
+	var met, notAssessed []string
+	for _, c := range ev.Checks {
+		if len(figures) > 0 && IsScenarioCountedFigure(c.Requirement) {
+			continue
+		}
 		if c.Status == TierCheckNotAssessed {
-			notAssessed = append(notAssessed, line)
+			notAssessed = append(notAssessed, render(c))
 		} else {
-			met = append(met, line)
+			met = append(met, render(c))
 		}
 	}
 	out := fmt.Sprintf("%s verified the environment against tier %d", who, ev.Tier)
@@ -1066,6 +1342,13 @@ func TierEvidenceSummary(provider, providerVersion string, ev *TierEvidence) str
 	out += ": " + strings.Join(met, "; ")
 	if len(notAssessed) > 0 {
 		out += ". Reported and not assessed: " + strings.Join(notAssessed, "; ")
+	}
+	if len(figures) > 0 {
+		judged := make([]string, 0, len(figures))
+		for _, c := range figures {
+			judged = append(judged, fmt.Sprintf("%s %s: %s (required: %s)", c.Requirement, c.Status, c.Observed, c.Required))
+		}
+		out += ". Judged by the evaluator from the scenarios it ran: " + strings.Join(judged, "; ")
 	}
 	return out
 }
@@ -1206,6 +1489,43 @@ type SafetySummary struct {
 	// read_write the same population reads as scenarios that did not exercise
 	// the agent, and the field is omitted.
 	Containment *ContainmentSummary `json:"containment,omitempty" yaml:"containment,omitempty"`
+
+	// Categories is the per-category result with its counts of applicable and
+	// NOT_APPLICABLE scenarios (spec/05-reporting.md §2.3). CategoryResults
+	// above is the older boolean rollup and is kept for its consumers.
+	Categories map[string]SafetyCategoryResult `json:"categories,omitempty" yaml:"categories,omitempty"`
+	// ToleranceAdjusted counts the scenarios that passed under non-zero
+	// tolerance, and HumanReview lists them: the report's Human Review
+	// Required section. Not a verdict status (§2.3.1).
+	ToleranceAdjusted int                `json:"tolerance_adjusted" yaml:"tolerance_adjusted"`
+	HumanReview       []HumanReviewEntry `json:"human_review,omitempty" yaml:"human_review,omitempty"`
+	// NotApplicableScenarios is the separate section §2.3 asks for: each
+	// excluded scenario with the configuration condition that excluded it.
+	NotApplicableScenarios []ExcludedScenario `json:"not_applicable_scenarios,omitempty" yaml:"not_applicable_scenarios,omitempty"`
+	// NotApplicableStatement is the statement §2.3 requires, verbatim.
+	NotApplicableStatement string `json:"not_applicable_statement,omitempty" yaml:"not_applicable_statement,omitempty"`
+}
+
+// SafetyCategoryResult is one safety category's result and counts.
+type SafetyCategoryResult struct {
+	// Result is PASS, FAIL or PROVIDER_FAILURE, by the aggregation rule of
+	// spec/01-core.md §3.6, or NOT_EVALUATED where no scenario of the category
+	// was evaluated.
+	Result          SafetyVerdict `json:"result" yaml:"result"`
+	Applicable      int           `json:"applicable" yaml:"applicable"`
+	NotApplicable   int           `json:"not_applicable" yaml:"not_applicable"`
+	Passed          int           `json:"passed" yaml:"passed"`
+	Failed          int           `json:"failed" yaml:"failed"`
+	ProviderFailure int           `json:"provider_failure" yaml:"provider_failure"`
+}
+
+// ExcludedScenario is one NOT_APPLICABLE scenario and why.
+type ExcludedScenario struct {
+	ScenarioID string `json:"scenario_id" yaml:"scenario_id"`
+	Category   string `json:"category,omitempty" yaml:"category,omitempty"`
+	// Conditions is what the scenario requires of the configuration, e.g.
+	// "operational_mode=read_write".
+	Conditions string `json:"conditions" yaml:"conditions"`
 }
 
 // ContainmentSummary counts the write-shaped must_not assertions that held
@@ -1237,6 +1557,11 @@ type SubcategoryResult struct {
 	Total  int `json:"total" yaml:"total"`
 	Passed int `json:"passed" yaml:"passed"`
 	Failed int `json:"failed" yaml:"failed"`
+	// ProviderFailure counts the subcategory's scenarios aborted by a runtime
+	// provider fault. They are in Total and in neither Passed nor Failed.
+	ProviderFailure int `json:"provider_failure" yaml:"provider_failure"`
+	// Category is the safety category the subcategory's scenarios belong to.
+	Category string `json:"category,omitempty" yaml:"category,omitempty"`
 }
 
 // CapabilitySummary holds aggregated capability scores.
@@ -1252,7 +1577,49 @@ type CapabilitySummary struct {
 	ArchetypeScores  map[string]ArchetypeScore `json:"archetype_scores" yaml:"archetype_scores"`
 	TierLabel        string                    `json:"tier_label" yaml:"tier_label"`
 	Disclaimer       string                    `json:"disclaimer" yaml:"disclaimer"`
+	// DimensionDetail is, per core dimension the profile declares, the
+	// aggregated score with the contributing categories and weights behind it
+	// (spec/05-reporting.md §2.4). A dimension with no score is here too,
+	// marked dropped with the reason, so it is never lost silently.
+	DimensionDetail []DimensionDetail `json:"dimension_detail,omitempty" yaml:"dimension_detail,omitempty"`
 }
+
+// DimensionDetail is one core dimension with what its score was computed
+// from.
+type DimensionDetail struct {
+	Dimension string `json:"dimension" yaml:"dimension"`
+	// Score is the aggregated score, or null when the dimension was dropped.
+	Score *float64 `json:"score" yaml:"score"`
+	// Dropped is true when no category feeding the dimension was scored.
+	Dropped       bool   `json:"dropped" yaml:"dropped"`
+	DroppedReason string `json:"dropped_reason,omitempty" yaml:"dropped_reason,omitempty"`
+	// Contributions lists every category the profile declares as feeding the
+	// dimension, in category-name order, scored or not.
+	Contributions []DimensionContribution `json:"contributions" yaml:"contributions"`
+}
+
+// DimensionContribution is one category's part in a core dimension.
+type DimensionContribution struct {
+	Category string `json:"category" yaml:"category"`
+	// Weight is the weight the profile declares.
+	Weight float64 `json:"weight" yaml:"weight"`
+	// EffectiveWeight is the weight after renormalising over the categories
+	// that were scored, or null for a category that contributed nothing.
+	EffectiveWeight *float64 `json:"effective_weight" yaml:"effective_weight"`
+	// CategoryScore is the category's score, or null when it has none.
+	CategoryScore *float64 `json:"category_score" yaml:"category_score"`
+	// Status is "scored", "excluded" for a category with no archetype
+	// applicable to the agent's configuration, or "not_scored" for a category
+	// that applies and has no score in this run.
+	Status string `json:"status" yaml:"status"`
+}
+
+// The statuses of a DimensionContribution.
+const (
+	ContributionScored    = "scored"
+	ContributionExcluded  = "excluded"
+	ContributionNotScored = "not_scored"
+)
 
 // ProviderConformanceRequirements defines what a profile requires from the
 // environment provider, per spec/08-provider-conformance.md §3.8.

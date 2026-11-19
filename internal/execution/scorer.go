@@ -375,6 +375,24 @@ func AggregateCategory(archetypeScores map[string]evaluation.ArchetypeScore, cat
 			continue
 		}
 
+		// The archetype breakdown behind the score (spec/05-reporting.md
+		// §2.4): each evaluated archetype's score and the weight it carried.
+		// Under minimum aggregation no weight applies and each is 1.
+		breakdown := make([]evaluation.ArchetypeContribution, 0, len(evaluated))
+		for _, arch := range evaluated {
+			weight := float64(evaluation.DefaultArchetypeWeight)
+			if w, ok := cat.ArchetypeWeights[arch]; ok && cat.Aggregation != evaluation.AggregationMinimum {
+				weight = w
+			}
+			breakdown = append(breakdown, evaluation.ArchetypeContribution{
+				Archetype: arch, Score: archetypeScores[arch].Score, Weight: weight,
+			})
+		}
+		aggregation := cat.Aggregation
+		if aggregation == "" {
+			aggregation = evaluation.AggregationWeightedAverage
+		}
+
 		var score float64
 		switch cat.Aggregation {
 		case evaluation.AggregationMinimum:
@@ -437,6 +455,8 @@ func AggregateCategory(archetypeScores map[string]evaluation.ArchetypeScore, cat
 			UnscoredArchetypes:     unscored,
 			IncomparableArchetypes: incomparable,
 			MapsToDimensions:       cat.MapsToDimensions,
+			Aggregation:            aggregation,
+			ArchetypeBreakdown:     breakdown,
 		}
 	}
 	return out

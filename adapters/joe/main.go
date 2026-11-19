@@ -112,6 +112,15 @@ type AgentResponse struct {
 	// sends nothing rather than zeros that would read as measurements.
 	TokenUsage          *TokenUsage `json:"token_usage,omitempty"`
 	AgentLoopDurationMs *int        `json:"agent_loop_duration_ms,omitempty"`
+	// StepCount is how many steps joe's agent loop recorded for the turn: the
+	// length of the `steps` array of its task response. NON-SCORING, like the
+	// two above; oasisctl reports it in the scenario record and never reads
+	// it into a score (oasis-spec spec/05-reporting.md §1.2).
+	//
+	// An omitempty pointer: a joe response with no `steps` array at all sends
+	// nothing, and one whose array is empty sends 0 — a turn that recorded no
+	// step is a measurement, and a response that says nothing is not.
+	StepCount *int `json:"step_count,omitempty"`
 }
 
 // TokenUsage is joe's per-task token accounting as forwarded to oasisctl. The
@@ -165,6 +174,36 @@ type AgentIdentityResponse struct {
 	Name        string `json:"name"`
 	Version     string `json:"version"`
 	Description string `json:"description"`
+
+	// The run-wide agent identity declaration (oasis-spec
+	// spec/05-reporting.md §1.2). Each fact is what joe itself reports, read
+	// when the identity is asked for, and is OMITTED when joe does not
+	// establish it: an older joe with no agent-identity route, a build with no
+	// injected version or commit, a joe with no model configured. The adapter
+	// never fills one in. oasisctl names an absent fact as not established,
+	// and a run with any does not support a conformance claim.
+	//
+	//   - BinaryVersion and BinarySHA are joe's build identity, from
+	//     GET /api/v1/version: the version string and the commit the binary
+	//     was built from.
+	//   - ConfigHash, SystemPromptHash, DeclaredModel and DeclaredProvider are
+	//     from GET /api/v1/agent-identity (joe D-0172). The model is the
+	//     provider's identifier, resolved the way a task response's `model` is
+	//     (joe D-0153), so the declared model and each scenario's observed
+	//     model are comparable.
+	BinaryVersion    string `json:"binary_version,omitempty"`
+	BinarySHA        string `json:"binary_sha,omitempty"`
+	ConfigHash       string `json:"config_hash,omitempty"`
+	SystemPromptHash string `json:"system_prompt_hash,omitempty"`
+	DeclaredModel    string `json:"declared_model,omitempty"`
+	DeclaredProvider string `json:"declared_provider,omitempty"`
+	// FixedWrapperText is the constant text this adapter adds to every
+	// stimulus (oasis-spec spec/04-execution.md §1.1). It adds none: the
+	// prompt oasisctl sends is forwarded to joe as the task message,
+	// unmodified. That is stated as an explicit null — the field is NOT
+	// omitempty — because an absent key would say the adapter had not
+	// answered, and it has.
+	FixedWrapperText *string `json:"fixed_wrapper_text"`
 }
 
 // Joe request/response types.
@@ -270,6 +309,73 @@ type JoeStatusResponse struct {
 	Version string `json:"version"`
 }
 
+// JoeVersionResponse is the part of joe's GET /api/v1/version the adapter
+// reads: joe's build identity.
+type JoeVersionResponse struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+}
+
+// JoeAgentIdentityResponse is joe's GET /api/v1/agent-identity (joe D-0172).
+type JoeAgentIdentityResponse struct {
+	ConfigHash       string `json:"config_hash"`
+	SystemPromptHash string `json:"system_prompt_hash"`
+	Model            string `json:"model"`
+	Provider         string `json:"provider"`
+}
+
+// joe's build identity carries these values when nothing was injected at
+// build time (joe internal/buildinfo). Each says "this build does not know",
+// so neither is forwarded as a fact about the binary.
+const (
+	joeUnsetVersion = "dev"
+	joeUnsetCommit  = "none"
+)
+
+// fetchJoeJSON reads one of joe's JSON routes into out. It reports false on
+// any failure — joe unreachable, a non-200 status, a body that does not
+// decode — and the caller then leaves the facts that route carries absent.
+func fetchJoeJSON(baseURL, token, path string, out interface{}) bool {
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(baseURL, "/")+path, nil)
+	if err != nil {
+		return false
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	return json.NewDecoder(resp.Body).Decode(out) == nil
+}
+
+// declareIdentity fills the identity declaration from what joe reports now.
+// A fact joe does not establish stays empty and is omitted on the wire.
+func declareIdentity(cfg adapterConfig, id *AgentIdentityResponse) {
+	var build JoeVersionResponse
+	if fetchJoeJSON(cfg.joeURL, cfg.joeToken, "/api/v1/version", &build) {
+		if build.Version != joeUnsetVersion {
+			id.BinaryVersion = build.Version
+		}
+		if build.Commit != joeUnsetCommit {
+			id.BinarySHA = build.Commit
+		}
+	}
+	var agent JoeAgentIdentityResponse
+	if fetchJoeJSON(cfg.joeURL, cfg.joeToken, "/api/v1/agent-identity", &agent) {
+		id.ConfigHash = agent.ConfigHash
+		id.SystemPromptHash = agent.SystemPromptHash
+		id.DeclaredModel = agent.Model
+		id.DeclaredProvider = agent.Provider
+	}
+}
+
 // adapterConfig holds CLI flags for the adapter.
 type adapterConfig struct {
 	listen          string
@@ -339,6 +445,12 @@ func translateResponse(jr *JoeResponse) *AgentResponse {
 		EmptyAnswerGate:     jr.EmptyAnswerGate,
 		TokenUsage:          jr.TotalTokens,
 		AgentLoopDurationMs: jr.DurationMs,
+	}
+	// nil is a response that carried no `steps` array; an empty array is a
+	// turn that recorded none, and is counted.
+	if jr.Steps != nil {
+		steps := len(jr.Steps)
+		resp.StepCount = &steps
 	}
 	for _, d := range jr.Discarded {
 		// A conversion rather than a field-by-field literal: the two types are
@@ -833,12 +945,18 @@ func newServeMux(cfg adapterConfig) *http.ServeMux {
 			return
 		}
 
+		identity := AgentIdentityResponse{
+			Name:        "joe",
+			Version:     cfg.agentVersion,
+			Description: "AI infrastructure copilot for Kubernetes",
+		}
+		// Read from joe when the identity is asked for, not when the adapter
+		// started: the declaration is about the joe the run is about to
+		// measure.
+		declareIdentity(cfg, &identity)
+
 		resp := IdentityAndConfigResponse{
-			Identity: AgentIdentityResponse{
-				Name:        "joe",
-				Version:     cfg.agentVersion,
-				Description: "AI infrastructure copilot for Kubernetes",
-			},
+			Identity: identity,
 			Configuration: map[string]interface{}{
 				"operational_mode": cfg.operationalMode,
 				"zone_model":       cfg.zoneModel,

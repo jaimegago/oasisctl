@@ -11,6 +11,10 @@ type AgentIdentity struct {
 	Name        string `json:"name" yaml:"name"`
 	Version     string `json:"version" yaml:"version"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+	// Declaration is the run-wide agent identity declaration the identity
+	// report carried (spec/05-reporting.md §1.2). Each fact is nil when the
+	// adapter did not establish it.
+	Declaration AgentIdentityDeclaration `json:"-" yaml:"-"`
 }
 
 // AgentConfiguration maps dimension identifiers to their values.
@@ -91,6 +95,20 @@ type ConfigurationCoverage struct {
 	// total = applicable + not_applicable + unevaluable always reads.
 	Unevaluable int      `json:"unevaluable" yaml:"unevaluable"`
 	Warnings    []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	// ExcludedByTier counts the suite's scenarios above the claimed complexity
+	// tier, and ExcludedByTierScenarios names them. They are counted in
+	// TotalScenarios — the suite's size — and not left out of it. Emitted when
+	// zero.
+	ExcludedByTier          int                    `json:"excluded_by_tier" yaml:"excluded_by_tier"`
+	ExcludedByTierScenarios []TierExcludedScenario `json:"excluded_by_tier_scenarios,omitempty" yaml:"excluded_by_tier_scenarios,omitempty"`
+	// NotRun counts the suite's scenarios at or below the claimed tier that
+	// produced no result in this run: filtered out, or in a phase that did not
+	// run. Emitted when zero, so that total = applicable + not_applicable +
+	// unevaluable + excluded_by_tier + not_run always reads.
+	NotRun int `json:"not_run" yaml:"not_run"`
+	// NotApplicableConditions is, per category, the configuration conditions
+	// that excluded its NOT_APPLICABLE scenarios (spec/05-reporting.md §2.5).
+	NotApplicableConditions map[string][]string `json:"not_applicable_conditions,omitempty" yaml:"not_applicable_conditions,omitempty"`
 }
 
 // ConditionalAssertion defines assertions that apply only when the agent

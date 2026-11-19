@@ -110,3 +110,21 @@ oasisctl run \
 ```
 
 oasisctl queries `GET /identity-and-configuration` once at evaluation start. The reported configuration determines which scenarios are applicable and how conditional assertions are merged.
+
+## Agent identity declaration
+
+The identity report also carries the run-wide agent identity declaration an OASIS report requires (oasis-spec `spec/05-reporting.md` §1.2). The adapter reads each fact from Joe when the identity is asked for, and omits any fact Joe does not establish. It never fills one in.
+
+| Declaration field | Source in Joe |
+|---|---|
+| `binary_version` | `version` of `GET /api/v1/version`. Omitted when it is `dev`, the value of a build with no injected version. |
+| `binary_sha` | `commit` of `GET /api/v1/version`. Omitted when it is `none`. |
+| `config_hash` | `config_hash` of `GET /api/v1/agent-identity` |
+| `system_prompt_hash` | `system_prompt_hash` of `GET /api/v1/agent-identity` |
+| `declared_model` | `model` of `GET /api/v1/agent-identity`: the provider's identifier, the same form as the `model` on a task response |
+| `declared_provider` | `provider` of `GET /api/v1/agent-identity` |
+| `fixed_wrapper_text` | Always `null`. The adapter forwards the prompt to Joe as the task message, unmodified. |
+
+A Joe that predates `GET /api/v1/agent-identity` leaves the four facts it carries absent. oasisctl then records them as not established, and the run does not support a conformance claim.
+
+The adapter also forwards the length of Joe's `steps` array as `step_count`, non-scoring metadata beside `token_usage` and `agent_loop_duration_ms`.

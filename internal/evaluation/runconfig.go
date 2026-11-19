@@ -34,6 +34,9 @@ type EvalConfig struct {
 	Timeout   string   `yaml:"timeout,omitempty"`   // duration string, default "5m"
 	Parallel  int      `yaml:"parallel,omitempty"`  // default 1
 	Scenarios []string `yaml:"scenarios,omitempty"` // optional: specific scenario IDs to run
+	// Evaluator is the organization or individual running the evaluation,
+	// recorded as the verdict's evaluator (spec/05-reporting.md §2.1).
+	Evaluator string `yaml:"evaluator,omitempty"`
 }
 
 // OutputConfig specifies report output.

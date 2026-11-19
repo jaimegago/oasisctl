@@ -22,7 +22,14 @@ Response:
   "identity": {
     "name": "joe",
     "version": "0.4.2",
-    "description": "AI infrastructure copilot for Kubernetes"
+    "description": "AI infrastructure copilot for Kubernetes",
+    "binary_version": "0.4.2",
+    "binary_sha": "81e52ba",
+    "config_hash": "sha256:6f1c…",
+    "system_prompt_hash": "sha256:9b0e…",
+    "declared_model": "gemini-2.5-pro",
+    "declared_provider": "gemini",
+    "fixed_wrapper_text": null
   },
   "configuration": {
     "operational_mode": "read_write",
@@ -37,9 +44,25 @@ Response:
 | `identity.name` | string | Agent name. |
 | `identity.version` | string | Agent version string. |
 | `identity.description` | string | Short description (optional). |
+| `identity.binary_version` | string | The agent binary's version. |
+| `identity.binary_sha` | string | The commit or digest identifying the agent binary. |
+| `identity.config_hash` | string | A hash of the agent's configuration. |
+| `identity.system_prompt_hash` | string | A hash of the agent's system prompt. |
+| `identity.declared_model` | string | The model the agent is configured to run on, in the same form as the `model` an execute response reports. |
+| `identity.declared_provider` | string | The provider of that model. |
+| `identity.fixed_wrapper_text` | string or null | Any constant text the adapter adds to every stimulus. `null` states that it adds none. |
 | `configuration` | object | Map of dimension identifiers to values. Must match the profile's `agent_configuration_schema`. |
 
 This endpoint is **required**. If it returns 404 or is not implemented, oasisctl fails the evaluation with a clear error.
+
+#### The agent identity declaration
+
+The seven fields from `binary_version` to `fixed_wrapper_text` are the run-wide agent identity declaration the evaluation report must carry (oasis-spec `spec/05-reporting.md` §1.2). The verdict records them under `metadata.agent_identity`.
+
+- **Each is optional on the wire, and an adapter sends only what it can establish.** A fact the adapter cannot establish is omitted. It is never sent as an empty string and never guessed. oasisctl treats an absent or empty value as not established: the verdict carries an explicit `null` for it and names it under `agent_identity.not_established`.
+- **`fixed_wrapper_text` has three answers.** A string is the wrapper the adapter applies. `null` states that it applies none. An absent key is the adapter not having said, which is not established.
+- **A run with any fact not established does not support a conformance claim.** The verdict says so under `metadata.conformance_claim`, with the facts named. The evaluation still runs and is still scored.
+- **`declared_model` is compared with each scenario's observed model.** Where they differ on any scenario the run is flagged `heterogeneous: true` and the scenarios are listed with both values. Report the declared model in the form the execute response's `model` uses, or every scenario will read as a difference.
 
 ### Request
 
@@ -97,6 +120,7 @@ Authorization: Bearer <token>   (optional)
 | `session_id` | string | The session the prompt ran in (oasis-spec `spec/04-execution.md` §1.3). An opaque string the agent or its adapter assigns. Return it for **every** request: each request runs in a fresh session, so each returns its own. oasisctl records it in the verdict's scenario record and the evidence artifact, and hands it back to `GET /audit-trail`. It never mints one. The one response that may lack it is one carrying `agent_failure` for a failure that left no session to name. |
 | `agent_failure` | object | Optional. The **agent failure report** (oasis-spec `spec/04-execution.md` §1.2). Present only when the agent could not complete the task for its own infrastructure reasons. |
 | `agent_failure.cause` | string | The failure as the agent or adapter observed it — e.g. the provider's error. Recorded verbatim. |
+| `token_usage`, `agent_loop_duration_ms`, `step_count` | object, int, int | Optional **non-scoring metadata**: the agent's token accounting (`input_tokens`, `output_tokens`, and `cache_read_tokens` / `cache_write_tokens` where its provider reports them), the time it spent in its own loop, and the number of steps it took. Each is omitted when the agent does not report it; an omitted figure is recorded as `null`, never as zero. oasisctl reports them in the scenario record and never reads one into a score (oasis-spec `spec/05-reporting.md` §1.2). |
 
 #### Agent failure report
 

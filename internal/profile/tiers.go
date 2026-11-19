@@ -40,7 +40,63 @@ var (
 	// "All 7 capability categories: all applicable archetypes, counted per §8.1".
 	coverageFigureRE = regexp.MustCompile(
 		`(?i)\b(safety|capability)\s+categories:\s*(?:(?:≥|>=)\s*([0-9]+)\s+archetypes?\b|(all)(?:\s+applicable)?\s+archetypes\b)`)
+
+	// "**Environment:**", bare or as a list item.
+	environmentLabelRE = regexp.MustCompile(`(?i)^(?:[-*]\s+)?\*\*environment:?\*\*:?\s*$`)
+
+	// The three environment figures a profile says count what scenario
+	// preconditions declare (SI profile §8). Each pattern is anchored at the
+	// start of the list item: a figure that appears inside a longer clause —
+	// "Multi-cluster (≥2) or multi-namespace with team isolation (≥3
+	// namespaces, ...)" — is one arm of an alternative, not a bound, and is
+	// left unread rather than applied as if it stood alone.
+	//
+	// "≤3 namespaces", "≥3 namespaces".
+	namespaceFigureRE = regexp.MustCompile(`(?i)^(≤|<=|≥|>=)\s*([0-9]+)\s+namespaces?\b`)
+	// "1–5 microservices or single monolithic application", "8–15 microservices".
+	microserviceRangeRE = regexp.MustCompile(`(?i)^([0-9]+)\s*[–-]\s*([0-9]+)\s+microservices?\b`)
+	// "≥15 microservices with realistic dependency topology".
+	microserviceBoundRE = regexp.MustCompile(`(?i)^(≤|<=|≥|>=)\s*([0-9]+)\s+microservices?\b`)
+	// "At least 2 security zones".
+	securityZoneFigureRE = regexp.MustCompile(`(?i)^at least\s+([0-9]+)\s+security zones?\b`)
 )
+
+// readEnvironmentFigure reads one item of a tier's Environment list into the
+// tier's scenario-counted figures. An item that is none of the three figures,
+// or states one in a form these patterns do not anchor on, leaves the figures
+// as they were: the evaluator then reports that figure as not judged at the
+// tier, never as met.
+func readEnvironmentFigure(item string, figures *evaluation.TierFigures) {
+	bound := func(op string, n int) *evaluation.FigureRange {
+		r := &evaluation.FigureRange{Text: item}
+		if op == "≤" || op == "<=" {
+			r.Max = &n
+		} else {
+			r.Min = &n
+		}
+		return r
+	}
+	if m := namespaceFigureRE.FindStringSubmatch(item); m != nil {
+		n, _ := strconv.Atoi(m[2])
+		figures.Namespaces = bound(m[1], n)
+		return
+	}
+	if m := microserviceRangeRE.FindStringSubmatch(item); m != nil {
+		lo, _ := strconv.Atoi(m[1])
+		hi, _ := strconv.Atoi(m[2])
+		figures.Microservices = &evaluation.FigureRange{Min: &lo, Max: &hi, Text: item}
+		return
+	}
+	if m := microserviceBoundRE.FindStringSubmatch(item); m != nil {
+		n, _ := strconv.Atoi(m[2])
+		figures.Microservices = bound(m[1], n)
+		return
+	}
+	if m := securityZoneFigureRE.FindStringSubmatch(item); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		figures.SecurityZones = &evaluation.FigureRange{Min: &n, Text: item}
+	}
+}
 
 // parseTierRequirements reads each tier's minimum coverage from profile.md.
 // A profile that states none yields an empty map and no error.
@@ -52,8 +108,9 @@ func parseTierRequirements(path string) (map[int]evaluation.TierRequirement, err
 	defer func() { _ = f.Close() }()
 
 	out := make(map[int]evaluation.TierRequirement)
-	tier := 0           // the tier section being read; 0 outside one
-	inCoverage := false // inside that tier's minimum-coverage list
+	tier := 0              // the tier section being read; 0 outside one
+	inCoverage := false    // inside that tier's minimum-coverage list
+	inEnvironment := false // inside that tier's environment list
 	inFence := false
 
 	scanner := bufio.NewScanner(f)
@@ -71,11 +128,11 @@ func parseTierRequirements(path string) (map[int]evaluation.TierRequirement, err
 
 		if m := tierHeadingRE.FindStringSubmatch(line); m != nil {
 			tier, _ = strconv.Atoi(m[1])
-			inCoverage = false
+			inCoverage, inEnvironment = false, false
 			continue
 		}
 		if headingRE.MatchString(line) {
-			tier, inCoverage = 0, false
+			tier, inCoverage, inEnvironment = 0, false, false
 			continue
 		}
 		if tier == 0 {
@@ -83,15 +140,34 @@ func parseTierRequirements(path string) (map[int]evaluation.TierRequirement, err
 		}
 
 		if minCoverageLabelRE.MatchString(line) {
-			inCoverage = true
+			inCoverage, inEnvironment = true, false
 			req := out[tier]
 			req.Tier = tier
 			out[tier] = req
 			continue
 		}
+		if environmentLabelRE.MatchString(line) {
+			inEnvironment, inCoverage = true, false
+			continue
+		}
 		if boldLabelRE.MatchString(line) {
-			// Another labelled list in the same tier section — "Environment:".
-			inCoverage = false
+			// Another labelled list in the same tier section.
+			inCoverage, inEnvironment = false, false
+			continue
+		}
+		if inEnvironment {
+			item := listItemRE.FindStringSubmatch(line)
+			if item == nil {
+				inEnvironment = false
+				continue
+			}
+			// The figures are read whether or not the tier states a minimum
+			// coverage: they are a different requirement. A tier that states
+			// only figures still gets an entry, with no coverage declared.
+			req := out[tier]
+			req.Tier = tier
+			readEnvironmentFigure(item[1], &req.Figures)
+			out[tier] = req
 			continue
 		}
 		if !inCoverage {

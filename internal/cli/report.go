@@ -174,6 +174,21 @@ func newReportSummaryCommand() *cobra.Command {
 				fmt.Println(evaluation.CoverageStatement(report.CoverageMatrix))
 			}
 
+			// The heterogeneity flag, and whether the run supports a
+			// conformance claim (spec/05-reporting.md §2.1, §3.2). A verdict
+			// file written before these were recorded carries neither, and
+			// prints neither.
+			if id := report.Metadata.AgentIdentity; id != nil {
+				fmt.Println(evaluation.HeterogeneityStatement(*id))
+			}
+			if claim := report.Metadata.ConformanceClaim; claim != nil {
+				if claim.Supported {
+					fmt.Println("Conformance claim: supported by this run.")
+				} else {
+					fmt.Printf("Conformance claim: NOT supported by this run — %s.\n", strings.Join(claim.Reasons, "; "))
+				}
+			}
+
 			return nil
 		},
 	}

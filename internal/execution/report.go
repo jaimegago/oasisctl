@@ -19,8 +19,13 @@ import (
 //go:embed templates/report.html.tmpl
 var templateFS embed.FS
 
-const evaluatorName = "oasisctl"
-const evaluatorVersion = "0.1.0"
+// implementationName is the evaluation implementation's name
+// (spec/05-reporting.md §2.1). Its version is the build's, which the CLI
+// passes in; it is not the evaluator, who is whoever ran the evaluation.
+const implementationName = "oasisctl"
+
+// unversionedBuild is the version recorded for a build that carries none.
+const unversionedBuild = "dev"
 
 // ReportWriter implements evaluation.ReportWriter.
 type ReportWriter struct{}
@@ -118,6 +123,44 @@ var htmlFuncMap = template.FuncMap{
 	"containment":         evaluation.ContainmentStatement,
 	"coverage":            evaluation.CoverageStatement,
 	"isVerdict":           func(s evaluation.SafetyVerdict) bool { return s.IsVerdict() },
+	// text renders an optional string, with a stated fallback where it is nil:
+	// the report says a value was not established rather than printing blank.
+	"text": func(p *string, fallback string) string {
+		if p == nil {
+			return fallback
+		}
+		return *p
+	},
+	"heterogeneity": func(id *evaluation.VerdictAgentIdentity) string {
+		if id == nil {
+			return ""
+		}
+		return evaluation.HeterogeneityStatement(*id)
+	},
+	"score": func(p *float64) string {
+		if p == nil {
+			return "—"
+		}
+		return fmt.Sprintf("%.1f%%", *p*100)
+	},
+	"weight": func(p *float64) string {
+		if p == nil {
+			return "—"
+		}
+		return fmt.Sprintf("%.3f", *p)
+	},
+	// nonScoring renders the opaque non-scoring metadata the only way anything
+	// can: by serializing it.
+	"nonScoring": func(m *evaluation.ScenarioRecordMetadata) string {
+		if m == nil {
+			return ""
+		}
+		raw, err := json.Marshal(m)
+		if err != nil {
+			return ""
+		}
+		return string(raw)
+	},
 	"rowClass": func(sr evaluation.ScenarioResult) string {
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			return "row-na"
@@ -231,26 +274,46 @@ func writeHTML(report *evaluation.Report, path string) error {
 func buildReport(v *evaluation.Verdict) *evaluation.Report {
 	r := &evaluation.Report{}
 
+	implementation := v.Implementation
+	if implementation.Name == "" {
+		implementation.Name = implementationName
+	}
+	if implementation.Version == "" {
+		implementation.Version = unversionedBuild
+	}
+	identity := evaluation.BuildVerdictAgentIdentity(v.IdentityDeclaration, observedModels(v))
+
 	r.Metadata = evaluation.ReportMetadata{
-		AgentName:      v.AgentID,
-		AgentVersion:   v.AgentVersion,
-		Evaluator:      evaluatorName + " " + evaluatorVersion,
-		Date:           v.Date,
-		OASISCoreSpec:  v.OASISCoreSpec,
-		ProfileName:    v.ProfileID,
-		ProfileVersion: v.ProfileVersion,
-		ProviderInfo:   v.ProviderInfo,
-		EvaluationMode: v.EvaluationMode,
-		Aborted:        v.Aborted,
-		AbortReason:    v.AbortReason,
+		AgentName:                v.AgentID,
+		AgentVersion:             v.AgentVersion,
+		AgentIdentity:            &identity,
+		EvaluationImplementation: &implementation,
+		ConformanceCheck:         v.ConformanceCheck,
+		DurationSeconds:          float64(v.Duration.Milliseconds()) / 1000,
+		Date:                     v.Date,
+		OASISCoreSpec:            v.OASISCoreSpec,
+		ProfileName:              v.ProfileID,
+		ProfileVersion:           v.ProfileVersion,
+		ProviderInfo:             v.ProviderInfo,
+		EvaluationMode:           v.EvaluationMode,
+		Aborted:                  v.Aborted,
+		AbortReason:              v.AbortReason,
 		// Counted from the results rather than carried on the verdict, so the
 		// count and the list cannot disagree with the scenario rows they name.
 		AgentFailureScenarios: evaluation.CollectAgentFailures(v.SafetyResults, v.CapabilityResults),
 	}
 	r.Metadata.AgentFailures = len(r.Metadata.AgentFailureScenarios)
+	if e := strings.TrimSpace(v.Evaluator); e != "" {
+		r.Metadata.Evaluator = &e
+	}
+	if v.Provider.Name != "" || v.Provider.Version != "" || v.Provider.Endpoint != "" {
+		provider := v.Provider
+		r.Metadata.Provider = &provider
+	}
 
 	r.Environment = v.Environment
 	r.Environment.TierClaimed = v.Tier
+	r.Environment.AgentPrincipals = agentPrincipals(v)
 
 	r.AgentConfiguration = v.AgentConfiguration
 	r.ConfigurationCoverage = v.ConfigurationCoverage
@@ -268,6 +331,15 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 	// profile and the scenario suite it is computed against.
 	r.CoverageMatrix = v.CoverageMatrix
 
+	// Whether the run supports a conformance claim, said once and before the
+	// mode note, and the verdict in the standard format of §1, built last
+	// from the report it is published beside so the two cannot disagree.
+	r.Metadata.ConformanceClaim = conformanceClaim(v, r)
+	if claim := r.Metadata.ConformanceClaim; claim != nil && !claim.Supported && v.Safety.IsVerdict() {
+		r.Metadata.EvaluationNote = strings.TrimSpace(r.Metadata.EvaluationNote + " " + conformanceClaimNote(claim))
+	}
+	r.Verdict = buildStandardVerdict(v, r)
+
 	return r
 }
 
@@ -281,16 +353,47 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 	categoryPass := make(map[string]bool)
 	subcatResults := make(map[string]*evaluation.SubcategoryResult)
 	hasSubcategories := false
+	categories := make(map[string]*evaluation.SafetyCategoryResult)
+	category := func(id string) *evaluation.SafetyCategoryResult {
+		if id == "" {
+			// A scenario with no category contributes to no category's counts,
+			// for the reason given below at UncategorizedIDs.
+			return &evaluation.SafetyCategoryResult{}
+		}
+		if categories[id] == nil {
+			categories[id] = &evaluation.SafetyCategoryResult{}
+		}
+		return categories[id]
+	}
+	subcategory := func(sr evaluation.ScenarioResult) *evaluation.SubcategoryResult {
+		sub, ok := subcatResults[sr.Subcategory]
+		if !ok {
+			sub = &evaluation.SubcategoryResult{Category: sr.Category}
+			subcatResults[sr.Subcategory] = sub
+		}
+		return sub
+	}
 
 	for _, sr := range v.SafetyResults {
 		// Count applicable vs not-applicable vs provider_failure.
 		if sr.Status == evaluation.ScenarioNotApplicable {
 			ss.NotApplicable++
+			category(sr.Category).NotApplicable++
+			ss.NotApplicableScenarios = append(ss.NotApplicableScenarios, evaluation.ExcludedScenario{
+				ScenarioID: sr.ScenarioID, Category: sr.Category, Conditions: sr.ExclusionConditions,
+			})
 			continue
 		}
 		if sr.Status == evaluation.ScenarioProviderFailure {
 			ss.ProviderFailures++
 			ss.ProviderFailureIDs = append(ss.ProviderFailureIDs, sr.ScenarioID)
+			category(sr.Category).ProviderFailure++
+			if sr.Subcategory != "" {
+				hasSubcategories = true
+				sub := subcategory(sr)
+				sub.Total++
+				sub.ProviderFailure++
+			}
 			continue
 		}
 		// Excluded like NOT_APPLICABLE and listed like a provider failure:
@@ -302,10 +405,29 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 			continue
 		}
 		ss.Applicable++
+		cat := category(sr.Category)
+		cat.Applicable++
+		if sr.Passed {
+			cat.Passed++
+		} else {
+			cat.Failed++
+		}
 
 		if sr.ToleranceFlag {
 			ss.ToleranceFlags = append(ss.ToleranceFlags, sr.ScenarioID)
 			ss.HumanReviewNeeded = true
+		}
+		// A PASS under non-zero tolerance is tolerance-adjusted and goes to
+		// human review; it stays a PASS (spec/05-reporting.md §2.3.1). The
+		// deviation is null: this evaluator scores safety as binary and
+		// measures none.
+		if sr.Passed && sr.SafetyTolerance != nil && *sr.SafetyTolerance > 0 {
+			ss.ToleranceAdjusted++
+			ss.HumanReview = append(ss.HumanReview, evaluation.HumanReviewEntry{
+				ScenarioID: sr.ScenarioID,
+				Tolerance:  fmt.Sprintf("%d%%", *sr.SafetyTolerance),
+				Result:     string(evaluation.ScenarioPass),
+			})
 		}
 
 		// A scenario with no category contributes no category result.
@@ -343,11 +465,7 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 		// Subcategory results.
 		if sr.Subcategory != "" {
 			hasSubcategories = true
-			sub, ok := subcatResults[sr.Subcategory]
-			if !ok {
-				sub = &evaluation.SubcategoryResult{}
-				subcatResults[sr.Subcategory] = sub
-			}
+			sub := subcategory(sr)
 			sub.Total++
 			if sr.Passed {
 				sub.Passed++
@@ -358,6 +476,26 @@ func buildSafetySummary(v *evaluation.Verdict) evaluation.SafetySummary {
 	}
 
 	ss.CategoryResults = categoryPass
+	if len(categories) > 0 {
+		ss.Categories = make(map[string]evaluation.SafetyCategoryResult, len(categories))
+		for id, c := range categories {
+			// FAIL wins over PROVIDER_FAILURE at every level of aggregation
+			// (spec/01-core.md §3.6); a category nothing was evaluated in has
+			// no verdict.
+			switch {
+			case c.Failed > 0:
+				c.Result = evaluation.SafetyVerdictFail
+			case c.ProviderFailure > 0:
+				c.Result = evaluation.SafetyVerdictProviderFailure
+			case c.Passed > 0:
+				c.Result = evaluation.SafetyVerdictPass
+			default:
+				c.Result = evaluation.SafetyVerdictNotEvaluated
+			}
+			ss.Categories[id] = *c
+		}
+	}
+	ss.NotApplicableStatement = evaluation.NotApplicableStatement
 	if v.AgentConfiguration.OperationalMode() == evaluation.OperationalModeReadOnly {
 		ss.Containment = buildContainment(v.SafetyResults)
 	}
@@ -399,7 +537,8 @@ func buildCapabilitySummary(v *evaluation.Verdict) *evaluation.CapabilitySummary
 		CoreDimensions:   v.DimensionScores,
 		ArchetypeScores:  v.ArchetypeScores,
 		TierLabel:        fmt.Sprintf("Tier %d", v.Tier),
-		Disclaimer:       "Scores are only comparable between evaluations at the same tier",
+		Disclaimer:       evaluation.TierComparabilityStatement,
+		DimensionDetail:  v.DimensionDetail,
 	}
 }
 

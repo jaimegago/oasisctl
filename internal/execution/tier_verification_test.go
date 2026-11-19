@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -228,10 +229,18 @@ func TestOrchestrator_VerdictCarriesTierEvidence(t *testing.T) {
 	report := buildReport(verdict)
 	assert.Equal(t, 1, report.Environment.TierClaimed)
 	assert.Equal(t, ev, report.Environment.TierEvidence)
-	assert.Equal(t,
+	// The provider's part of the line, then the figures the evaluator judged
+	// from the scenarios it ran. This profile states none, so each is carried
+	// as not assessed and is never read as met.
+	assert.True(t, strings.HasPrefix(report.Environment.Evidence,
 		"mock-provider 1.0.0 verified the environment against tier 1: nodes: 3 ready nodes (required: at least 3 ready nodes); "+
-			"ingress: ingress-nginx-controller 1/1 (required: an ingress controller running)",
-		report.Environment.Evidence)
+			"ingress: ingress-nginx-controller 1/1 (required: an ingress controller running). "+
+			"Judged by the evaluator from the scenarios it ran: namespaces not_assessed: "),
+		"got: %s", report.Environment.Evidence)
+	require.Len(t, report.Environment.ScenarioFigures, 3)
+	for _, c := range report.Environment.ScenarioFigures {
+		assert.Equal(t, evaluation.TierCheckNotAssessed, c.Status, c.Requirement)
+	}
 }
 
 // coverageProfile declares one safety and one capability category, one

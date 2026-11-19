@@ -95,6 +95,11 @@ type agentResponseBody struct {
 		CacheWriteTokens *int `json:"cache_write_tokens"`
 	} `json:"token_usage"`
 	AgentLoopDurationMs *int `json:"agent_loop_duration_ms"`
+	// StepCount is the agent's own count of the steps it took, where its
+	// adapter reports one. Non-scoring, like the two above, and a pointer for
+	// the same reason: an adapter that reports none is not an agent that took
+	// zero steps.
+	StepCount *int `json:"step_count"`
 }
 
 // unstatedAgentFailureCause stands in for the cause of a report that named
@@ -174,7 +179,7 @@ func (c *HTTPClient) Execute(ctx context.Context, req evaluation.AgentRequest) (
 			CacheWriteTokens: u.CacheWriteTokens,
 		}
 	}
-	agentResp.Metadata = evaluation.NewNonScoringMetadata(tokens, respBody.AgentLoopDurationMs)
+	agentResp.Metadata = evaluation.NewNonScoringMetadata(tokens, respBody.AgentLoopDurationMs).WithSteps(respBody.StepCount)
 	// The agent failure report travels as reported. A present object is a
 	// report whatever its cause says, and an absent one is not — an empty
 	// response is never promoted to a failure here or anywhere downstream.
@@ -227,8 +232,34 @@ type identityAndConfigResponse struct {
 		Name        string `json:"name"`
 		Version     string `json:"version"`
 		Description string `json:"description"`
+
+		// The run-wide agent identity declaration (spec/05-reporting.md
+		// §1.2). Every fact is optional on the wire: an adapter sends the ones
+		// it can establish and omits the rest. Each is decoded as a plain
+		// string so that an absent key and an empty one arrive identically
+		// and collapse to "not established" exactly once, below.
+		BinaryVersion    string `json:"binary_version"`
+		BinarySHA        string `json:"binary_sha"`
+		ConfigHash       string `json:"config_hash"`
+		SystemPromptHash string `json:"system_prompt_hash"`
+		DeclaredModel    string `json:"declared_model"`
+		DeclaredProvider string `json:"declared_provider"`
+		// FixedWrapperText keeps three answers apart: the key absent (the
+		// adapter said nothing), null (it applies no wrapper to stimuli), and
+		// a string (the wrapper it applies). An empty string is read as null:
+		// a wrapper of no characters is no wrapper.
+		FixedWrapperText evaluation.OptionalText `json:"fixed_wrapper_text"`
 	} `json:"identity"`
 	Configuration map[string]interface{} `json:"configuration"`
+}
+
+// established turns a reported identity fact into an optional value: absent
+// or blank is nil, never an empty string that would read as a value.
+func established(v string) *string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return &v
 }
 
 // ReportIdentityAndConfiguration queries the agent adapter for identity and configuration.
@@ -269,6 +300,21 @@ func (c *HTTPClient) ReportIdentityAndConfiguration(ctx context.Context) (evalua
 		Name:        body.Identity.Name,
 		Version:     body.Identity.Version,
 		Description: body.Identity.Description,
+		// The one place a reported identity fact becomes an optional value.
+		// What the adapter did not send stays nil all the way to the verdict,
+		// which names it as not established.
+		Declaration: evaluation.AgentIdentityDeclaration{
+			BinaryVersion:     established(body.Identity.BinaryVersion),
+			BinarySHA:         established(body.Identity.BinarySHA),
+			ConfigHash:        established(body.Identity.ConfigHash),
+			SystemPromptHash:  established(body.Identity.SystemPromptHash),
+			DeclaredModel:     established(body.Identity.DeclaredModel),
+			DeclaredProvider:  established(body.Identity.DeclaredProvider),
+			WrapperTextStated: body.Identity.FixedWrapperText.Stated,
+		},
+	}
+	if t := body.Identity.FixedWrapperText.Text; t != nil {
+		identity.Declaration.FixedWrapperText = established(*t)
 	}
 
 	return identity, evaluation.AgentConfiguration(body.Configuration), nil

@@ -43,7 +43,7 @@ func TestEvidenceArtifact_NonScoringMetadataEndToEnd(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &loose))
 	require.Contains(t, loose, "non_scoring_metadata")
 	assert.JSONEq(t,
-		`{"tokens":{"input_tokens":900,"output_tokens":40,"cache_read_tokens":0,"cache_write_tokens":null},"agent_loop_duration_ms":5123}`,
+		`{"tokens":{"input_tokens":900,"output_tokens":40,"cache_read_tokens":0,"cache_write_tokens":null},"agent_loop_duration_ms":5123,"steps":null}`,
 		string(loose["non_scoring_metadata"]))
 
 	// Read back through the artifact type, the metadata re-serializes unchanged.

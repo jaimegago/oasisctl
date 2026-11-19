@@ -40,6 +40,14 @@ type Config struct {
 	// under agent_principal_unknown rather than matching every principal on the
 	// cluster and reporting the result as the agent's.
 	AgentPrincipal string
+	// Evaluator is the organization or individual running the evaluation
+	// (spec/05-reporting.md §2.1). It is declared by whoever launches the run
+	// and is never defaulted: empty leaves the verdict's evaluator null, and
+	// the run does not support a conformance claim.
+	Evaluator string
+	// Implementation names the evaluation implementation and its build. The
+	// CLI sets it from its own build identity.
+	Implementation evaluation.EvaluationImplementation
 }
 
 // Orchestrator runs the full OASIS evaluation loop.
@@ -94,6 +102,10 @@ func (o *Orchestrator) Run(
 	format string,
 	outputPath string,
 ) (*evaluation.Verdict, error) {
+	// The total evaluation time is measured from here (spec/05-reporting.md
+	// §1, `duration`).
+	started := time.Now()
+
 	// 1. Load profile.
 	profile, err := o.loader.Load(ctx, profilePath)
 	if err != nil {
@@ -256,10 +268,25 @@ func (o *Orchestrator) Run(
 		AgentConfiguration: effectiveConfig,
 		OASISCoreSpec:      profile.Metadata.OASISCore,
 		Environment: evaluation.ReportEnvironment{
-			TierClaimed:  o.cfg.Tier,
-			Evidence:     evaluation.TierEvidenceSummary(conformance.Provider, conformance.ProviderVersion, tierEvidence),
-			TierEvidence: tierEvidence,
+			TierClaimed:     o.cfg.Tier,
+			Evidence:        evaluation.TierEvidenceSummary(conformance.Provider, conformance.ProviderVersion, tierEvidence),
+			TierEvidence:    tierEvidence,
+			Provider:        conformance.Provider,
+			ProviderVersion: conformance.ProviderVersion,
+			Characteristics: environmentCharacteristics(conformance),
 		},
+		// The declaration is carried as the adapter's identity report gave
+		// it. A fact the report did not carry stays nil and is named as not
+		// established in the verdict; nothing here fills one in.
+		IdentityDeclaration: identity.Declaration,
+		Evaluator:           o.cfg.Evaluator,
+		Implementation:      o.cfg.Implementation,
+		Provider: evaluation.ProviderIdentity{
+			Name:     conformance.Provider,
+			Version:  conformance.ProviderVersion,
+			Endpoint: providerInfo,
+		},
+		ConformanceCheck: buildConformanceCheck(conformance, profile.ProviderConformanceRequirements, o.cfg.Tier),
 	}
 
 	// Coverage is computed against the profile's whole suite, so that what a
@@ -275,9 +302,24 @@ func (o *Orchestrator) Run(
 	// whether the evaluation is complete — and writes it.
 	finish := func(capabilityRan bool) (*evaluation.Verdict, error) {
 		allResults := append(append([]evaluation.ScenarioResult{}, verdict.SafetyResults...), verdict.CapabilityResults...)
+		// total_scenarios counts the suite. A scenario above the claimed tier
+		// is counted as excluded by tier, and one the run did not select or
+		// reach as not run; neither is left out of the count.
+		verdict.SuiteCounts = ComputeSuiteCounts(suite, scenarios, o.cfg.Tier, allResults)
 		verdict.ConfigurationCoverage = ComputeConfigurationCoverage(allResults)
+		ApplySuiteCounts(verdict.ConfigurationCoverage, verdict.SuiteCounts, allResults)
 		verdict.CoverageMatrix = ComputeCoverage(profile, suite, effectiveConfig, o.cfg.Tier, allResults)
+		// The tier's scenario-counted figures, judged from the scenarios this
+		// run executed (SI profile §8), and the one-line evidence restated
+		// with them.
+		figures := JudgeScenarioFigures(profile.TierRequirements[o.cfg.Tier], o.cfg.Tier, executedScenarios(allResults, filtered))
+		verdict.Environment.ScenarioFigures = figures
+		verdict.Environment.Evidence = evaluation.TierEvidenceSummary(conformance.Provider, conformance.ProviderVersion, tierEvidence, figures...)
+		if capabilityRan {
+			verdict.DimensionDetail = DimensionDetails(verdict.CategoryScores, profile.ScoringModel, verdict.CoverageMatrix)
+		}
 		verdict.EvaluationMode = o.finalizeEvaluationMode(verdict, capabilityRan)
+		verdict.Duration = time.Since(started)
 		if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
 			return verdict, fmt.Errorf("write report: %w", err)
 		}
@@ -538,7 +580,25 @@ func (o *Orchestrator) runScenario(
 	// received, never one minted here, so a scenario that never reached the
 	// agent records none.
 	var sessionID string
-	defer func() { out.SessionID = sessionID }()
+	// What the report's scenario detail records about this execution
+	// (spec/05-reporting.md §2.6). It is assembled as the scenario proceeds
+	// and attached to whatever result the scenario ends in; nothing that
+	// scores reads it. exec stays nil for a scenario the configuration
+	// excludes, which is never provisioned.
+	var (
+		exec      *evaluation.ScenarioExecution
+		agentMeta *evaluation.NonScoringMetadata
+		wallClock *float64
+	)
+	declared := s
+	defer func() {
+		out.SessionID = sessionID
+		describeScenario(&out, &declared)
+		if exec != nil {
+			exec.NonScoringMetadata = evaluation.NewScenarioRecordMetadata(agentMeta, wallClock)
+			out.Execution = exec
+		}
+	}()
 
 	if o.cfg.Verbose {
 		o.logger.Info("running scenario", "id", s.ID, "classification", string(classification))
@@ -556,7 +616,14 @@ func (o *Orchestrator) runScenario(
 			Archetype:   s.Archetype,
 			Status:      evaluation.ScenarioNotApplicable,
 			Passed:      true, // NOT_APPLICABLE is not a failure
+			// What the scenario requires of the configuration, which is the
+			// condition that excluded it (spec/05-reporting.md §2.3).
+			ExclusionConditions: applicabilityConditions([]evaluation.Scenario{s}),
 		}
+	}
+	exec = &evaluation.ScenarioExecution{
+		Stimuli:      appliedStimuli(&s),
+		Observations: []evaluation.ObservationSummary{},
 	}
 
 	// Merge conditional assertions based on agent configuration.
@@ -595,8 +662,21 @@ func (o *Orchestrator) runScenario(
 	// says so in the response (SI provider-guide.md §3.3, §4.1). The scenario
 	// is not run against an environment its stimulus never happened in: that
 	// would score the agent on a condition that was not there.
+	if provResp != nil {
+		// The precondition evidence: what the provider answered when asked to
+		// establish the scenario's preconditions.
+		exec.Preconditions = &evaluation.PreconditionEvidence{
+			EnvironmentID:      provResp.EnvironmentID,
+			Status:             provResp.Status,
+			DeclaredState:      len(s.Preconditions.Environment.State),
+			ResolvedNamespaces: provResp.ResolvedNamespaces,
+		}
+	}
 	if provResp != nil && provResp.Status == "error" {
 		return errorResult(s, fmt.Sprintf("provision: provider reported an error: %s", provResp.Error))
+	}
+	if provResp == nil {
+		return errorResult(s, "provision: the provider returned neither a response nor an error")
 	}
 
 	// The provider resolved the scenario's declared namespace tokens; from
@@ -620,13 +700,21 @@ func (o *Orchestrator) runScenario(
 	// b. Build agent request from stimuli.
 	agentReq := buildAgentRequest(s)
 
-	// c. Execute agent.
+	// c. Execute agent. The wall clock around the call is the scenario
+	// record's duration: non-scoring metadata, which no score may read
+	// (spec/05-reporting.md §1.2).
+	executeStarted := time.Now()
 	agentResp, err := o.agent.Execute(scenarioCtx, agentReq)
+	elapsed := float64(time.Since(executeStarted).Milliseconds()) / 1000
+	wallClock = &elapsed
 	if err != nil {
 		return errorResult(s, fmt.Sprintf("agent execute: %v", err))
 	}
 	if agentResp != nil {
 		sessionID = agentResp.SessionID
+		exec.ObservedModel = agentResp.Model
+		exec.AgentBehavior = summarizeAgentBehavior(agentResp)
+		agentMeta = agentResp.Metadata
 	}
 
 	// d. Check for infrastructure failure before evaluating behavior.
@@ -709,6 +797,8 @@ func (o *Orchestrator) runScenario(
 
 	// f. Observe per verification entry.
 	observations, providerFailure := o.collectObservations(scenarioCtx, s, envID)
+	exec.Observations = summarizeObservations(observations)
+	exec.AgentPrincipal = declaredAgentPrincipal(observations)
 	if providerFailure != "" {
 		// Per spec §3.7: evidence_source.status != available means the scenario
 		// verdict is PROVIDER_FAILURE and the run aborts.
