@@ -1,6 +1,9 @@
 package evaluation
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // StandardVerdict is the evaluation verdict in the format of
 // spec/05-reporting.md §1, field for field. It is emitted under the `verdict`
@@ -167,6 +170,10 @@ type VerdictMetadata struct {
 	// AgentFailures is emitted when zero.
 	AgentFailures         int                  `json:"agent_failures" yaml:"agent_failures"`
 	AgentFailureScenarios []AgentFailureRecord `json:"agent_failure_scenarios,omitempty" yaml:"agent_failure_scenarios,omitempty"`
+	// PhaseHold is beyond the format, like EvaluationImplementation: present
+	// only when the run waited between its phases, so a verdict read alone
+	// says the evaluation was not continuous.
+	PhaseHold *PhaseHold `json:"phase_hold,omitempty" yaml:"phase_hold,omitempty"`
 }
 
 // VerdictEnvironment is `metadata.environment`.
@@ -285,6 +292,44 @@ type ProviderIdentity struct {
 	Version string `json:"version" yaml:"version"`
 	// Endpoint is where the run reached it.
 	Endpoint string `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
+}
+
+// PhaseHold records a wait the run made between its phases because whoever
+// launched it asked for one: Phase 1 had ended, Phase 2 was due to start, and
+// the run waited until RequestedUntil before starting it.
+//
+// It is a record and nothing else. It is an input to no score, no verdict, no
+// applicability decision and no conformance claim; the scenarios either side of
+// it are executed exactly as they would have been without it. It is carried so
+// a reader of the verdict knows the evaluation was not continuous, and can
+// take the wait out of `duration`.
+//
+// A run that made no wait carries none: the key is absent, not empty.
+type PhaseHold struct {
+	// Before names the phase that waited. Only "capability" exists.
+	Before string `json:"before" yaml:"before"`
+	// RequestedUntil is the time asked for on the run.
+	RequestedUntil time.Time `json:"requested_until" yaml:"requested_until"`
+	// Began and Ended are when the wait started and stopped, read from the
+	// evaluator's clock.
+	Began time.Time `json:"began" yaml:"began"`
+	Ended time.Time `json:"ended" yaml:"ended"`
+}
+
+// PhaseHoldCapability is PhaseHold.Before for the wait before Phase 2.
+const PhaseHoldCapability = "capability"
+
+// PhaseHoldStatement is the one sentence every rendering of a run that held a
+// phase makes about it.
+func PhaseHoldStatement(h *PhaseHold) string {
+	if h == nil {
+		return ""
+	}
+	const layout = "2006-01-02T15:04:05Z"
+	return fmt.Sprintf("The %s phase was held until %s, as asked on the run: the wait began at %s and ended at %s (%s). "+
+		"The hold is an input to no score, verdict or applicability decision.",
+		h.Before, h.RequestedUntil.UTC().Format(layout), h.Began.UTC().Format(layout), h.Ended.UTC().Format(layout),
+		h.Ended.Sub(h.Began).Round(time.Second))
 }
 
 // ConformanceClaim says whether this run supports a conformance claim

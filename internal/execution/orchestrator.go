@@ -48,6 +48,16 @@ type Config struct {
 	// Implementation names the evaluation implementation and its build. The
 	// CLI sets it from its own build identity.
 	Implementation evaluation.EvaluationImplementation
+	// HoldCapabilityUntil asks the run to wait, once Phase 1 has ended and
+	// Phase 2 is due to start, until this time. The zero value asks for
+	// nothing, and so does a time that has passed by then. It exists for an
+	// evaluation whose two phases have to land either side of a moment the
+	// agent's own infrastructure imposes, such as a model provider's daily
+	// quota reset: oasisctl has no resume and no merge, so one evaluation is
+	// one run, and this is the only way one run can straddle it.
+	//
+	// The wait changes nothing else. See evaluation.PhaseHold.
+	HoldCapabilityUntil time.Time
 }
 
 // Orchestrator runs the full OASIS evaluation loop.
@@ -60,6 +70,10 @@ type Orchestrator struct {
 	reporter evaluation.ReportWriter
 	logger   *slog.Logger
 	cfg      Config
+	// now and wait are the clock the hold between the phases reads and sleeps
+	// on. Fields so a test can cross a hold without waiting for one.
+	now  func() time.Time
+	wait func(ctx context.Context, d time.Duration) error
 }
 
 // NewOrchestrator creates an Orchestrator with all required dependencies.
@@ -88,7 +102,66 @@ func NewOrchestrator(
 		reporter: reporter,
 		logger:   logger,
 		cfg:      cfg,
+		now:      time.Now,
+		wait:     waitFor,
 	}
+}
+
+// waitFor blocks for d or until ctx is done.
+func waitFor(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// holdPollInterval bounds one sleep of the hold between the phases. The hold
+// ends when the wall clock reaches the time asked for, and it is re-read this
+// often rather than slept towards once: a single timer runs on the monotonic
+// clock, which stops while the host is suspended, so a laptop that slept
+// through part of a two-hour hold would overshoot it by as long as it slept.
+const holdPollInterval = 5 * time.Second
+
+// holdCapabilityPhase waits until Config.HoldCapabilityUntil, if that time is
+// set and has not passed, and returns the record of the wait. It returns nil
+// when it did not wait. It is called only where Phase 2 is about to start.
+func (o *Orchestrator) holdCapabilityPhase(ctx context.Context) (*evaluation.PhaseHold, error) {
+	until := o.cfg.HoldCapabilityUntil
+	if until.IsZero() {
+		return nil, nil
+	}
+	// Round(0) strips the monotonic reading, so every comparison below is of
+	// wall-clock times.
+	began := o.now().Round(0)
+	if !began.Before(until) {
+		o.logger.Info("capability phase not held: the time asked for has passed", "requested_until", until.UTC().Format(time.RFC3339))
+		return nil, nil
+	}
+	o.logger.Info("capability phase held", "requested_until", until.UTC().Format(time.RFC3339), "wait", until.Sub(began).Round(time.Second).String())
+	for {
+		remaining := until.Sub(o.now().Round(0))
+		if remaining <= 0 {
+			break
+		}
+		if remaining > holdPollInterval {
+			remaining = holdPollInterval
+		}
+		if err := o.wait(ctx, remaining); err != nil {
+			return nil, fmt.Errorf("hold before the capability phase interrupted: %w", err)
+		}
+	}
+	ended := o.now().Round(0)
+	o.logger.Info("capability phase hold ended", "waited", ended.Sub(began).Round(time.Second).String())
+	return &evaluation.PhaseHold{
+		Before:         evaluation.PhaseHoldCapability,
+		RequestedUntil: until.UTC(),
+		Began:          began.UTC(),
+		Ended:          ended.UTC(),
+	}, nil
 }
 
 // Run executes the evaluation defined in profilePath against the provided scenarios.
@@ -356,6 +429,17 @@ func (o *Orchestrator) Run(
 
 	if !verdict.PermitsCapabilityPhase() {
 		return finish(false)
+	}
+
+	// 6c. A hold asked for on the run, taken here and nowhere else: Phase 1
+	// has ended with a verdict that permits Phase 2, and there is a Phase 2 to
+	// start. A run that selected no capability scenario has nothing to hold.
+	if len(capabilityScenarios) > 0 {
+		hold, err := o.holdCapabilityPhase(ctx)
+		if err != nil {
+			return nil, err
+		}
+		verdict.PhaseHold = hold
 	}
 
 	// 7. Phase 2 — Capability scoring.

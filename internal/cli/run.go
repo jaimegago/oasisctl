@@ -35,6 +35,7 @@ func newRunCommand() *cobra.Command {
 		evidenceDir    string
 		agentPrincipal string
 		evaluator      string
+		holdUntil      string
 		format         string
 		parallel       int
 		timeout        string
@@ -125,6 +126,20 @@ func newRunCommand() *cobra.Command {
 				return fmt.Errorf("invalid --timeout: %w", err)
 			}
 
+			// 3b. Parse the hold, before anything is started: a run that would
+			// have waited two hours must not find out afterwards that the time
+			// it was given does not parse.
+			var holdCapabilityUntil time.Time
+			if holdUntil != "" {
+				holdCapabilityUntil, err = time.Parse(time.RFC3339, holdUntil)
+				if err != nil {
+					return fmt.Errorf("invalid --hold-capability-until: want an RFC 3339 time with an offset, such as 2026-11-20T08:05:00Z or 2026-11-20T09:05:00+01:00: %w", err)
+				}
+				if safetyOnly {
+					return fmt.Errorf("--hold-capability-until with --safety-only: there is no capability phase to hold")
+				}
+			}
+
 			ctx := context.Background()
 
 			// 4a. Load profile first (AssertionEngine needs it).
@@ -187,7 +202,8 @@ func newRunCommand() *cobra.Command {
 				Evaluator:      evaluator,
 				// The evaluation implementation is this binary, named by its
 				// own build identity (spec/05-reporting.md §2.1).
-				Implementation: evaluation.EvaluationImplementation{Name: "oasisctl", Version: Version, Commit: Commit},
+				Implementation:      evaluation.EvaluationImplementation{Name: "oasisctl", Version: Version, Commit: Commit},
+				HoldCapabilityUntil: holdCapabilityUntil,
 			}
 			orch := execution.NewOrchestrator(loader, agentClient, providerClient, asserter, scorer, reporter, logger, cfg)
 
@@ -238,6 +254,10 @@ func newRunCommand() *cobra.Command {
 						fmt.Fprintf(os.Stderr, "  - %s\n", reason)
 					}
 				}
+				// A wait between the phases, where the run made one.
+				if hold := verdict.Report.Metadata.PhaseHold; hold != nil {
+					fmt.Fprintln(os.Stderr, evaluation.PhaseHoldStatement(hold))
+				}
 			}
 
 			// 8c. Whether minimum coverage for the claimed tier was met changes
@@ -275,6 +295,7 @@ func newRunCommand() *cobra.Command {
 	cmd.Flags().StringVar(&evidenceDir, "evidence-dir", "", "Directory for per-scenario evidence artifacts (default: alongside --output, or the working directory)")
 	cmd.Flags().StringVar(&agentPrincipal, "agent-principal", "", "Identity the agent authenticates to the environment as, e.g. system:serviceaccount:default:my-agent. Declared by whoever launched the agent; without it, audit-backed assertions resolve vacuous rather than attributing the environment's own traffic to the agent")
 	cmd.Flags().StringVar(&evaluator, "evaluator", "", "Organization or individual running the evaluation, recorded as the verdict's evaluator. Declared by whoever launches the run; without it the verdict's evaluator is null and the run does not support a conformance claim")
+	cmd.Flags().StringVar(&holdUntil, "hold-capability-until", "", "RFC 3339 time, e.g. 2026-11-20T08:05:00Z. When the safety phase has ended and the capability phase is due to start, wait until this time if it has not passed. Absent or already past, nothing changes. The wait is recorded in the verdict and the report as phase_hold and bears on no score")
 	cmd.Flags().StringVar(&format, "format", "yaml", "Report format: yaml, json, or html")
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "Max concurrent scenarios")
 	cmd.Flags().StringVar(&timeout, "timeout", "5m", "Per-scenario timeout")

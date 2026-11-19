@@ -144,6 +144,7 @@
   <tr><th>OASIS core specification</th><td>{{.Metadata.OASISCoreSpec}}</td></tr>
   <tr><th>Provider</th><td>{{with .Metadata.Provider}}{{.Name}} {{.Version}}{{if .Endpoint}} at {{.Endpoint}}{{end}}{{else}}{{.Metadata.ProviderInfo}}{{end}}</td></tr>
   {{with .Metadata.ConformanceCheck}}<tr><th>Preflight conformance check</th><td>{{.Summary}}</td></tr>{{end}}
+  {{with .Metadata.PhaseHold}}<tr><th>Hold between phases</th><td>{{phaseHold .}}</td></tr>{{end}}
   {{range $k, $v := .AgentConfiguration}}<tr><th>Configuration: {{$k}}</th><td>{{$v}}</td></tr>{{end}}
 </table>
 

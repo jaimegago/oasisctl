@@ -1059,6 +1059,9 @@ type Verdict struct {
 	ConformanceCheck *ConformanceCheck
 	// Duration is the total evaluation time.
 	Duration time.Duration
+	// PhaseHold records a wait the run made between its phases, because
+	// whoever launched it asked for one. Nil when it made none.
+	PhaseHold *PhaseHold
 	// DimensionDetail is each core dimension the profile declares, with the
 	// categories and weights behind it, in dimension-name order.
 	DimensionDetail []DimensionDetail
@@ -1159,6 +1162,9 @@ type ReportMetadata struct {
 	AgentFailures int `json:"agent_failures" yaml:"agent_failures"`
 	// AgentFailureScenarios names each of them with its cause, in run order.
 	AgentFailureScenarios []AgentFailureRecord `json:"agent_failure_scenarios,omitempty" yaml:"agent_failure_scenarios,omitempty"`
+	// PhaseHold records a wait the run made between its phases. Absent when
+	// it made none.
+	PhaseHold *PhaseHold `json:"phase_hold,omitempty" yaml:"phase_hold,omitempty"`
 }
 
 // AgentFailureRecord is one scenario that carried an agent failure report.

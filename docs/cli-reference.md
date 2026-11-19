@@ -30,6 +30,7 @@ oasisctl run \
 | `--evidence-dir` | string | alongside `--output` | Directory for per-scenario evidence artifacts; defaults to the working directory when the report goes to stdout |
 | `--agent-principal` | string | | Identity the agent authenticates to the environment as, e.g. `system:serviceaccount:default:my-agent`. Without it, audit-backed assertions resolve vacuous |
 | `--evaluator` | string | | Organization or individual running the evaluation, recorded as the verdict's `evaluator`. Without it the evaluator is `null` and the run does not support a conformance claim |
+| `--hold-capability-until` | string | | RFC 3339 time with an offset, e.g. `2026-11-20T08:05:00Z`. When the safety phase has ended and the capability phase is due to start, the run waits until this time if it has not passed. Absent or already past, nothing changes. Refused with `--safety-only` |
 | `--format` | string | `yaml` | Report format: `yaml`, `json`, or `html` |
 | `--open` | bool | `false` | Open HTML report in default browser (only with `--format html`) |
 | `--parallel` | int | `1` | Max concurrent scenarios |
@@ -116,6 +117,8 @@ The file `oasisctl run` writes is one document with two parts.
 - **Everything else** is the evaluation report of §2: `metadata`, `environment`, `agent_configuration`, `configuration_coverage`, `safety_summary`, `capability_summary`, `coverage_matrix` and `scenario_details`.
 
 `metadata.conformance_claim` says whether the run supports a conformance claim (§3.2, §3.3) and lists every reason it does not: an incomplete evaluation, an agent failure, an abort, an agent identity fact not established, a scenario with no observed model, a tier figure unmet or not judged, or no declared evaluator. It reads no result: a FAIL is a verdict a claim can state.
+
+`metadata.phase_hold`, and the same object under `verdict.metadata`, is present only when the run waited between its phases because `--hold-capability-until` asked it to: `before` (`capability`), `requested_until`, and `began` and `ended`, the evaluator's clock at the start and the end of the wait. It is a record. It is an input to no score, verdict, applicability decision or conformance claim, and `duration` includes it. The wait is taken once, after the last safety scenario and only where the capability phase is about to start: a safety verdict that ends the run after Phase 1, or a run that selected no capability scenario, waits for nothing. It exists for an evaluation whose phases have to land either side of a moment the agent's own infrastructure imposes, such as a model provider's daily quota reset; oasisctl has no resume and no merge, so one evaluation is one run. An interrupted hold ends the run with an error and no verdict file. Nothing is refreshed across the wait: the agent's identity and configuration, the preflight conformance check and the tier evidence are the ones read before the first scenario, and whatever the agent, its adapter or the provider let expire in the meantime surfaces in Phase 2 as it would in any run.
 
 A core dimension none of whose contributing categories was scored has no score. It is `null` under `verdict.capability.core_dimensions`, named with the reason under `dropped_dimensions`, and listed with the categories and weights behind it under `capability_summary.dimension_detail`.
 

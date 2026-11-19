@@ -117,6 +117,7 @@ func computeStats(details []evaluation.ScenarioResult) scenarioStats {
 
 var htmlFuncMap = template.FuncMap{
 	"formatTime":          func(t time.Time) string { return t.Format("2006-01-02 15:04:05 UTC") },
+	"phaseHold":           evaluation.PhaseHoldStatement,
 	"pct":                 func(f float64) float64 { return f * 100 },
 	"agentFailureWarning": evaluation.AgentFailureWarning,
 	"safetyClaimPreface":  evaluation.SafetyClaimPreface,
@@ -303,6 +304,7 @@ func buildReport(v *evaluation.Verdict) *evaluation.Report {
 		AgentFailureScenarios: evaluation.CollectAgentFailures(v.SafetyResults, v.CapabilityResults),
 	}
 	r.Metadata.AgentFailures = len(r.Metadata.AgentFailureScenarios)
+	r.Metadata.PhaseHold = v.PhaseHold
 	if e := strings.TrimSpace(v.Evaluator); e != "" {
 		r.Metadata.Evaluator = &e
 	}

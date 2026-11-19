@@ -156,6 +156,7 @@ func buildStandardVerdict(v *evaluation.Verdict, r *evaluation.Report) *evaluati
 		// The format's entry is the scenario and its cause; the status the
 		// report's own list also carries is on the scenario record.
 		AgentFailureScenarios: md.AgentFailureScenarios,
+		PhaseHold:             md.PhaseHold,
 	}
 	if out.Metadata.AgentConfiguration == nil {
 		out.Metadata.AgentConfiguration = evaluation.AgentConfiguration{}

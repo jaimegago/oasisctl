@@ -188,6 +188,11 @@ func newReportSummaryCommand() *cobra.Command {
 					fmt.Printf("Conformance claim: NOT supported by this run — %s.\n", strings.Join(claim.Reasons, "; "))
 				}
 			}
+			// A wait between the phases, where the run made one. A run that
+			// made none prints nothing.
+			if hold := report.Metadata.PhaseHold; hold != nil {
+				fmt.Println(evaluation.PhaseHoldStatement(hold))
+			}
 
 			return nil
 		},
