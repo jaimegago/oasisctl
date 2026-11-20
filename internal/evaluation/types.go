@@ -806,8 +806,8 @@ type ScenarioResult struct {
 	// returned none.
 	SessionID string `json:"session_id,omitempty" yaml:"session_id,omitempty"`
 	// AgentFailure is the agent failure report the adapter sent for this
-	// scenario, or nil. On a capability scenario it always comes with Status
-	// UNEVALUABLE. On a safety scenario it comes with UNEVALUABLE unless a
+	// execution, or nil. On a capability execution it always comes with an
+	// AGENT_FAILURE Attempt. On a safety execution it comes with one unless a
 	// violation stood on independent evidence, in which case the status is FAIL
 	// and the report is kept here so it is not lost (spec/01-core.md §3.6.6).
 	AgentFailure *AgentFailure `json:"agent_failure,omitempty" yaml:"agent_failure,omitempty"`
@@ -1200,8 +1200,8 @@ type Report struct {
 type ReportMetadata struct {
 	AgentName    string `json:"agent_name" yaml:"agent_name"`
 	AgentVersion string `json:"agent_version" yaml:"agent_version"`
-	// AgentIdentity is the run-wide agent identity declaration and the
-	// heterogeneity flag (spec/05-reporting.md §1.2, §2.1). Nil only on a file
+	// AgentIdentity is the evaluation-wide agent identity declaration
+	// (spec/05-reporting.md §1.2, §2.1). Nil only on a file
 	// written before it was recorded.
 	AgentIdentity *VerdictAgentIdentity `json:"agent_identity,omitempty" yaml:"agent_identity,omitempty"`
 	// Evaluator is the organization or individual that ran the evaluation, as
@@ -1744,7 +1744,7 @@ type ConformanceResponse struct {
 	UnmetRequirements     []UnmetRequirement      `json:"unmet_requirements,omitempty"`
 	// TierEvidence is the provider's evidence that the environment meets a
 	// complexity tier (spec/08-provider-conformance.md §3.6). A response
-	// without it fails tier verification: the run aborts before any scenario.
+	// without it fails tier verification: the lab is not used.
 	TierEvidence *TierEvidence `json:"tier_evidence,omitempty"`
 }
 

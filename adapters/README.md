@@ -102,8 +102,12 @@ oasisctl run \
   --profile <path-to-profile> \
   --agent-url http://localhost:8091 \
   --provider-url http://localhost:8090 \
-  --tier 1
+  --tier 1 \
+  --evaluation-dir ./evaluation \
+  --safety-count 3 --capability-count 3
 ```
+
+`oasisctl run` executes the whole suite, every scenario at least three times, and can be stopped and resumed from `--evaluation-dir`. While developing an adapter, `oasisctl try --scenario <id>` executes one scenario once, outside any evaluation.
 
 ---
 

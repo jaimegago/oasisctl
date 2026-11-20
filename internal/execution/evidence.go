@@ -156,7 +156,7 @@ type EvidenceAuditTrail struct {
 	// adapter answered with a trail or a failure.
 	NotImplemented bool `json:"not_implemented"`
 	// Failure is the cause of a run-time failure of the operation, or null.
-	// The scenario is then unevaluable and carries the same cause as its
+	// The execution is then an attempt and carries the same cause as its
 	// agent failure report.
 	Failure *string `json:"failure"`
 	// Reads is each trail as read, in the order the reads were made, each

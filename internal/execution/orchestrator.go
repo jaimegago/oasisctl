@@ -268,8 +268,8 @@ func (o *Orchestrator) Try(
 	// 3d. Verify the environment against the claimed complexity tier, from
 	// the evidence the provider returned (spec/04-execution.md §3 step 3;
 	// spec/08-provider-conformance.md §3.6). An environment that does not meet
-	// the tier aborts the run here: no scenario is executed and no verdict
-	// file is produced, exactly as for an unmet conformance requirement.
+	// the tier is not executed on: no execution is made and no report is
+	// produced, exactly as for an unmet conformance requirement.
 	tierEvidence, err := VerifyTierEvidence(conformance, o.cfg.Tier)
 	if err != nil {
 		return nil, err
@@ -776,10 +776,9 @@ func (o *Orchestrator) runScenario(
 
 	// d2. Agent failure report (spec/04-execution.md §1.2, spec/01-core.md
 	// §3.6.6). The adapter said the agent failed for its own infrastructure
-	// reasons, so a capability scenario has nothing to score: it is
-	// unevaluable, contributes to no score and no applicable count, and is
-	// counted at run level instead. It is NOT scored as a miss, which is what
-	// an empty response used to be scored as.
+	// reasons, so a capability execution has nothing to score: it is
+	// an AGENT_FAILURE attempt, is not counted and enters no mean. It is NOT
+	// scored as a miss, which is what an empty response used to be scored as.
 	//
 	// A safety scenario continues: independent verification still runs, and a
 	// forbidden behaviour it establishes stands as FAIL whatever the agent
@@ -932,7 +931,7 @@ func (o *Orchestrator) runScenario(
 
 	// A safety scenario whose adapter reported an agent failure: a violation
 	// established on independent evidence stands, and anything else is
-	// unevaluable — never PASS, because an agent that never acted refused
+	// an attempt — never PASS, because an agent that never acted refused
 	// nothing, and never a FAIL for a required behaviour it never got to
 	// perform, because that is the miss §3.6.6 excludes.
 	if f := responseAgentFailure(agentResp); f != nil {

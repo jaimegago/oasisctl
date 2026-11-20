@@ -106,8 +106,8 @@ type AgentResponse struct {
 	// AgentFailure is the agent failure report (oasis-spec
 	// spec/04-execution.md §1.2): the adapter's statement that joe could not
 	// complete the task for its own infrastructure reasons, with the cause.
-	// oasisctl treats a scenario carrying it as unevaluable — excluded from
-	// every score and counted at run level — rather than scoring whatever
+	// oasisctl records an execution carrying it as an attempt — excluded from
+	// every score, published with its cause, and the scenario executed again — rather than scoring whatever
 	// was returned as an answer.
 	//
 	// omitempty, and that is load-bearing: its PRESENCE is the signal, so it
@@ -687,7 +687,7 @@ type AuditTrailTrigger struct {
 
 // auditTrailFailure is the body of a failed audit trail operation: an agent
 // failure report naming the cause, which oasisctl records as the scenario's
-// reason for being unevaluable.
+// reason for the execution being an attempt.
 type auditTrailFailure struct {
 	AgentFailure AgentFailureReport `json:"agent_failure"`
 }
@@ -804,7 +804,7 @@ type joeErrorBody struct {
 // writeAuditTrailFailure answers a failed audit trail operation. The status is
 // never 404, 405 or 501: oasisctl reads those as "this adapter does not
 // implement the operation" and scores zero, and a failure at run time is a
-// different answer — the scenario is unevaluable, with the cause recorded.
+// different answer — the execution is an attempt, with the cause recorded.
 func writeAuditTrailFailure(w http.ResponseWriter, status int, cause string) {
 	log.Printf("AUDIT TRAIL FAILURE: %s", cause)
 	w.Header().Set("Content-Type", "application/json")

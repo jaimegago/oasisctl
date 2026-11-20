@@ -8,7 +8,7 @@ The agent exposes an HTTP POST endpoint for task execution, a GET endpoint for i
 
 ### Identity and Configuration
 
-oasisctl calls `GET /identity-and-configuration` once at the start of each evaluation run. The agent (or its adapter) returns its identity and configuration dimensions.
+oasisctl calls `GET /identity-and-configuration` when an evaluation is opened and again before every execution. The agent (or its adapter) returns its identity and configuration dimensions.
 
 ```
 GET /identity-and-configuration
@@ -48,21 +48,23 @@ Response:
 | `identity.binary_sha` | string | The commit or digest identifying the agent binary. |
 | `identity.config_hash` | string | A hash of the agent's configuration. |
 | `identity.system_prompt_hash` | string | A hash of the agent's system prompt. |
-| `identity.declared_model` | string | The model the agent is configured to run on, in the same form as the `model` an execute response reports. |
+| `identity.declared_model` | string | The model the agent is configured to run on, in the form its model provider states it (see `provider_stated_models` below). |
 | `identity.declared_provider` | string | The provider of that model. |
 | `identity.fixed_wrapper_text` | string or null | Any constant text the adapter adds to every stimulus. `null` states that it adds none. |
 | `configuration` | object | Map of dimension identifiers to values. Must match the profile's `agent_configuration_schema`. |
 
-This endpoint is **required**. If it returns 404 or is not implemented, oasisctl fails the evaluation with a clear error.
+This endpoint is **required**. If it returns 404 or is not implemented, no evaluation is opened and no execution is made.
+
+**It is asked whenever oasisctl needs it, not once.** oasisctl asks when an evaluation is opened and again **before every execution** (oasis-spec `spec/04-execution.md` §1, §3.3). The identity and the configuration it reports are elements of the evaluation identity: if any of them differs from what the evaluation was opened with — the agent was rebuilt, reconfigured or pointed at another model — the execution is not made. Answer from the agent's current state every time; do not answer from a value cached at start-up.
 
 #### The agent identity declaration
 
-The seven fields from `binary_version` to `fixed_wrapper_text` are the run-wide agent identity declaration the evaluation report must carry (oasis-spec `spec/05-reporting.md` §1.2). The verdict records them under `metadata.agent_identity`.
+The seven fields from `binary_version` to `fixed_wrapper_text` are the evaluation-wide agent identity declaration the evaluation report must carry (oasis-spec `spec/05-reporting.md` §1.2). The verdict records them under `metadata.agent_identity`.
 
 - **Each is optional on the wire, and an adapter sends only what it can establish.** A fact the adapter cannot establish is omitted. It is never sent as an empty string and never guessed. oasisctl treats an absent or empty value as not established: the verdict carries an explicit `null` for it and names it under `agent_identity.not_established`.
 - **`fixed_wrapper_text` has three answers.** A string is the wrapper the adapter applies. `null` states that it applies none. An absent key is the adapter not having said, which is not established.
-- **A run with any fact not established does not support a conformance claim.** The verdict says so under `metadata.conformance_claim`, with the facts named. The evaluation still runs and is still scored.
-- **`declared_model` is compared with each scenario's observed model.** Where they differ on any scenario the run is flagged `heterogeneous: true` and the scenarios are listed with both values. Report the declared model in the form the execute response's `model` uses, or every scenario will read as a difference.
+- **An evaluation with any fact not established does not support a conformance claim.** The report says so under `metadata.conformance_claim`, with the facts named. The evaluation is still opened and executed, and a fact that is not established is compared as that: it must stay not established for the whole evaluation.
+- **`declared_model` is compared with each execution's observed model**, which is what the model provider stated served it (`provider_stated_models` on the execute response). An execution in which the provider states any other model is not counted: it is an `IDENTITY_MISMATCH` attempt, and the scenario is executed again. The two are compared by string equality, so report the declared model in the form the provider states it.
 
 ### Request
 
@@ -117,7 +119,8 @@ Authorization: Bearer <token>   (optional)
 | `actions[].result` | string | Output returned by the tool. |
 | `reasoning` | string | The agent's reasoning trace. |
 | `final_answer` | string | The agent's final response to the operator. |
-| `session_id` | string | The session the prompt ran in (oasis-spec `spec/04-execution.md` §1.3). An opaque string the agent or its adapter assigns. Return it for **every** request: each request runs in a fresh session, so each returns its own. oasisctl records it in the verdict's scenario record and the evidence artifact, and hands it back to `GET /audit-trail`. It never mints one. The one response that may lack it is one carrying `agent_failure` for a failure that left no session to name. |
+| `session_id` | string | The session the prompt ran in (oasis-spec `spec/04-execution.md` §1.3). An opaque string the agent or its adapter assigns. Return it for **every** request: each request runs in a fresh session, so each returns its own. oasisctl records it in the execution's record and the evidence artifact, and hands it back to `GET /audit-trail`. It never mints one. The one response that may lack it is one carrying `agent_failure` for a failure that left no session to name. |
+| `provider_stated_models` | string[] | Optional. The model, or models, the agent's **model provider stated** served this execution, read from the provider's own responses: one entry per distinct model named across the execution's calls. oasisctl records it as the execution's `observed_model` (oasis-spec `spec/05-reporting.md` §1.2). **Never send the model the agent asked for**: that is the declared model a second time, and the check between the two would compare a value with itself. An adapter that cannot supply the provider's statement omits the field; the execution is still counted and its record states the observed model as not available. The `model` field of earlier versions of this contract is no longer read. |
 | `agent_failure` | object | Optional. The **agent failure report** (oasis-spec `spec/04-execution.md` §1.2). Present only when the agent could not complete the task for its own infrastructure reasons. |
 | `agent_failure.cause` | string | The failure as the agent or adapter observed it — e.g. the provider's error. Recorded verbatim. |
 | `token_usage`, `agent_loop_duration_ms`, `step_count` | object, int, int | Optional **non-scoring metadata**: the agent's token accounting (`input_tokens`, `output_tokens`, and `cache_read_tokens` / `cache_write_tokens` where its provider reports them), the time it spent in its own loop, and the number of steps it took. Each is omitted when the agent does not report it; an omitted figure is recorded as `null`, never as zero. oasisctl reports them in the scenario record and never reads one into a score (oasis-spec `spec/05-reporting.md` §1.2). |
@@ -135,7 +138,11 @@ When the agent fails for its own infrastructure reasons — its model provider r
 }
 ```
 
-oasisctl then records the scenario as `UNEVALUABLE` (oasis-spec `spec/01-core.md` §3.6.6): it enters no score and no applicable count, the verdict counts it in `metadata.agent_failures` and names it with its cause in `metadata.agent_failure_scenarios`, and its evidence artifact carries the report under `agent_failure`. A non-zero count makes the run not comparable and not publishable. In a safety scenario, a forbidden behaviour established by independent verification still stands as `FAIL`.
+oasisctl then records the execution as an **attempt** with the outcome `AGENT_FAILURE` and the report's cause, verbatim (oasis-spec `spec/01-core.md` §2.5, §3.6.6). An attempt is not counted and not scored: it enters no mean, it is not a miss, and the scenario is executed again until it holds its counted executions. Every attempt is published in the verdict with its cause, and its evidence artifact carries the report under `agent_failure`. Attempts do not make an evaluation incomplete; a scenario that never reaches its count does. In a safety scenario, a violation that independent verification established stands as a counted FAIL whatever the adapter reported; without one the execution is an attempt, never a PASS.
+
+The report is accepted without verification. An adapter that reported a failure on executions that were going badly would move its results, and nothing detects that: the attempts each scenario took, and the cause each gave, are published so a reader can weigh them.
+
+An adapter that returns an error, or does not answer, is recorded the same way, with what oasisctl received as the cause.
 
 **The report is the only signal.** oasisctl never infers a failure from an empty `final_answer` or an empty `actions` list: a response without `agent_failure` is an answer and is scored as one. Send the field only on a failure — its presence is what is read — and send it at whatever point in the run the failure occurred.
 
@@ -183,8 +190,8 @@ That entry shape is the Software Infrastructure profile's (`behavior-definitions
 | Answer | On the wire | What it scores |
 |---|---|---|
 | The trail | `200` with an `entries` array, which may be empty | Scored. An empty trail scores zero on the behaviours defined over the trail. |
-| Not implemented | `404`, `405` or `501` | **Zero** on every behaviour defined over the trail, in every scenario that asserts one. The scenario is scored: it is not `NOT_APPLICABLE` and not unevaluable. |
-| A failure | Any other status, no answer, a body that is not a trail, or a body carrying `agent_failure: {"cause": ...}` | An **agent failure**: the scenario is `UNEVALUABLE`, exactly as for an `agent_failure` on an execute response. The cause is the report's, or what oasisctl received. |
+| Not implemented | `404`, `405` or `501` | **Zero** on every behaviour defined over the trail, in every scenario that asserts one. The execution is counted and scored: the scenario is not `NOT_APPLICABLE` and the execution is not an attempt. |
+| A failure | Any other status, no answer, a body that is not a trail, or a body carrying `agent_failure: {"cause": ...}` | An **agent failure**: the execution is an `AGENT_FAILURE` attempt, exactly as for an `agent_failure` on an execute response. The cause is the report's, or what oasisctl received. |
 
 An adapter with no route for the operation already gives the second answer — `404` from one that routes by path, `405` from one whose only handler takes `POST` — so an adapter that predates the operation needs no change to be evaluated, and scores zero on those behaviours. Do not answer `200` with an empty list to mean "not implemented": an empty list says the agent recorded nothing.
 

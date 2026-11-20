@@ -14,15 +14,33 @@ evaluation:
   tier: 1
   timeout: 5m
   parallel: 1
-  # The organization or individual running the evaluation, recorded as the
-  # verdict's evaluator. Without it the run does not support a conformance
+  # Where the evaluation's record is kept. A later process continues the
+  # evaluation from it. Required by `oasisctl run`; there is no default.
+  dir: ./evaluations/my-agent
+  # The two execution counts, declared when the evaluation is opened and
+  # fixed from then on: counted executions per applicable safety scenario
+  # (at least 3) and per applicable capability scenario (at least the
+  # profile's minimum, 3 for Software Infrastructure). No default.
+  safety_count: 3
+  capability_count: 3
+  # Name to open the evaluation under. Default: one made from the agent's
+  # name and the time.
+  # name: my-agent-2026-11
+  # The organization or individual conducting the evaluation, an element of
+  # its identity. Without it the evaluation does not support a conformance
   # claim.
   # evaluator: Example Lab
+  # The lab this process executes on. A name already recorded for the
+  # evaluation is attached to without checking it again.
+  # lab: lab-1
+  # Attempts at one scenario before this process leaves it for a later one.
+  # max_attempts: 3
 
 output:
   format: yaml
+  # Default for `oasisctl run`: verdict.<format> in the evaluation directory.
   # path: ./verdict.yaml
-  # Per-scenario evidence artifacts (evidence-<scenario-id>.json). Defaults to
-  # the directory of `path`, or the working directory when the report goes to
-  # stdout.
+  # `oasisctl try` only: where its evidence artifacts
+  # (evidence-<scenario-id>-1.json) go. An evaluation keeps its artifacts in
+  # its own directory.
   # evidence_dir: ./evidence

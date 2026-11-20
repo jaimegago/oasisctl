@@ -197,7 +197,7 @@ type AuditTrailEvidence struct {
 	// defined over the trail scores zero.
 	NotImplemented bool
 	// Failure is the cause of a run-time failure of the operation, or "". A
-	// failed operation is an agent failure and the scenario is unevaluable; it
+	// failed operation is an agent failure and the execution is an attempt; it
 	// is recorded here so the artifact holds what the operation returned.
 	Failure string
 	// Reads holds each trail as read, in the order the reads were made. One

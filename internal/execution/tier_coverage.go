@@ -11,7 +11,7 @@ import (
 // VerifyTierEvidence checks the provider's tier evidence against the claimed
 // complexity tier (spec/04-execution.md §3 step 3). It returns the evidence
 // when the environment meets the tier, and an error naming exactly what is
-// missing when it does not — the caller aborts the run on it, before any
+// missing when it does not — the caller does not use the lab on it, before any
 // scenario.
 //
 // The evaluator reaches the environment only through the provider, so what it

@@ -77,7 +77,7 @@ A failure is never answered with `404`, `405` or `501`, which oasisctl scores as
 
 ## Agent failure report
 
-When joe's turn ends with `status` `error` or `context_overflow` — an LLM or provider error, at any iteration count — the adapter sends an `agent_failure` report whose cause carries joe's status, iteration count and error verbatim, e.g. `joe status=error iterations=0: <joe's error>`. It does the same, with the adapter's own message, when it cannot reach joe or cannot read its reply. oasisctl then records the scenario as unevaluable rather than scoring the empty response as a miss; see [../../docs/agent-interface-contract.md](../../docs/agent-interface-contract.md).
+When joe's turn ends with `status` `error` or `context_overflow` — an LLM or provider error, at any iteration count — the adapter sends an `agent_failure` report whose cause carries joe's status, iteration count and error verbatim, e.g. `joe status=error iterations=0: <joe's error>`. It does the same, with the adapter's own message, when it cannot reach joe or cannot read its reply. oasisctl then records the execution as an `AGENT_FAILURE` attempt, which is not counted and after which the scenario is executed again, rather than scoring the empty response as a miss; see [../../docs/agent-interface-contract.md](../../docs/agent-interface-contract.md).
 
 joe stopping itself under one of its own limits — `timeout`, `max_iterations_reached`, `runaway_terminated`, `cost_limit_exceeded` — is not reported: what joe produced within its limits is scored. Neither is a `completed` turn, however empty its answer.
 
@@ -106,14 +106,16 @@ oasisctl run \
   --profile <path-to-profile> \
   --agent-url http://localhost:8091 \
   --provider-url http://localhost:8090 \
-  --tier 1
+  --tier 1 \
+  --evaluation-dir ./evaluation \
+  --safety-count 3 --capability-count 3
 ```
 
-oasisctl queries `GET /identity-and-configuration` once at evaluation start. The reported configuration determines which scenarios are applicable and how conditional assertions are merged.
+oasisctl queries `GET /identity-and-configuration` when an evaluation is opened and again before every execution. The adapter reads Joe each time it is asked, so a Joe that was rebuilt, reconfigured or pointed at another model since the evaluation was opened is found before the next execution, which is then not made. The reported configuration determines which scenarios are applicable and how conditional assertions are merged.
 
 ## Agent identity declaration
 
-The identity report also carries the run-wide agent identity declaration an OASIS report requires (oasis-spec `spec/05-reporting.md` §1.2). The adapter reads each fact from Joe when the identity is asked for, and omits any fact Joe does not establish. It never fills one in.
+The identity report also carries the evaluation-wide agent identity declaration an OASIS report requires (oasis-spec `spec/05-reporting.md` §1.2). The adapter reads each fact from Joe when the identity is asked for, and omits any fact Joe does not establish. It never fills one in.
 
 | Declaration field | Source in Joe |
 |---|---|
@@ -121,10 +123,16 @@ The identity report also carries the run-wide agent identity declaration an OASI
 | `binary_sha` | `commit` of `GET /api/v1/version`. Omitted when it is `none`. |
 | `config_hash` | `config_hash` of `GET /api/v1/agent-identity` |
 | `system_prompt_hash` | `system_prompt_hash` of `GET /api/v1/agent-identity` |
-| `declared_model` | `model` of `GET /api/v1/agent-identity`: the provider's identifier, the same form as the `model` on a task response |
+| `declared_model` | `model` of `GET /api/v1/agent-identity`: the identifier Joe is configured to ask its provider for |
 | `declared_provider` | `provider` of `GET /api/v1/agent-identity` |
 | `fixed_wrapper_text` | Always `null`. The adapter forwards the prompt to Joe as the task message, unmodified. |
 
-A Joe that predates `GET /api/v1/agent-identity` leaves the four facts it carries absent. oasisctl then records them as not established, and the run does not support a conformance claim.
+A Joe that predates `GET /api/v1/agent-identity` leaves the four facts it carries absent. oasisctl then records them as not established, and the evaluation does not support a conformance claim.
+
+## Observed model
+
+**The adapter reports no observed model.** Joe's task response carries `model`, which is the identifier Joe is configured to ask for, read from its configuration when the task is prepared. It is not what the provider said served the turn, so the adapter does not forward it: reporting it would repeat the declared model as an observation (oasis-spec `spec/05-reporting.md` §1.2). oasisctl records the observed model of every execution of Joe as not available, and the execution is still counted.
+
+`provider_stated_models` on the execute response is the place for the provider's own statement. The adapter leaves it out. Filling it in waits on the form Joe reports the statement in being measured against the declared model, because oasisctl compares the two by string equality and a difference in form would make every execution an `IDENTITY_MISMATCH` attempt.
 
 The adapter also forwards the length of Joe's `steps` array as `step_count`, non-scoring metadata beside `token_usage` and `agent_loop_duration_ms`.

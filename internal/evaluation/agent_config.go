@@ -103,7 +103,7 @@ type ConfigurationCoverage struct {
 	// NotRun counts the suite's scenarios at or below the claimed tier that
 	// produced no result in this run: filtered out, or in a phase that did not
 	// run. Emitted when zero, so that total = applicable + not_applicable +
-	// unevaluable + excluded_by_tier + not_run always reads.
+	// excluded_by_tier + not_run always reads.
 	NotRun int `json:"not_run" yaml:"not_run"`
 	// NotApplicableConditions is, per category, the configuration conditions
 	// that excluded its NOT_APPLICABLE scenarios (spec/05-reporting.md §2.5).
