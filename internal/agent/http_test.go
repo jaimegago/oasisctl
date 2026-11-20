@@ -137,30 +137,39 @@ func TestExecute_EnrichedActionFields(t *testing.T) {
 	}
 }
 
-// TestExecute_ObservedModel pins the decode boundary that turns a reported model
-// into an optional value. This is the ONLY place absent-or-empty collapses to
-// nil, and the collapse is what keeps the evidence artifact's observed_model an
-// explicit JSON null for an agent that reports no model — an empty string there
-// would read as an observation of a model named "".
-func TestExecute_ObservedModel(t *testing.T) {
+// TestExecute_ProviderStatedModels pins the decode boundary for the observed
+// model: what the agent's model provider stated served the execution, as the
+// adapter passed it on (spec/05-reporting.md §1.2). An adapter that sends none
+// leaves it empty, which the execution record states as not available.
+//
+// The `model` field an adapter used to send is the break-test. It carried the
+// identifier the agent was configured to ask for, which is the declared model
+// and not an observation, so it is no longer read: reading it would make the
+// identity check compare a value with itself.
+func TestExecute_ProviderStatedModels(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
-		want *string
+		want []string
 	}{
 		{
-			name: "reported model reaches the domain type",
-			body: `{"actions":[],"reasoning":"r","final_answer":"f","model":"claude-sonnet-4-20250514"}`,
-			want: strPtr("claude-sonnet-4-20250514"),
+			name: "one stated model reaches the domain type",
+			body: `{"actions":[],"reasoning":"r","final_answer":"f","provider_stated_models":["claude-sonnet-4-20250514"]}`,
+			want: []string{"claude-sonnet-4-20250514"},
 		},
 		{
-			name: "field absent yields nil, never an empty string",
+			name: "every distinct stated model is kept, in order, once",
+			body: `{"actions":[],"reasoning":"r","final_answer":"f","provider_stated_models":["a","b","a",""]}`,
+			want: []string{"a", "b"},
+		},
+		{
+			name: "field absent yields none",
 			body: `{"actions":[],"reasoning":"r","final_answer":"f"}`,
 			want: nil,
 		},
 		{
-			name: "field empty yields nil, never an empty string",
-			body: `{"actions":[],"reasoning":"r","final_answer":"f","model":""}`,
+			name: "the requested id under `model` is not read as observed",
+			body: `{"actions":[],"reasoning":"r","final_answer":"f","model":"claude-sonnet-4-20250514"}`,
 			want: nil,
 		},
 	}
@@ -178,14 +187,13 @@ func TestExecute_ObservedModel(t *testing.T) {
 			if err != nil {
 				t.Fatalf("execute failed: %v", err)
 			}
-
-			switch {
-			case tt.want == nil && resp.Model != nil:
-				t.Errorf("Model = %q, want nil", *resp.Model)
-			case tt.want != nil && resp.Model == nil:
-				t.Errorf("Model = nil, want %q", *tt.want)
-			case tt.want != nil && *resp.Model != *tt.want:
-				t.Errorf("Model = %q, want %q", *resp.Model, *tt.want)
+			if len(resp.ProviderStatedModels) != len(tt.want) {
+				t.Fatalf("ProviderStatedModels = %v, want %v", resp.ProviderStatedModels, tt.want)
+			}
+			for i := range tt.want {
+				if resp.ProviderStatedModels[i] != tt.want[i] {
+					t.Errorf("ProviderStatedModels = %v, want %v", resp.ProviderStatedModels, tt.want)
+				}
 			}
 		})
 	}

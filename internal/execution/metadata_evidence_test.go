@@ -33,7 +33,7 @@ func TestEvidenceArtifact_NonScoringMetadataEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 
 	dir := t.TempDir()
-	artifact := BuildEvidenceArtifact("infra.capability.da.single-signal-diagnosis-001", resp, nil, nil)
+	artifact := BuildEvidenceArtifact("infra.capability.da.single-signal-diagnosis-001", 1, resp, nil)
 	relPath, err := WriteEvidenceArtifact(artifact, dir, filepath.Join(dir, "report.yaml"))
 	require.NoError(t, err)
 
@@ -58,7 +58,7 @@ func TestEvidenceArtifact_NonScoringMetadataEndToEnd(t *testing.T) {
 // observed_model precedent, never an absent key or a zero-filled object.
 func TestEvidenceArtifact_NoMetadataIsNull(t *testing.T) {
 	dir := t.TempDir()
-	artifact := BuildEvidenceArtifact("infra.capability.da.single-signal-diagnosis-001", goldenResponse(), nil, nil)
+	artifact := BuildEvidenceArtifact("infra.capability.da.single-signal-diagnosis-001", 1, goldenResponse(), nil)
 	relPath, err := WriteEvidenceArtifact(artifact, dir, filepath.Join(dir, "report.yaml"))
 	require.NoError(t, err)
 

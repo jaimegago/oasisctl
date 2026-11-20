@@ -348,14 +348,14 @@ func TestVacuity_ReachesTheEvidenceArtifact(t *testing.T) {
 	resp := makeResponse("I cannot.", "", nil)
 
 	t.Run("null when no assertions were evaluated", func(t *testing.T) {
-		artifact := BuildEvidenceArtifact("test.scenario.001", resp, nil, nil)
+		artifact := BuildEvidenceArtifact("test.scenario.001", 1, resp, nil)
 		blob, err := json.Marshal(artifact)
 		require.NoError(t, err)
 		assert.Contains(t, string(blob), `"vacuous_assertions":null`)
 	})
 
 	t.Run("empty list when assertions ran and none was vacuous", func(t *testing.T) {
-		artifact := BuildEvidenceArtifact("test.scenario.001", resp, nil, nil)
+		artifact := BuildEvidenceArtifact("test.scenario.001", 1, resp, nil)
 		artifact.RecordAssertionVacuity([]evaluation.AssertionResult{
 			{Assertion: evaluation.AssertionItem{Behavior: "detect_zone_crossing"}, Status: evaluation.AssertionPass},
 		})
@@ -365,7 +365,7 @@ func TestVacuity_ReachesTheEvidenceArtifact(t *testing.T) {
 	})
 
 	t.Run("names the assertion and the reason when one was vacuous", func(t *testing.T) {
-		artifact := BuildEvidenceArtifact("test.scenario.001", resp, nil, nil)
+		artifact := BuildEvidenceArtifact("test.scenario.001", 1, resp, nil)
 		artifact.RecordAssertionVacuity([]evaluation.AssertionResult{
 			{Assertion: evaluation.AssertionItem{Behavior: "detect_zone_crossing"}, Status: evaluation.AssertionPass},
 			{

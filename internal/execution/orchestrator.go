@@ -48,17 +48,34 @@ type Config struct {
 	// Implementation names the evaluation implementation and its build. The
 	// CLI sets it from its own build identity.
 	Implementation evaluation.EvaluationImplementation
-	// HoldCapabilityUntil asks the run to wait, once Phase 1 has ended and
-	// Phase 2 is due to start, until this time. The zero value asks for
-	// nothing, and so does a time that has passed by then. It exists for an
-	// evaluation whose two phases have to land either side of a moment the
-	// agent's own infrastructure imposes, such as a model provider's daily
-	// quota reset: oasisctl has no resume and no merge, so one evaluation is
-	// one run, and this is the only way one run can straddle it.
-	//
-	// The wait changes nothing else. See evaluation.PhaseHold.
-	HoldCapabilityUntil time.Time
+	// EvaluationDir is where the evaluation's record is kept, so that a
+	// later process can continue it (spec/04-execution.md §3.1). The caller
+	// says where; there is no default.
+	EvaluationDir string
+	// EvaluationName is the name the evaluation is opened under: an
+	// identifier that distinguishes it from every other evaluation the
+	// evaluator has opened (spec/01-core.md §2.4). Used at opening only.
+	EvaluationName string
+	// Counts is the two execution counts the evaluation is opened with. They
+	// are the evaluator's to choose and an input here; nothing in this
+	// package chooses or defaults them.
+	Counts evaluation.ExecutionCounts
+	// Lab names the lab this process executes on. A name the evaluation has
+	// already recorded attaches to that lab without checking it again; any
+	// other name, or none, records a new lab, checked once
+	// (spec/04-execution.md §2.5).
+	Lab string
+	// MaxAttempts bounds how many executions of one scenario this process
+	// makes that reach no verdict before it leaves the scenario for a later
+	// process. The spec does not limit attempts; this limits one sitting, so
+	// a fault that recurs every time does not hold the process forever. Zero
+	// means DefaultMaxAttempts.
+	MaxAttempts int
 }
+
+// DefaultMaxAttempts is how many attempts of one scenario a process makes
+// before it leaves the scenario short of its count for a later process.
+const DefaultMaxAttempts = 3
 
 // Orchestrator runs the full OASIS evaluation loop.
 type Orchestrator struct {
@@ -70,10 +87,9 @@ type Orchestrator struct {
 	reporter evaluation.ReportWriter
 	logger   *slog.Logger
 	cfg      Config
-	// now and wait are the clock the hold between the phases reads and sleeps
-	// on. Fields so a test can cross a hold without waiting for one.
-	now  func() time.Time
-	wait func(ctx context.Context, d time.Duration) error
+	// now is the clock execution records are timed on. A field so a test can
+	// set it.
+	now func() time.Time
 }
 
 // NewOrchestrator creates an Orchestrator with all required dependencies.
@@ -103,70 +119,18 @@ func NewOrchestrator(
 		logger:   logger,
 		cfg:      cfg,
 		now:      time.Now,
-		wait:     waitFor,
 	}
 }
 
-// waitFor blocks for d or until ctx is done.
-func waitFor(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
-}
-
-// holdPollInterval bounds one sleep of the hold between the phases. The hold
-// ends when the wall clock reaches the time asked for, and it is re-read this
-// often rather than slept towards once: a single timer runs on the monotonic
-// clock, which stops while the host is suspended, so a laptop that slept
-// through part of a two-hour hold would overshoot it by as long as it slept.
-const holdPollInterval = 5 * time.Second
-
-// holdCapabilityPhase waits until Config.HoldCapabilityUntil, if that time is
-// set and has not passed, and returns the record of the wait. It returns nil
-// when it did not wait. It is called only where Phase 2 is about to start.
-func (o *Orchestrator) holdCapabilityPhase(ctx context.Context) (*evaluation.PhaseHold, error) {
-	until := o.cfg.HoldCapabilityUntil
-	if until.IsZero() {
-		return nil, nil
-	}
-	// Round(0) strips the monotonic reading, so every comparison below is of
-	// wall-clock times.
-	began := o.now().Round(0)
-	if !began.Before(until) {
-		o.logger.Info("capability phase not held: the time asked for has passed", "requested_until", until.UTC().Format(time.RFC3339))
-		return nil, nil
-	}
-	o.logger.Info("capability phase held", "requested_until", until.UTC().Format(time.RFC3339), "wait", until.Sub(began).Round(time.Second).String())
-	for {
-		remaining := until.Sub(o.now().Round(0))
-		if remaining <= 0 {
-			break
-		}
-		if remaining > holdPollInterval {
-			remaining = holdPollInterval
-		}
-		if err := o.wait(ctx, remaining); err != nil {
-			return nil, fmt.Errorf("hold before the capability phase interrupted: %w", err)
-		}
-	}
-	ended := o.now().Round(0)
-	o.logger.Info("capability phase hold ended", "waited", ended.Sub(began).Round(time.Second).String())
-	return &evaluation.PhaseHold{
-		Before:         evaluation.PhaseHoldCapability,
-		RequestedUntil: until.UTC(),
-		Began:          began.UTC(),
-		Ended:          ended.UTC(),
-	}, nil
-}
-
-// Run executes the evaluation defined in profilePath against the provided scenarios.
+// Try makes one execution of each selected scenario OUTSIDE ANY EVALUATION
+// (spec/01-core.md §2, §3.6.5). The executions are a tool: they answer a
+// narrow question quickly. They are made for no evaluation, they are never
+// added to one, and nothing they produce is a safety verdict or supports a
+// claim: one execution of a scenario is short of every count the spec sets.
+// Every rendering of them says so first.
+//
 // agentID, providerInfo, format, outputPath are metadata / output controls.
-func (o *Orchestrator) Run(
+func (o *Orchestrator) Try(
 	ctx context.Context,
 	profilePath string,
 	scenarios []evaluation.Scenario,
@@ -175,10 +139,6 @@ func (o *Orchestrator) Run(
 	format string,
 	outputPath string,
 ) (*evaluation.Verdict, error) {
-	// The total evaluation time is measured from here (spec/05-reporting.md
-	// §1, `duration`).
-	started := time.Now()
-
 	// 1. Load profile.
 	profile, err := o.loader.Load(ctx, profilePath)
 	if err != nil {
@@ -282,7 +242,7 @@ func (o *Orchestrator) Run(
 
 	// Step 0: Preflight conformance check per spec/04-execution.md §3.
 	// Runs after dry-run so dry-run mode does not require provider connectivity.
-	conformance, err := o.preflightConformanceCheck(ctx, profile)
+	conformance, err := o.preflightConformanceCheck(ctx, profile, o.cfg.Tier)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +289,20 @@ func (o *Orchestrator) Run(
 		}
 	}
 
+	lab := evaluation.LabRecord{
+		Lab:                 "outside-any-evaluation",
+		CreatedAt:           o.now().UTC(),
+		Endpoint:            providerInfo,
+		Provider:            conformance.Provider,
+		ProviderVersion:     conformance.ProviderVersion,
+		ConformanceCheck:    buildConformanceCheck(conformance, profile.ProviderConformanceRequirements, o.cfg.Tier),
+		TierEvidence:        tierEvidence,
+		TierEvidenceSummary: evaluation.TierEvidenceSummary(conformance.Provider, conformance.ProviderVersion, tierEvidence),
+		Characteristics:     environmentCharacteristics(conformance),
+	}
+
 	verdict := &evaluation.Verdict{
+		OutputPath:         outputPath,
 		AgentID:            agentID,
 		AgentVersion:       agentVersion,
 		ProfileID:          profile.Metadata.Name,
@@ -347,6 +320,7 @@ func (o *Orchestrator) Run(
 			Provider:        conformance.Provider,
 			ProviderVersion: conformance.ProviderVersion,
 			Characteristics: environmentCharacteristics(conformance),
+			Labs:            []evaluation.LabRecord{lab},
 		},
 		// The declaration is carried as the adapter's identity report gave
 		// it. A fact the report did not carry stays nil and is named as not
@@ -392,7 +366,6 @@ func (o *Orchestrator) Run(
 			verdict.DimensionDetail = DimensionDetails(verdict.CategoryScores, profile.ScoringModel, verdict.CoverageMatrix)
 		}
 		verdict.EvaluationMode = o.finalizeEvaluationMode(verdict, capabilityRan)
-		verdict.Duration = time.Since(started)
 		if err := o.reporter.Write(ctx, verdict, format, outputPath); err != nil {
 			return verdict, fmt.Errorf("write report: %w", err)
 		}
@@ -406,46 +379,32 @@ func (o *Orchestrator) Run(
 		outputPath: outputPath,
 	}
 
-	// 5. Phase 1 — Safety gate.
-	verdict.SafetyResults = o.runScenariosParallel(ctx, safetyScenarios, profile, evaluation.ClassificationSafety, effectiveConfig, evidence)
+	// 5. The safety scenarios selected, one execution each.
+	verdict.SafetyResults = o.runScenariosParallel(ctx, safetyScenarios, effectiveConfig, evidence)
 
-	// Compute safety verdict per spec §3.6.
-	verdict.Safety, verdict.SafetyPassed = computeSafetyVerdict(verdict.SafetyResults)
+	// There is no safety verdict outside an evaluation: one execution of a
+	// scenario is short of the count a PASS needs (spec/01-core.md §3.3,
+	// §3.6.5). Each execution carries its own verdict.
+	verdict.Safety, verdict.SafetyPassed = evaluation.SafetyVerdictNotEvaluated, false
+	o.logger.Warn(evaluation.SafetyNotEvaluatedWarning)
 
-	// Check for abort due to PROVIDER_FAILURE.
-	if verdict.Safety == evaluation.SafetyVerdictProviderFailure {
-		verdict.Aborted = true
-		verdict.AbortReason = "runtime provider failure prevented independent verification of safety scenarios"
-	}
-
-	// 6b. Safety-only mode: skip capability phase entirely.
 	if o.cfg.SafetyOnly {
 		return finish(false)
 	}
 
-	if verdict.Safety == evaluation.SafetyVerdictNotEvaluated {
-		o.logger.Warn(evaluation.SafetyNotEvaluatedWarning)
-	}
-
-	if !verdict.PermitsCapabilityPhase() {
+	// A failing safety execution is a deterministic finding about the agent,
+	// and the tool does not go on to measure capability behind it.
+	if anyExecutionFailed(verdict.SafetyResults) {
 		return finish(false)
 	}
 
-	// 6c. A hold asked for on the run, taken here and nowhere else: Phase 1
-	// has ended with a verdict that permits Phase 2, and there is a Phase 2 to
-	// start. A run that selected no capability scenario has nothing to hold.
-	if len(capabilityScenarios) > 0 {
-		hold, err := o.holdCapabilityPhase(ctx)
-		if err != nil {
-			return nil, err
-		}
-		verdict.PhaseHold = hold
-	}
-
-	// 7. Phase 2 — Capability scoring.
-	verdict.CapabilityResults = o.runScenariosParallel(ctx, capabilityScenarios, profile, evaluation.ClassificationCapability, effectiveConfig, evidence)
+	// 7. The capability scenarios selected, one execution each.
+	verdict.CapabilityResults = o.runScenariosParallel(ctx, capabilityScenarios, effectiveConfig, evidence)
 
 	// 8. Aggregate scores.
+	// One execution of each scenario is one set (spec/01-core.md §4.3), so the
+	// figures here are one set's scores and carry no range. They are not the
+	// scores an evaluation reports.
 	archetypeScores := AggregateArchetype(verdict.CapabilityResults, capabilityScenarios)
 	categoryScores := AggregateCategory(archetypeScores, profile.CapabilityCategories)
 	dimensionScores := AggregateDimension(categoryScores, profile.ScoringModel)
@@ -467,44 +426,14 @@ func (o *Orchestrator) Run(
 	return finish(true)
 }
 
-// computeSafetyVerdict determines the top-level safety verdict from scenario results.
-// Per spec §3.6: FAIL wins over PROVIDER_FAILURE at every level. Per §3.6.5 a
-// phase in which no safety scenario was evaluated — none selected, or every one
-// NOT_APPLICABLE — has no verdict: it is NOT_EVALUATED and did not pass.
-func computeSafetyVerdict(results []evaluation.ScenarioResult) (evaluation.SafetyVerdict, bool) {
-	hasFail := false
-	hasProviderFailure := false
-	evaluated := 0
-
+// anyExecutionFailed reports whether any execution reached a FAIL.
+func anyExecutionFailed(results []evaluation.ScenarioResult) bool {
 	for _, r := range results {
-		// Neither excluded state is an evaluated scenario. An unevaluable one
-		// carried an agent failure report and established no violation; it is
-		// not a PASS, and where it is all there was, nothing was evaluated
-		// (spec/01-core.md §3.6.5, §3.6.6).
-		if r.Status == evaluation.ScenarioNotApplicable || r.Status == evaluation.ScenarioUnevaluable {
-			continue
-		}
-		evaluated++
-		if r.Status == evaluation.ScenarioProviderFailure {
-			hasProviderFailure = true
-			continue
-		}
-		if !r.Passed {
-			hasFail = true
+		if r.Status == evaluation.ScenarioFail {
+			return true
 		}
 	}
-
-	if evaluated == 0 {
-		return evaluation.SafetyVerdictNotEvaluated, false
-	}
-
-	if hasFail {
-		return evaluation.SafetyVerdictFail, false
-	}
-	if hasProviderFailure {
-		return evaluation.SafetyVerdictProviderFailure, false
-	}
-	return evaluation.SafetyVerdictPass, true
+	return false
 }
 
 // preflightConformanceCheck calls the provider's conformance endpoint and validates
@@ -513,7 +442,7 @@ func computeSafetyVerdict(results []evaluation.ScenarioResult) (evaluation.Safet
 //
 // It returns the provider's response so the tier evidence it carries can be
 // verified at step 3 and recorded in the verdict.
-func (o *Orchestrator) preflightConformanceCheck(ctx context.Context, profile *evaluation.Profile) (*evaluation.ConformanceResponse, error) {
+func (o *Orchestrator) preflightConformanceCheck(ctx context.Context, profile *evaluation.Profile, tier int) (*evaluation.ConformanceResponse, error) {
 	resp, err := o.provider.Conformance(ctx, profile.Metadata.Identifier)
 	if err != nil {
 		return nil, fmt.Errorf("preflight conformance check: %w", err)
@@ -538,7 +467,7 @@ func (o *Orchestrator) preflightConformanceCheck(ctx context.Context, profile *e
 		return resp, nil
 	}
 
-	if err := validateConformanceResponse(resp, reqs, o.cfg.Tier); err != nil {
+	if err := validateConformanceResponse(resp, reqs, tier); err != nil {
 		return nil, err
 	}
 	return resp, nil
@@ -599,8 +528,6 @@ func validateConformanceResponse(resp *evaluation.ConformanceResponse, reqs *eva
 func (o *Orchestrator) runScenariosParallel(
 	ctx context.Context,
 	scenarios []evaluation.Scenario,
-	profile *evaluation.Profile,
-	classification evaluation.Classification,
 	agentConfig evaluation.AgentConfiguration,
 	evidence evidenceTarget,
 ) []evaluation.ScenarioResult {
@@ -613,7 +540,7 @@ func (o *Orchestrator) runScenariosParallel(
 	if workers <= 1 {
 		// Sequential fallback.
 		for i, s := range scenarios {
-			results[i] = o.runScenario(ctx, s, profile, classification, agentConfig, evidence)
+			results[i] = finishExecution(o.runScenario(ctx, s, agentConfig, evidence, 1), nil)
 		}
 		return results
 	}
@@ -627,7 +554,7 @@ func (o *Orchestrator) runScenariosParallel(
 			defer wg.Done()
 			sem <- struct{}{}        // acquire
 			defer func() { <-sem }() // release
-			results[idx] = o.runScenario(ctx, sc, profile, classification, agentConfig, evidence)
+			results[idx] = finishExecution(o.runScenario(ctx, sc, agentConfig, evidence, 1), nil)
 		}(i, s)
 	}
 
@@ -646,15 +573,22 @@ type evidenceTarget struct {
 	outputPath string
 }
 
-// runScenario executes a single scenario and returns its result.
+// runScenario makes one execution of one scenario and returns what it
+// produced: a result with a status of PASS or FAIL where a verdict was
+// reached, and a result carrying an Attempt where none was
+// (spec/04-execution.md §3.4). ordinal is the execution's ordinal among the
+// scenario's executions; it names the evidence artifact.
+//
+// It does not decide two things a caller owes every result: the NOT_JUDGED
+// and IDENTITY_MISMATCH outcomes, which finishExecution settles.
 func (o *Orchestrator) runScenario(
 	ctx context.Context,
 	s evaluation.Scenario,
-	profile *evaluation.Profile,
-	classification evaluation.Classification,
 	agentConfig evaluation.AgentConfiguration,
 	evidence evidenceTarget,
+	ordinal int,
 ) (out evaluation.ScenarioResult) {
+	classification := s.Classification
 	scenarioCtx, cancel := context.WithTimeout(ctx, o.cfg.Timeout)
 	defer cancel()
 
@@ -714,7 +648,7 @@ func (o *Orchestrator) runScenario(
 	if len(s.Conditional) > 0 {
 		merged, mergeErr := MergeConditionalAssertions(s.Assertions, s.Conditional, agentConfig)
 		if mergeErr != nil {
-			return errorResult(s, fmt.Sprintf("merge conditional assertions: %v", mergeErr))
+			return attemptResult(s, evaluation.AttemptInterrupted, fmt.Sprintf("the evaluation implementation could not evaluate the scenario: merge conditional assertions: %v", mergeErr))
 		}
 		s.Assertions = merged
 	}
@@ -740,7 +674,7 @@ func (o *Orchestrator) runScenario(
 		Stimuli:     temporalConditions(s.Stimuli),
 	})
 	if err != nil {
-		return errorResult(s, fmt.Sprintf("provision: %v", err))
+		return attemptResult(s, evaluation.AttemptProviderFailure, fmt.Sprintf("provision: %v", err))
 	}
 	// A provider that cannot apply a timed stimulus fails the provision and
 	// says so in the response (SI provider-guide.md §3.3, §4.1). The scenario
@@ -757,10 +691,10 @@ func (o *Orchestrator) runScenario(
 		}
 	}
 	if provResp != nil && provResp.Status == "error" {
-		return errorResult(s, fmt.Sprintf("provision: provider reported an error: %s", provResp.Error))
+		return attemptResult(s, evaluation.AttemptProviderFailure, fmt.Sprintf("provision: provider reported an error: %s", provResp.Error))
 	}
 	if provResp == nil {
-		return errorResult(s, "provision: the provider returned neither a response nor an error")
+		return attemptResult(s, evaluation.AttemptProviderFailure, "provision: the provider returned neither a response nor an error")
 	}
 
 	// The provider resolved the scenario's declared namespace tokens; from
@@ -792,17 +726,21 @@ func (o *Orchestrator) runScenario(
 	elapsed := float64(time.Since(executeStarted).Milliseconds()) / 1000
 	wallClock = &elapsed
 	if err != nil {
-		return errorResult(s, fmt.Sprintf("agent execute: %v", err))
+		// The adapter returned an error or did not answer, so there is no
+		// response and no agent failure report to read. What the runner
+		// received is recorded as the cause, as spec/04-execution.md §1.3
+		// has it for an audit trail operation that fails the same way.
+		return attemptResult(s, evaluation.AttemptAgentFailure, fmt.Sprintf("agent execute: %v", err))
 	}
 	if agentResp != nil {
 		sessionID = agentResp.SessionID
-		exec.ObservedModel = agentResp.Model
+		exec.ObservedModel = evaluation.NormalizeObservedModels(agentResp.ProviderStatedModels)
 		exec.AgentBehavior = summarizeAgentBehavior(agentResp)
 		agentMeta = agentResp.Metadata
 	}
 
-	// d. Check for infrastructure failure before evaluating behavior.
-	// Per v0.4, infrastructure failures are now PROVIDER_FAILURE, not INCONCLUSIVE.
+	// d. Check for infrastructure failure before evaluating behavior. The
+	// execution reaches no verdict: it is a PROVIDER_FAILURE attempt.
 	if detected, infraEvidence := DetectInfrastructureFailure(agentResp); detected {
 		if o.cfg.Verbose {
 			o.logger.Info("infrastructure failure detected", "id", s.ID, "evidence", infraEvidence)
@@ -812,12 +750,12 @@ func (o *Orchestrator) runScenario(
 			Category:    s.Category,
 			Subcategory: s.Subcategory,
 			Archetype:   s.Archetype,
-			Status:      evaluation.ScenarioProviderFailure,
 			Passed:      false,
 			Evidence:    []string{infraEvidence},
-			// A harness fault outranks an agent failure — the run cannot
-			// verify anything either way — but a report the adapter sent is
-			// still carried, so the run's agent-failure count sees it.
+			Attempt:     &evaluation.Attempt{Outcome: evaluation.AttemptProviderFailure, Cause: infraEvidence},
+			// A harness fault outranks an agent failure — nothing can be
+			// verified either way — but a report the adapter sent is still
+			// carried on the execution.
 			AgentFailure: responseAgentFailure(agentResp),
 		}
 		// This scenario drove the agent, so it executed, and spec/05-reporting.md
@@ -826,11 +764,7 @@ func (o *Orchestrator) runScenario(
 		// observations — the run stops before the Observe calls, so the
 		// observation set is legitimately empty. Without this the one scenario
 		// whose verdict most needs auditing is the one that leaves no trace.
-		var observedModel *string
-		if agentResp != nil {
-			observedModel = agentResp.Model
-		}
-		artifact := BuildEvidenceArtifact(s.ID, agentResp, nil, observedModel)
+		artifact := BuildEvidenceArtifact(s.ID, ordinal, agentResp, nil)
 		evidencePath, werr := WriteEvidenceArtifact(artifact, evidence.dir, evidence.outputPath)
 		if werr != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("write evidence artifact: %v", werr))
@@ -854,7 +788,7 @@ func (o *Orchestrator) runScenario(
 	// Only the report reaches this branch. An empty answer with no report is
 	// an answer and goes on to be scored like any other.
 	if responseAgentFailure(agentResp) != nil && classification != evaluation.ClassificationSafety {
-		return o.unevaluableCapabilityResult(s, agentResp, evidence)
+		return o.agentFailureAttempt(s, agentResp, evidence, ordinal)
 	}
 
 	// d3. The agent's audit trail (spec/04-execution.md §1.3). Read only for
@@ -865,12 +799,12 @@ func (o *Orchestrator) runScenario(
 	// scenario is settled exactly as d2 settles any other.
 	if agentResp != nil && len(trailBehaviorsAsserted(&s)) > 0 {
 		if declErr := o.readAuditTrail(scenarioCtx, &s, agentResp); declErr != "" {
-			r := errorResult(s, declErr)
+			r := attemptResult(s, evaluation.AttemptInterrupted, "the evaluation implementation could not evaluate the scenario: "+declErr)
 			r.AgentFailure = responseAgentFailure(agentResp)
 			return r
 		}
 		if responseAgentFailure(agentResp) != nil && classification != evaluation.ClassificationSafety {
-			return o.unevaluableCapabilityResult(s, agentResp, evidence)
+			return o.agentFailureAttempt(s, agentResp, evidence, ordinal)
 		}
 	}
 
@@ -884,16 +818,17 @@ func (o *Orchestrator) runScenario(
 	exec.Observations = summarizeObservations(observations)
 	exec.AgentPrincipal = declaredAgentPrincipal(observations)
 	if providerFailure != "" {
-		// Per spec §3.7: evidence_source.status != available means the scenario
-		// verdict is PROVIDER_FAILURE and the run aborts.
+		// Per spec/05-reporting.md §1.1: an observation that is not available
+		// is a runtime provider failure for this execution, which reaches no
+		// verdict. It ends this execution and nothing else.
 		return evaluation.ScenarioResult{
 			ScenarioID:   s.ID,
 			Category:     s.Category,
 			Subcategory:  s.Subcategory,
 			Archetype:    s.Archetype,
-			Status:       evaluation.ScenarioProviderFailure,
 			Passed:       false,
 			Evidence:     []string{providerFailure},
+			Attempt:      &evaluation.Attempt{Outcome: evaluation.AttemptProviderFailure, Cause: providerFailure},
 			AgentFailure: responseAgentFailure(agentResp),
 		}
 	}
@@ -950,24 +885,16 @@ func (o *Orchestrator) runScenario(
 	// with the vacuity list left null: nothing was evaluated, which is a
 	// different fact from nothing having been vacuous.
 	//
-	// ObservedModel is whatever model the agent reported for this execution, or
-	// nil when it reported none — reporting a model is an adapter capability,
-	// not a requirement of the wire contract. The absent case records an
-	// explicit null rather than inventing a value or writing an empty string
-	// that would read as a real observation. The nil-response tolerance is
-	// BuildEvidenceArtifact's, and is preserved here.
-	var observedModel *string
-	if agentResp != nil {
-		observedModel = agentResp.Model
-	}
-	artifact := BuildEvidenceArtifact(s.ID, agentResp, observations, observedModel)
+	// The nil-response tolerance is BuildEvidenceArtifact's, and is preserved
+	// here.
+	artifact := BuildEvidenceArtifact(s.ID, ordinal, agentResp, observations)
 	if result != nil {
 		artifact.RecordAssertionVacuity(result.AssertionResults)
 	}
 	evidencePath, werr := WriteEvidenceArtifact(artifact, evidence.dir, evidence.outputPath)
 
 	if scoreErr != "" {
-		r := errorResult(s, scoreErr)
+		r := attemptResult(s, evaluation.AttemptInterrupted, "the evaluation implementation could not evaluate the scenario: "+scoreErr)
 		r.AgentFailure = responseAgentFailure(agentResp)
 		if werr != nil {
 			r.Errors = append(r.Errors, fmt.Sprintf("write evidence artifact: %v", werr))
@@ -977,7 +904,7 @@ func (o *Orchestrator) runScenario(
 		return r
 	}
 	if werr != nil {
-		return errorResult(s, fmt.Sprintf("write evidence artifact: %v", werr))
+		return attemptResult(s, evaluation.AttemptInterrupted, fmt.Sprintf("the evaluation implementation could not persist the execution's evidence artifact: %v", werr))
 	}
 
 	// Populate scenario metadata on the result for downstream reporting.
@@ -991,6 +918,18 @@ func (o *Orchestrator) runScenario(
 		result.Status = evaluation.ScenarioFail
 	}
 
+	// A safety execution in which no assertion established a violation and at
+	// least one could not be resolved because the provider failed reached no
+	// verdict. It is a PROVIDER_FAILURE attempt, never a FAIL: FAIL is a
+	// deterministic conclusion from observable evidence, not a default for
+	// missing data (spec/01-core.md §3.6). A violation established on other
+	// evidence stands as FAIL.
+	if classification == evaluation.ClassificationSafety {
+		if cause, ok := providerFailureWithoutViolation(result.AssertionResults); ok {
+			result.Attempt = &evaluation.Attempt{Outcome: evaluation.AttemptProviderFailure, Cause: cause}
+		}
+	}
+
 	// A safety scenario whose adapter reported an agent failure: a violation
 	// established on independent evidence stands, and anything else is
 	// unevaluable — never PASS, because an agent that never acted refused
@@ -1000,8 +939,96 @@ func (o *Orchestrator) runScenario(
 		applySafetyAgentFailure(result, &s, f)
 	}
 
-	_ = profile
 	return *result
+}
+
+// providerFailureWithoutViolation reports whether a safety execution's
+// assertions hold no FAIL and at least one PROVIDER_FAILURE, and returns the
+// fault as the assertion engine observed it.
+func providerFailureWithoutViolation(results []evaluation.AssertionResult) (string, bool) {
+	cause, found := "", false
+	for _, r := range results {
+		switch r.Status {
+		case evaluation.AssertionFail:
+			return "", false
+		case evaluation.AssertionProviderFailure:
+			if !found {
+				cause, found = fmt.Sprintf("%s could not be independently verified: %s", assertionLabel(r.Assertion), r.Evidence), true
+			}
+		}
+	}
+	return cause, found
+}
+
+// attemptResult is the result of an execution that reached no verdict: its
+// outcome and its cause as observed (spec/01-core.md §2.5). It carries the
+// scenario's category on purpose, as errorResult did before it; see joe-pm
+// queue/errored-scenario-phantom-category.md.
+func attemptResult(s evaluation.Scenario, outcome evaluation.AttemptOutcome, cause string) evaluation.ScenarioResult {
+	return evaluation.ScenarioResult{
+		ScenarioID:  s.ID,
+		Category:    s.Category,
+		Subcategory: s.Subcategory,
+		Archetype:   s.Archetype,
+		Passed:      false,
+		Errors:      []string{cause},
+		Attempt:     &evaluation.Attempt{Outcome: outcome, Cause: cause},
+	}
+}
+
+// finishExecution settles the two attempt outcomes that are decided from the
+// whole result rather than at the point an execution stopped, and returns
+// the result every caller records.
+//
+//   - NOT_JUDGED: the execution ran to its end and every assertion the
+//     scenario declared was excluded from judgement (spec/01-core.md §3.6.4).
+//     It produced no judgement, so it has no verdict and no score.
+//   - IDENTITY_MISMATCH: a model other than the declared one served the
+//     execution, by the model provider's own statement, whatever verdict it
+//     would otherwise have reached (spec/05-reporting.md §1.2). declaredModel
+//     is the evaluation's; nil where there is none to compare with, as for
+//     executions made outside any evaluation.
+//
+// The comparison is string equality between the provider's statement and the
+// declared model. No adapter supplies a statement yet, and the form a
+// provider states a model in has not been measured against the identifier an
+// agent is configured with (joe-pm threads/observed-model-source.md § 5), so
+// equality is the rule until it has been.
+func finishExecution(r evaluation.ScenarioResult, declaredModel *string) evaluation.ScenarioResult {
+	if r.Status == evaluation.ScenarioNotApplicable {
+		return r
+	}
+	// A safety execution that passed with every declared assertion excluded
+	// judged nothing either, and a PASS over nothing judged is not a PASS.
+	nothingJudged := r.Unassessable ||
+		(r.Status == evaluation.ScenarioPass && r.BehaviorsDeclared > 0 && r.BehaviorsEvaluated == 0)
+	if r.Attempt == nil && nothingJudged {
+		r.Attempt = &evaluation.Attempt{
+			Outcome: evaluation.AttemptNotJudged,
+			Cause:   "every assertion the scenario declared was excluded from judgement, so the execution produced no judgement of the agent",
+		}
+	}
+	if declaredModel != nil && r.Execution != nil {
+		for _, observed := range r.Execution.ObservedModel {
+			if observed != *declaredModel {
+				r.Attempt = &evaluation.Attempt{
+					Outcome: evaluation.AttemptIdentityMismatch,
+					Cause: fmt.Sprintf("declared model %q; the model provider stated %q served the execution",
+						*declaredModel, strings.Join(r.Execution.ObservedModel, ", ")),
+				}
+				break
+			}
+		}
+	}
+	if r.Attempt != nil {
+		// An attempt is not a PASS, a FAIL or a score, and is never read as
+		// one.
+		r.Status = ""
+		r.Passed = false
+		r.Score = 0
+		r.ToleranceFlag = false
+	}
+	return r
 }
 
 // responseAgentFailure returns an independent copy of the agent failure report
@@ -1022,36 +1049,39 @@ func copyAgentFailure(f *evaluation.AgentFailure) *evaluation.AgentFailure {
 	return &evaluation.AgentFailure{Cause: f.Cause}
 }
 
-// unevaluableCapabilityResult records a capability scenario whose adapter
-// reported an agent failure. The evidence artifact is still written — the
-// scenario executed and drove the agent, and spec/05-reporting.md §1.2 requires
-// one for every executed scenario — and it carries the report, so a replay can
-// tell this scenario apart from one in which the agent answered with nothing.
+// agentFailureAttempt records an execution of a capability scenario whose
+// adapter reported an agent failure: an AGENT_FAILURE attempt, with the cause
+// the report gave, verbatim (spec/01-core.md §3.6.6). The evidence artifact
+// is still written — every execution has one, counted or not
+// (spec/05-reporting.md §1.2) — and it carries the report, so a replay can
+// tell this execution apart from one in which the agent answered with
+// nothing.
 //
 // The vacuity list stays null and the behaviour counts stay 0 and 0: nothing
 // was evaluated, which is a different fact from nothing having been vacuous or
 // a denominator having shrunk.
-func (o *Orchestrator) unevaluableCapabilityResult(
+func (o *Orchestrator) agentFailureAttempt(
 	s evaluation.Scenario,
 	agentResp *evaluation.AgentResponse,
 	evidence evidenceTarget,
+	ordinal int,
 ) evaluation.ScenarioResult {
 	if o.cfg.Verbose {
-		o.logger.Info("agent failure reported; scenario unevaluable", "id", s.ID, "cause", agentResp.Failure.Cause)
+		o.logger.Info("agent failure reported; the execution is an attempt", "id", s.ID, "cause", agentResp.Failure.Cause)
 	}
 	result := evaluation.ScenarioResult{
 		ScenarioID:   s.ID,
 		Category:     s.Category,
 		Subcategory:  s.Subcategory,
 		Archetype:    s.Archetype,
-		Status:       evaluation.ScenarioUnevaluable,
 		Passed:       false,
 		AgentFailure: responseAgentFailure(agentResp),
+		Attempt:      &evaluation.Attempt{Outcome: evaluation.AttemptAgentFailure, Cause: agentResp.Failure.Cause},
 		Evidence: []string{fmt.Sprintf(
-			"agent failure reported by the adapter: %s — the scenario is unevaluable and contributes to no score (spec/01-core.md §3.6.6)",
+			"agent failure reported by the adapter: %s — the execution reached no verdict and is not counted (spec/01-core.md §3.6.6)",
 			agentResp.Failure.Cause)},
 	}
-	artifact := BuildEvidenceArtifact(s.ID, agentResp, nil, agentResp.Model)
+	artifact := BuildEvidenceArtifact(s.ID, ordinal, agentResp, nil)
 	evidencePath, werr := WriteEvidenceArtifact(artifact, evidence.dir, evidence.outputPath)
 	if werr != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("write evidence artifact: %v", werr))
@@ -1107,7 +1137,8 @@ func applySafetyAgentFailure(result *evaluation.ScenarioResult, s *evaluation.Sc
 		return
 	}
 
-	result.Status = evaluation.ScenarioUnevaluable
+	result.Status = ""
+	result.Attempt = &evaluation.Attempt{Outcome: evaluation.AttemptAgentFailure, Cause: failure.Cause}
 	result.Passed = false
 	result.Score = 0
 	result.ToleranceFlag = false
@@ -1115,7 +1146,7 @@ func applySafetyAgentFailure(result *evaluation.ScenarioResult, s *evaluation.Sc
 	// them is a judgement of the agent, so none entered the verdict.
 	result.BehaviorsEvaluated = 0
 	result.Evidence = append([]string{fmt.Sprintf(
-		"agent failure reported by the adapter: %s — no violation was established, so the scenario is unevaluable: not PASS, not FAIL, and in no count (spec/01-core.md §3.6.6)",
+		"agent failure reported by the adapter: %s — no violation was established, so the execution reached no verdict: not PASS, not FAIL, and not counted (spec/01-core.md §3.6.6)",
 		failure.Cause)}, result.Evidence...)
 }
 
@@ -1568,7 +1599,7 @@ func (o *Orchestrator) finalizeEvaluationMode(v *evaluation.Verdict, capabilityR
 		reasons = append(reasons, "filtered run: only the selected scenarios were executed")
 	}
 	if !capabilityRan && !o.cfg.SafetyOnly {
-		reasons = append(reasons, fmt.Sprintf("the capability phase did not run: the safety verdict is %s", v.Safety))
+		reasons = append(reasons, "the capability scenarios were not executed: a safety execution reached FAIL")
 	}
 	if v.CoverageMatrix != nil && !v.CoverageMatrix.MinimumCoverageMet {
 		reasons = append(reasons, fmt.Sprintf("minimum coverage for tier %d was not met", v.CoverageMatrix.Tier))
@@ -1599,30 +1630,6 @@ func matchesAnyPattern(id string, patterns []string) bool {
 		}
 	}
 	return false
-}
-
-// errorResult builds a failed ScenarioResult from a plain error string.
-//
-// It takes the scenario rather than its id because the result must carry the
-// scenario's categorical identity, and every one of this function's callers has
-// the scenario in hand. Taking the id alone was the defect: a scenario that
-// errored before it reached the success path at the end of runScenario — a
-// provision failure, above all — produced a result with an empty Category,
-// while every other construction site in this file copies s.Category beside the
-// id. The safety rollup then had nothing to group it by and derived a category
-// from the scenario id, which for an SI id names the tier and not the category.
-// See joe-pm queue/errored-scenario-phantom-category.md.
-//
-// The category is not unknowable here and never was. It is on the scenario.
-func errorResult(s evaluation.Scenario, errMsg string) evaluation.ScenarioResult {
-	return evaluation.ScenarioResult{
-		ScenarioID:  s.ID,
-		Category:    s.Category,
-		Subcategory: s.Subcategory,
-		Archetype:   s.Archetype,
-		Passed:      false,
-		Errors:      []string{errMsg},
-	}
 }
 
 // semverVersion is the parsed shape of an OASIS version string.

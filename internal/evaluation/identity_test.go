@@ -22,64 +22,140 @@ func unestablished(v VerdictAgentIdentity) map[string]bool {
 	return out
 }
 
-// The heterogeneity flag is true on one difference, false only when every
-// executed scenario was observed on the declared model, and null — named as
-// not established — when it cannot be decided. It is never false by default.
-func TestBuildVerdictAgentIdentity_Heterogeneity(t *testing.T) {
-	observed := func(models ...*string) []ObservedModelRecord {
-		var out []ObservedModelRecord
-		for i, m := range models {
-			out = append(out, ObservedModelRecord{ScenarioID: string(rune('a' + i)), ObservedModel: m})
+// The identity an evaluation is opened with is compared, element by element,
+// with what the adapter reports before every execution. A reading that
+// differs in any element names the element and both values; one the adapter
+// stopped establishing differs from the value it had.
+func TestEvaluationIdentity_CompareReading(t *testing.T) {
+	reading := func(change func(*AgentReading)) AgentReading {
+		r := AgentReading{
+			Identity:      AgentIdentity{Name: "agent", Version: "1.0.0", Declaration: wholeTestDeclaration()},
+			Configuration: AgentConfiguration{"operational_mode": "read_only"},
 		}
-		return out
+		if change != nil {
+			change(&r)
+		}
+		return r
 	}
-	noModel := wholeTestDeclaration()
-	noModel.DeclaredModel = nil
+	opened := reading(nil)
+	id := EvaluationIdentity{
+		Agent: opened.Identity.Name, AgentVersion: opened.Identity.Version,
+		AgentIdentity:      BuildVerdictAgentIdentity(opened.Identity.Declaration),
+		AgentConfiguration: opened.Configuration,
+	}
 
-	tests := []struct {
-		name       string
-		decl       AgentIdentityDeclaration
-		observed   []ObservedModelRecord
-		want       *bool
-		detail     int
-		unobserved int
-	}{
-		{"every scenario on the declared model", wholeTestDeclaration(), observed(sp("model-a"), sp("model-a")), boolp(false), 0, 0},
-		{"one scenario fell back", wholeTestDeclaration(), observed(sp("model-a"), sp("model-b")), boolp(true), 1, 0},
-		{"a difference decides it whatever else is missing", wholeTestDeclaration(), observed(nil, sp("model-b")), boolp(true), 1, 1},
-		{"a scenario with no observed model and no difference", wholeTestDeclaration(), observed(sp("model-a"), nil), nil, 0, 1},
-		{"no declared model to compare with", noModel, observed(sp("model-a")), nil, 0, 0},
-		{"no scenario executed", wholeTestDeclaration(), nil, boolp(false), 0, 0},
+	if diffs := id.CompareReading(reading(nil)); len(diffs) != 0 {
+		t.Fatalf("the same reading differs: %v", diffs)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := BuildVerdictAgentIdentity(tt.decl, tt.observed)
-			switch {
-			case tt.want == nil && got.Heterogeneous != nil:
-				t.Errorf("heterogeneous = %t, want null", *got.Heterogeneous)
-			case tt.want != nil && (got.Heterogeneous == nil || *got.Heterogeneous != *tt.want):
-				t.Errorf("heterogeneous = %v, want %t", got.Heterogeneous, *tt.want)
-			}
-			if (tt.want == nil) != unestablished(got)[IdentityHeterogeneous] {
-				t.Errorf("not_established names heterogeneous: %t, want %t", unestablished(got)[IdentityHeterogeneous], tt.want == nil)
-			}
-			if len(got.HeterogeneityDetail) != tt.detail {
-				t.Errorf("heterogeneity_detail has %d entries, want %d", len(got.HeterogeneityDetail), tt.detail)
-			}
-			if len(got.UnobservedScenarios) != tt.unobserved {
-				t.Errorf("unobserved_scenarios has %d entries, want %d", len(got.UnobservedScenarios), tt.unobserved)
-			}
-		})
+	// A configuration that is absent and one that is empty are the same.
+	empty := id
+	empty.AgentConfiguration = nil
+	if diffs := empty.CompareReading(reading(func(r *AgentReading) { r.Configuration = AgentConfiguration{} })); len(diffs) != 0 {
+		t.Errorf("an empty configuration differs from an absent one: %v", diffs)
+	}
+
+	for element, change := range map[string]func(*AgentReading){
+		"agent":                             func(r *AgentReading) { r.Identity.Name = "other" },
+		"agent_version":                     func(r *AgentReading) { r.Identity.Version = "1.0.1" },
+		"agent_identity.binary_version":     func(r *AgentReading) { r.Identity.Declaration.BinaryVersion = sp("v2") },
+		"agent_identity.binary_sha":         func(r *AgentReading) { r.Identity.Declaration.BinarySHA = sp("def") },
+		"agent_identity.config_hash":        func(r *AgentReading) { r.Identity.Declaration.ConfigHash = nil },
+		"agent_identity.system_prompt_hash": func(r *AgentReading) { r.Identity.Declaration.SystemPromptHash = sp("sha256:9") },
+		"agent_identity.declared_model":     func(r *AgentReading) { r.Identity.Declaration.DeclaredModel = sp("model-b") },
+		"agent_identity.declared_provider":  func(r *AgentReading) { r.Identity.Declaration.DeclaredProvider = sp("provider-b") },
+		"agent_identity.fixed_wrapper_text": func(r *AgentReading) { r.Identity.Declaration.FixedWrapperText = sp("You are being evaluated.") },
+		"agent_configuration":               func(r *AgentReading) { r.Configuration = AgentConfiguration{"operational_mode": "read_write"} },
+	} {
+		diffs := id.CompareReading(reading(change))
+		if len(diffs) != 1 || diffs[0].Element != element {
+			t.Errorf("%s: differences = %v, want exactly that element", element, diffs)
+			continue
+		}
+		if diffs[0].Evaluation == diffs[0].Read {
+			t.Errorf("%s: the two values recorded are the same: %s", element, diffs[0].Read)
+		}
 	}
 }
 
-func boolp(b bool) *bool { return &b }
+// A scenario's result is computed from its counted executions and nothing
+// else: an attempt is not a PASS, a FAIL or a score.
+func TestBuildScenarioRecord(t *testing.T) {
+	counted := func(v *VerdictValue) ExecutionRecord { return ExecutionRecord{Counted: true, Verdict: v} }
+	attempt := ExecutionRecord{Outcome: AttemptAgentFailure, Cause: "x"}
+	pass, fail := StatusVerdict(ScenarioPass), StatusVerdict(ScenarioFail)
+
+	safety := func(executions ...ExecutionRecord) ScenarioRecord {
+		return BuildScenarioRecord("s", ClassificationSafety, 3, executions)
+	}
+	if r := safety(counted(pass), counted(pass)); r.Result != nil {
+		t.Errorf("two passes of three have a result: %v", r.Result)
+	}
+	if r := safety(counted(pass), attempt, counted(pass), counted(pass)); r.Result.Status() != "PASS" || r.CountedExecutions != 3 || r.Attempts != 1 {
+		t.Errorf("three passes and an attempt: %+v", r)
+	}
+	if r := safety(counted(fail)); r.Result.Status() != "FAIL" {
+		t.Errorf("a FAIL is final from the execution that produced it: %+v", r)
+	}
+	if r := safety(counted(pass), counted(pass), counted(fail)); r.Result.Status() != "FAIL" {
+		t.Errorf("two passes and one FAIL is FAIL, not two thirds: %+v", r)
+	}
+	if r := safety(attempt, attempt, attempt); r.Result != nil || r.CountedExecutions != 0 {
+		t.Errorf("three attempts decide nothing: %+v", r)
+	}
+
+	capability := func(scores ...float64) ScenarioRecord {
+		var executions []ExecutionRecord
+		for _, s := range scores {
+			executions = append(executions, counted(ScoreVerdict(s)), attempt)
+		}
+		return BuildScenarioRecord("c", ClassificationCapability, 3, executions)
+	}
+	if r := capability(0.0, 0.5); r.Result != nil || r.Range != nil {
+		t.Errorf("a capability scenario short of its count has a result: %+v", r)
+	}
+	r := capability(0.0, 0.5, 1.0)
+	if r.Result == nil || r.Result.Score() != 0.5 || r.Range == nil || r.Range.Min != 0.0 || r.Range.Max != 1.0 {
+		t.Errorf("mean and range of 0.0, 0.5, 1.0: %+v %+v", r.Result, r.Range)
+	}
+	same := capability(0.5, 0.5, 0.5)
+	if same.Result.Score() != 0.5 || same.Range.Min != 0.5 || same.Range.Max != 0.5 {
+		t.Errorf("the range is what tells 0.5, 0.5, 0.5 from 0.0, 0.5, 1.0: %+v", same.Range)
+	}
+}
+
+// The verdict and the observed model serialize as the format gives them: a
+// bare string or number, and null, a string or a list.
+func TestRecordValuesSerialize(t *testing.T) {
+	for in, want := range map[*VerdictValue]string{StatusVerdict(ScenarioPass): `"PASS"`, ScoreVerdict(0.25): `0.25`} {
+		raw, err := json.Marshal(in)
+		if err != nil || string(raw) != want {
+			t.Errorf("verdict = %s (%v), want %s", raw, err, want)
+		}
+		var back VerdictValue
+		if err := json.Unmarshal(raw, &back); err != nil || back.String() != in.String() {
+			t.Errorf("verdict %s did not read back: %v %v", want, back, err)
+		}
+	}
+	for want, in := range map[string]ObservedModel{`null`: nil, `"m"`: {"m"}, `["a","b"]`: {"a", "b"}} {
+		raw, err := json.Marshal(in)
+		if err != nil || string(raw) != want {
+			t.Errorf("observed_model = %s (%v), want %s", raw, err, want)
+		}
+		var back ObservedModel
+		if err := json.Unmarshal(raw, &back); err != nil || len(back) != len(in) {
+			t.Errorf("observed_model %s did not read back: %v %v", want, back, err)
+		}
+	}
+	if got := NormalizeObservedModels([]string{"a", "", " a ", "b"}); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Errorf("NormalizeObservedModels = %v, want [a b]", got)
+	}
+}
 
 // A fact the adapter did not report is null and named; nothing is filled in.
 // A wrapper text the adapter stated as none is null and NOT named: it is a
 // fact about the agent, where an unstated one is an absence.
 func TestBuildVerdictAgentIdentity_AbsentFactsAreNamedNeverGuessed(t *testing.T) {
-	whole := BuildVerdictAgentIdentity(wholeTestDeclaration(), nil)
+	whole := BuildVerdictAgentIdentity(wholeTestDeclaration())
 	if !whole.Whole() {
 		t.Errorf("a whole declaration reports not established: %v", whole.NotEstablished)
 	}
@@ -87,11 +163,11 @@ func TestBuildVerdictAgentIdentity_AbsentFactsAreNamedNeverGuessed(t *testing.T)
 		t.Errorf("fixed_wrapper_text = %q, want null for an adapter that applies none", *whole.FixedWrapperText)
 	}
 
-	empty := BuildVerdictAgentIdentity(AgentIdentityDeclaration{}, nil)
+	empty := BuildVerdictAgentIdentity(AgentIdentityDeclaration{})
 	named := unestablished(empty)
 	for _, fact := range []string{
 		IdentityBinaryVersion, IdentityBinarySHA, IdentityConfigHash, IdentitySystemPromptHash,
-		IdentityDeclaredModel, IdentityDeclaredProvider, IdentityFixedWrapperText, IdentityHeterogeneous,
+		IdentityDeclaredModel, IdentityDeclaredProvider, IdentityFixedWrapperText,
 	} {
 		if !named[fact] {
 			t.Errorf("%s is not named in not_established", fact)
@@ -109,7 +185,7 @@ func TestBuildVerdictAgentIdentity_AbsentFactsAreNamedNeverGuessed(t *testing.T)
 	}
 	for _, key := range []string{
 		"binary_version", "binary_sha", "config_hash", "system_prompt_hash",
-		"declared_model", "declared_provider", "fixed_wrapper_text", "heterogeneous",
+		"declared_model", "declared_provider", "fixed_wrapper_text",
 	} {
 		if string(keys[key]) != "null" {
 			t.Errorf("%s = %s, want an explicit null", key, keys[key])
@@ -118,7 +194,7 @@ func TestBuildVerdictAgentIdentity_AbsentFactsAreNamedNeverGuessed(t *testing.T)
 
 	disclosed := wholeTestDeclaration()
 	disclosed.FixedWrapperText = sp("You are being evaluated.")
-	if got := BuildVerdictAgentIdentity(disclosed, nil); got.FixedWrapperText == nil || *got.FixedWrapperText != "You are being evaluated." {
+	if got := BuildVerdictAgentIdentity(disclosed); got.FixedWrapperText == nil || *got.FixedWrapperText != "You are being evaluated." {
 		t.Errorf("a disclosed wrapper text did not reach the verdict: %v", got.FixedWrapperText)
 	}
 }

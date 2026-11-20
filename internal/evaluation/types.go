@@ -279,6 +279,10 @@ type Profile struct {
 	IntentPromotion                 IntentPromotionConfig
 	AgentConfigurationSchema        *AgentConfigurationSchema
 	ProviderConformanceRequirements *ProviderConformanceRequirements
+	// ExecutionMinimums is the minimum execution counts the profile sets
+	// (spec/03-profiles.md §2.18). A zero Capability is a profile that states
+	// none this loader could read, and an evaluation under it is not opened.
+	ExecutionMinimums ExecutionMinimums
 }
 
 // SubcategoryDefinition describes a subcategory that groups scenarios by safety property.
@@ -402,6 +406,10 @@ type CategoryScore struct {
 	// each evaluated archetype's score and weight, in declaration order.
 	Aggregation        AggregationMethod       `json:"aggregation,omitempty" yaml:"aggregation,omitempty"`
 	ArchetypeBreakdown []ArchetypeContribution `json:"archetype_breakdown,omitempty" yaml:"archetype_breakdown,omitempty"`
+	// Range is the lowest and the highest of the per-set category scores
+	// Score is the mean of (spec/01-core.md §4.3). Nil on a score computed
+	// from one set of executions made outside any evaluation.
+	Range *ScoreRange `json:"range,omitempty" yaml:"range,omitempty"`
 }
 
 // ArchetypeContribution is one evaluated archetype's part in a category
@@ -410,6 +418,8 @@ type ArchetypeContribution struct {
 	Archetype string  `json:"archetype" yaml:"archetype"`
 	Score     float64 `json:"score" yaml:"score"`
 	Weight    float64 `json:"weight" yaml:"weight"`
+	// Range is the range of the archetype's per-set scores.
+	Range *ScoreRange `json:"range,omitempty" yaml:"range,omitempty"`
 }
 
 // ScoringModel defines how scores aggregate.
@@ -821,9 +831,54 @@ type ScenarioResult struct {
 	ExclusionConditions string `json:"exclusion_conditions,omitempty" yaml:"exclusion_conditions,omitempty"`
 	// Execution is what happened when the scenario was executed: the stimuli
 	// applied, the precondition evidence, the observations used. Nil for a
-	// scenario the configuration excluded, which was never provisioned.
+	// scenario the configuration excluded, which was never provisioned, and
+	// on a scenario-level result, whose executions carry their own.
 	Execution *ScenarioExecution `json:"execution,omitempty" yaml:"execution,omitempty"`
+
+	// Attempt is set on the result of one execution that reached no verdict
+	// (spec/01-core.md §2.5): its outcome and its cause as reported. Such a
+	// result carries no status and no score, and is never counted.
+	Attempt *Attempt `json:"attempt,omitempty" yaml:"attempt,omitempty"`
+
+	// The fields below are on a scenario-level result assembled from an
+	// evaluation's record: what the scenario's executions add up to.
+
+	// DeclaredCount is the evaluation's declared count for this scenario's
+	// classification; CountedExecutions and Attempts count its executions.
+	DeclaredCount     int `json:"declared_count,omitempty" yaml:"declared_count,omitempty"`
+	CountedExecutions int `json:"counted_executions,omitempty" yaml:"counted_executions,omitempty"`
+	Attempts          int `json:"attempts,omitempty" yaml:"attempts,omitempty"`
+	// ShortOfCount is true while the scenario holds fewer counted executions
+	// than declared and has no result. A safety scenario with a FAIL has one,
+	// from the execution that produced it, and is not short in this sense.
+	ShortOfCount bool `json:"short_of_count,omitempty" yaml:"short_of_count,omitempty"`
+	// Range is the lowest and highest counted execution score of a capability
+	// scenario that has its mean in Score.
+	Range *ScoreRange `json:"range,omitempty" yaml:"range,omitempty"`
+	// Executions is every execution made of the scenario, in order of start,
+	// counted or not (spec/05-reporting.md §2.6).
+	Executions []ExecutionDetail `json:"executions,omitempty" yaml:"executions,omitempty"`
 }
+
+// ExecutionDetail is one execution of a scenario as the report's scenario
+// detail carries it: its record, and what its own evaluation produced — the
+// assertion results, the evidence summary, the stimuli and observations. The
+// result is nil for an execution that stopped before it produced any.
+type ExecutionDetail struct {
+	Record ExecutionRecord `json:"record" yaml:"record"`
+	Result *ScenarioResult `json:"result,omitempty" yaml:"result,omitempty"`
+}
+
+// HasResult reports whether a scenario-level result carries a result: a
+// status of PASS or FAIL. One that is NOT_APPLICABLE or short of its count
+// does not.
+func (r ScenarioResult) HasResult() bool {
+	return r.Status == ScenarioPass || r.Status == ScenarioFail
+}
+
+// IsAttempt reports whether this is the result of an execution that reached
+// no verdict.
+func (r ScenarioResult) IsAttempt() bool { return r.Attempt != nil }
 
 // ScenarioExecution is the per-execution detail of one scenario
 // (spec/05-reporting.md §2.6). It is a record for the reader and is never an
@@ -839,9 +894,10 @@ type ScenarioExecution struct {
 	// scenario's environment as, as the provider declared it on the audit_log
 	// observation, or null (spec/05-reporting.md §1.2, environment identity).
 	AgentPrincipal *string `json:"agent_principal" yaml:"agent_principal"`
-	// ObservedModel is the model the adapter reported for this execution, or
-	// null where it reported none or the agent was never reached.
-	ObservedModel *string `json:"observed_model" yaml:"observed_model"`
+	// ObservedModel is the model, or models, the agent's model provider stated
+	// served this execution, or null where that statement was not supplied
+	// (spec/05-reporting.md §1.2). It is never the model the agent asked for.
+	ObservedModel ObservedModel `json:"observed_model" yaml:"observed_model"`
 	// AgentBehavior summarizes what the agent did. The reasoning trace, the
 	// final answer and every tool call with its full response are in the
 	// evidence artifact, which EvidencePath references.
@@ -905,12 +961,6 @@ type ObservationSummary struct {
 	EvidenceSource *EvidenceSource `json:"evidence_source" yaml:"evidence_source"`
 }
 
-// IsUnevaluable reports whether the scenario was excluded because the agent
-// failed. A scenario whose safety violation stood despite a report is not.
-func (r ScenarioResult) IsUnevaluable() bool {
-	return r.Status == ScenarioUnevaluable
-}
-
 // DenominatorShrank reports that this scenario was scored over fewer behaviours
 // than it declared, so its score is not comparable to one over the full set.
 //
@@ -951,12 +1001,9 @@ type ArchetypeScore struct {
 	// shrank, in the order they were scored. It is what turns comparable:
 	// false into something a reader can act on.
 	ShrunkenScenarios []string `json:"shrunken_scenarios,omitempty" yaml:"shrunken_scenarios,omitempty"`
-	// UnevaluableScenarios names this archetype's scenarios that were excluded
-	// because the agent failed (spec/01-core.md §3.6.6). Score is computed
-	// over the rest, which is a population the agent's failures chose, so a
-	// non-empty list makes the archetype not comparable — and through it the
-	// category, exactly as a shrunken denominator does.
-	UnevaluableScenarios []string `json:"unevaluable_scenarios,omitempty" yaml:"unevaluable_scenarios,omitempty"`
+	// Range is the lowest and the highest of the per-set scores Score is the
+	// mean of (spec/01-core.md §4.3). Nil on a score computed from one set.
+	Range *ScoreRange `json:"range,omitempty" yaml:"range,omitempty"`
 }
 
 // EvaluationMode describes which filters were active during an evaluation.
@@ -979,39 +1026,66 @@ type EvaluationMode struct {
 type SafetyVerdict string
 
 const (
-	SafetyVerdictPass            SafetyVerdict = "PASS"
-	SafetyVerdictFail            SafetyVerdict = "FAIL"
-	SafetyVerdictProviderFailure SafetyVerdict = "PROVIDER_FAILURE"
+	SafetyVerdictPass SafetyVerdict = "PASS"
+	SafetyVerdictFail SafetyVerdict = "FAIL"
 	// SafetyVerdictNotEvaluated is the absence of a safety verdict, per
-	// spec/01-core.md §3.6.5: no safety scenario was evaluated, so nothing was
-	// verified. It is not a fourth verdict status. It exists so that an empty
-	// safety phase is never reported as PASS, which "every applicable scenario
-	// is PASS" would otherwise yield over an empty set.
+	// spec/01-core.md §3.6.5: the safety executions are not all made, or none
+	// was made for an evaluation, or no safety scenario is applicable. It is
+	// not a third verdict status. It exists so that anything short of the
+	// PASS §3.3 defines is never reported as PASS.
 	SafetyVerdictNotEvaluated SafetyVerdict = "NOT_EVALUATED"
 )
 
-// SafetyNotEvaluatedWarning is the statement §3.6.5 requires every rendering of
-// a run with no evaluated safety scenario to make first.
+// SafetyNotEvaluatedWarning is the statement §3.6.5 requires every rendering
+// of executions made outside any evaluation to make first.
 const SafetyNotEvaluatedWarning = "SAFETY NOT EVALUATED — THIS IS NOT AN OASIS EVALUATION. " +
-	"No safety scenario was evaluated in this run. It makes no safety claim and no conformance claim; " +
-	"its only value is a quick check of capability behaviour."
+	"These executions were made outside any evaluation and are part of none. They make no safety claim and no conformance claim; " +
+	"their only value is a quick check of behaviour."
 
-// IsVerdict reports whether the safety result is one of the three verdict
+// SafetyIncompleteWarning is the statement §3.6.5 requires of an evaluation
+// that has no safety verdict yet: some applicable safety scenario is short of
+// its count and no execution has failed.
+func SafetyIncompleteWarning(shortOfCount int) string {
+	return fmt.Sprintf("SAFETY NOT EVALUATED — the evaluation is incomplete: %d applicable safety scenario(s) are short of their count, "+
+		"and no execution has failed. There is no safety verdict, no capability execution is made, and no claim is made.", shortOfCount)
+}
+
+// IsVerdict reports whether the safety result is one of the two verdict
 // statuses of spec/01-core.md §3.6 — the cases a configuration-indexed claim
 // is made about. NOT_EVALUATED and the zero value are not.
 func (s SafetyVerdict) IsVerdict() bool {
-	switch s {
-	case SafetyVerdictPass, SafetyVerdictFail, SafetyVerdictProviderFailure:
-		return true
-	}
-	return false
+	return s == SafetyVerdictPass || s == SafetyVerdictFail
 }
 
-// PermitsCapabilityPhase reports whether Phase 2 may run on this safety
-// result: a PASS, or a run that evaluated no safety scenario at all. The
-// second is permitted by §3.6.5 and constrained only in what it may claim.
-func (v *Verdict) PermitsCapabilityPhase() bool {
-	return v.SafetyPassed || v.Safety == SafetyVerdictNotEvaluated
+// AssembledEvaluation is an evaluation as assembled from its record
+// (spec/04-execution.md §3.5).
+type AssembledEvaluation struct {
+	Opening EvaluationOpening
+	// Complete is whether no execution remains to be made (spec/01-core.md
+	// §2.7).
+	Complete bool
+	// Labs is every lab an execution of the evaluation was made on.
+	Labs []LabRecord
+	// SafetyRecords and CapabilityRecords are the scenario records of the
+	// applicable scenarios, in suite order.
+	SafetyRecords     []ScenarioRecord
+	CapabilityRecords []ScenarioRecord
+	// SafetyVerdictRecord is the path of the safety verdict record relative
+	// to the report, and SafetyVerdictHash its hash. Both empty until it is
+	// written.
+	SafetyVerdictRecord string
+	SafetyVerdictHash   string
+	DateRange           DateRange
+	// CompleteSets is how many sets of paired capability executions the
+	// aggregates were computed over.
+	CompleteSets int
+	// SafetyAttempts and CapabilityAttempts count attempts by phase, and
+	// AttemptsByOutcome evaluation-wide.
+	SafetyAttempts     int
+	CapabilityAttempts int
+	AttemptsByOutcome  AttemptCounts
+	SafetyCounted      int
+	CapabilityCounted  int
 }
 
 // Verdict is the full evaluation result as per spec 05-reporting.md.
@@ -1042,9 +1116,21 @@ type Verdict struct {
 	// CoverageMatrix is the run's coverage against the claimed tier's minimum.
 	CoverageMatrix *CoverageMatrix
 	Report         *Report
-	Aborted        bool
-	AbortReason    string
 
+	// Evaluation is what an assembled evaluation adds: its opening, its labs,
+	// its scenario records and what they add up to. Nil for executions made
+	// outside any evaluation, which have none of it.
+	Evaluation *AssembledEvaluation
+	// DimensionRanges is each core dimension's range over the complete sets.
+	DimensionRanges map[string]ScoreRange
+	// OutputPath is where the report is written, which relative paths in it
+	// are made relative to. Empty for stdout.
+	OutputPath string
+
+	// IdentityFacts is the evaluation-wide agent identity declaration as the
+	// evaluation's opening recorded it. Set on an assembled evaluation, where
+	// it is used in place of IdentityDeclaration.
+	IdentityFacts *VerdictAgentIdentity
 	// IdentityDeclaration is the run-wide agent identity declaration the
 	// adapter's identity report carried (spec/05-reporting.md §1.2).
 	IdentityDeclaration AgentIdentityDeclaration
@@ -1057,11 +1143,6 @@ type Verdict struct {
 	Provider ProviderIdentity
 	// ConformanceCheck is the preflight conformance check result.
 	ConformanceCheck *ConformanceCheck
-	// Duration is the total evaluation time.
-	Duration time.Duration
-	// PhaseHold records a wait the run made between its phases, because
-	// whoever launched it asked for one. Nil when it made none.
-	PhaseHold *PhaseHold
 	// DimensionDetail is each core dimension the profile declares, with the
 	// categories and weights behind it, in dimension-name order.
 	DimensionDetail []DimensionDetail
@@ -1136,70 +1217,50 @@ type ReportMetadata struct {
 	ConformanceCheck *ConformanceCheck `json:"conformance_check,omitempty" yaml:"conformance_check,omitempty"`
 	// ConformanceClaim says whether the run supports a conformance claim.
 	ConformanceClaim *ConformanceClaim `json:"conformance_claim,omitempty" yaml:"conformance_claim,omitempty"`
-	Date             time.Time         `json:"date" yaml:"date"`
-	// DurationSeconds is the total evaluation time.
-	DurationSeconds float64        `json:"duration_seconds" yaml:"duration_seconds"`
-	OASISCoreSpec   string         `json:"oasis_core_spec" yaml:"oasis_core_spec"`
-	ProfileName     string         `json:"profile_name" yaml:"profile_name"`
-	ProfileVersion  string         `json:"profile_version" yaml:"profile_version"`
-	ProviderInfo    string         `json:"provider_info" yaml:"provider_info"`
-	EvaluationMode  EvaluationMode `json:"evaluation_mode" yaml:"evaluation_mode"`
-	EvaluationNote  string         `json:"evaluation_note,omitempty" yaml:"evaluation_note,omitempty"`
-	// Aborted is emitted when false: a key that appears only on an aborted run
-	// cannot be relied on to be absent on a sound one (spec/05-reporting.md §1).
-	Aborted     bool   `json:"aborted" yaml:"aborted"`
-	AbortReason string `json:"abort_reason,omitempty" yaml:"abort_reason,omitempty"`
-	// AgentFailures is the run-level count of scenarios, in either phase, whose
-	// adapter sent an agent failure report (spec/05-reporting.md §1). It is
-	// emitted when zero, because a count that appears only on the defective
-	// run cannot be relied on to be absent on the sound one. Non-zero makes the
-	// run incomplete, not comparable and not publishable (spec/01-core.md
-	// §3.6.6).
-	//
-	// It sits here, beside Aborted, and not beside SafetySummary's
-	// ProviderFailures: those count safety scenarios only, and an agent can
-	// fail in either phase.
-	AgentFailures int `json:"agent_failures" yaml:"agent_failures"`
-	// AgentFailureScenarios names each of them with its cause, in run order.
-	AgentFailureScenarios []AgentFailureRecord `json:"agent_failure_scenarios,omitempty" yaml:"agent_failure_scenarios,omitempty"`
-	// PhaseHold records a wait the run made between its phases. Absent when
-	// it made none.
-	PhaseHold *PhaseHold `json:"phase_hold,omitempty" yaml:"phase_hold,omitempty"`
+	// GeneratedAt is when this rendering was assembled. It is not the
+	// evaluation's date, which is DateRange.
+	GeneratedAt time.Time `json:"generated_at" yaml:"generated_at"`
+	// Evaluation is the evaluation's name, or null for executions made
+	// outside any evaluation.
+	Evaluation *string `json:"evaluation" yaml:"evaluation"`
+	// Complete is whether the evaluation is complete (spec/01-core.md §2.7).
+	// False for executions made outside any evaluation.
+	Complete bool `json:"complete" yaml:"complete"`
+	// OpenedAt, DateRange and ExecutionCounts are the evaluation's; absent
+	// for executions made outside any evaluation.
+	OpenedAt        *time.Time       `json:"opened_at,omitempty" yaml:"opened_at,omitempty"`
+	DateRange       *DateRange       `json:"date_range,omitempty" yaml:"date_range,omitempty"`
+	ExecutionCounts *ExecutionCounts `json:"execution_counts,omitempty" yaml:"execution_counts,omitempty"`
+	// Attempts is the number of executions that reached no verdict, in total
+	// and by outcome, stated when it is zero (spec/05-reporting.md §2.1).
+	Attempts          int           `json:"attempts" yaml:"attempts"`
+	AttemptsByOutcome AttemptCounts `json:"attempts_by_outcome" yaml:"attempts_by_outcome"`
+	// AttemptList names each attempt with its outcome and cause, in order.
+	AttemptList    []AttemptEntry `json:"attempt_list,omitempty" yaml:"attempt_list,omitempty"`
+	OASISCoreSpec  string         `json:"oasis_core_spec" yaml:"oasis_core_spec"`
+	ProfileName    string         `json:"profile_name" yaml:"profile_name"`
+	ProfileVersion string         `json:"profile_version" yaml:"profile_version"`
+	ProviderInfo   string         `json:"provider_info" yaml:"provider_info"`
+	EvaluationMode EvaluationMode `json:"evaluation_mode" yaml:"evaluation_mode"`
+	EvaluationNote string         `json:"evaluation_note,omitempty" yaml:"evaluation_note,omitempty"`
 }
 
-// AgentFailureRecord is one scenario that carried an agent failure report.
-// Status is the scenario's own status: UNEVALUABLE, or FAIL where a safety
-// violation stood despite the report.
-type AgentFailureRecord struct {
-	ScenarioID string               `json:"scenario_id" yaml:"scenario_id"`
-	Cause      string               `json:"cause" yaml:"cause"`
-	Status     ScenarioResultStatus `json:"status" yaml:"status"`
+// AttemptEntry is one execution that reached no verdict.
+type AttemptEntry struct {
+	ScenarioID string         `json:"scenario_id" yaml:"scenario_id"`
+	Execution  int            `json:"execution" yaml:"execution"`
+	Outcome    AttemptOutcome `json:"outcome" yaml:"outcome"`
+	Cause      string         `json:"cause" yaml:"cause"`
 }
 
-// AgentFailureWarning is the statement every rendering of a run carrying agent
-// failure reports makes before any capability figure (spec/01-core.md §3.6.6).
-func AgentFailureWarning(n int) string {
-	noun := "scenarios"
-	if n == 1 {
-		noun = "scenario"
+// AttemptStatement is the line every rendering makes about attempts, stated
+// when there are none (spec/05-reporting.md §2.1, §2.4).
+func AttemptStatement(total int, byOutcome AttemptCounts) string {
+	parts := make([]string, 0, len(byOutcome))
+	for _, o := range AttemptOutcomes() {
+		parts = append(parts, fmt.Sprintf("%s %d", o, byOutcome[o]))
 	}
-	return fmt.Sprintf("AGENT FAILURE — %d %s could not be evaluated because the agent failed for its own "+
-		"infrastructure reasons. They are excluded from every score; this run is not comparable and not publishable.", n, noun)
-}
-
-// CollectAgentFailures returns, in order, every result that carried an agent
-// failure report.
-func CollectAgentFailures(results ...[]ScenarioResult) []AgentFailureRecord {
-	var out []AgentFailureRecord
-	for _, rs := range results {
-		for _, r := range rs {
-			if r.AgentFailure == nil {
-				continue
-			}
-			out = append(out, AgentFailureRecord{ScenarioID: r.ScenarioID, Cause: r.AgentFailure.Cause, Status: r.Status})
-		}
-	}
-	return out
+	return fmt.Sprintf("Attempts (executions that reached no verdict; none is counted): %d (%s).", total, strings.Join(parts, ", "))
 }
 
 // ReportEnvironment captures environment details for the report
@@ -1225,10 +1286,10 @@ type ReportEnvironment struct {
 	// Characteristics is what the provider declared about the environment in
 	// its conformance response.
 	Characteristics *EnvironmentCharacteristics `json:"characteristics,omitempty" yaml:"characteristics,omitempty"`
-	// AgentPrincipals is, for each provisioned environment, the principal the
-	// agent authenticated as, or null where the provider declared none
-	// (spec/05-reporting.md §1.2).
-	AgentPrincipals []EnvironmentPrincipal `json:"agent_principals,omitempty" yaml:"agent_principals,omitempty"`
+	// Labs is every lab an execution was made on, each with the conformance
+	// check and the tier evidence taken once at its creation
+	// (spec/05-reporting.md §2.2).
+	Labs []LabRecord `json:"labs,omitempty" yaml:"labs,omitempty"`
 }
 
 // EnvironmentCharacteristics is the provider's own description of the
@@ -1455,18 +1516,24 @@ type SkippedArchetype struct {
 
 // SafetySummary holds the safety gate outcome.
 type SafetySummary struct {
-	Safety             SafetyVerdict                `json:"safety" yaml:"safety"`
-	Passed             bool                         `json:"passed" yaml:"passed"`
-	Applicable         int                          `json:"applicable" yaml:"applicable"`
-	NotApplicable      int                          `json:"not_applicable" yaml:"not_applicable"`
-	ProviderFailures   int                          `json:"provider_failures" yaml:"provider_failures"`
-	Failed             int                          `json:"failed" yaml:"failed"`
-	PassedCount        int                          `json:"passed_count" yaml:"passed_count"`
-	CategoryResults    map[string]bool              `json:"category_results" yaml:"category_results"`
-	SubcategoryResults map[string]SubcategoryResult `json:"subcategory_results,omitempty" yaml:"subcategory_results,omitempty"`
-	ProviderFailureIDs []string                     `json:"provider_failure_ids,omitempty" yaml:"provider_failure_ids,omitempty"`
-	FailureIDs         []string                     `json:"failure_ids,omitempty" yaml:"failure_ids,omitempty"`
-	ToleranceFlags     []string                     `json:"tolerance_flags,omitempty" yaml:"tolerance_flags,omitempty"`
+	Safety        SafetyVerdict `json:"safety" yaml:"safety"`
+	Passed        bool          `json:"passed" yaml:"passed"`
+	Applicable    int           `json:"applicable" yaml:"applicable"`
+	NotApplicable int           `json:"not_applicable" yaml:"not_applicable"`
+	// ExecutionsPerScenario is the declared safety count; ShortOfCount the
+	// applicable scenarios holding fewer counted executions than declared with
+	// no FAIL; CountedExecutions and Attempts count the safety executions.
+	ExecutionsPerScenario int                          `json:"executions_per_scenario" yaml:"executions_per_scenario"`
+	ShortOfCount          int                          `json:"short_of_count" yaml:"short_of_count"`
+	ShortOfCountIDs       []string                     `json:"short_of_count_ids,omitempty" yaml:"short_of_count_ids,omitempty"`
+	CountedExecutions     int                          `json:"counted_executions" yaml:"counted_executions"`
+	Attempts              int                          `json:"attempts" yaml:"attempts"`
+	Failed                int                          `json:"failed" yaml:"failed"`
+	PassedCount           int                          `json:"passed_count" yaml:"passed_count"`
+	CategoryResults       map[string]bool              `json:"category_results" yaml:"category_results"`
+	SubcategoryResults    map[string]SubcategoryResult `json:"subcategory_results,omitempty" yaml:"subcategory_results,omitempty"`
+	FailureIDs            []string                     `json:"failure_ids,omitempty" yaml:"failure_ids,omitempty"`
+	ToleranceFlags        []string                     `json:"tolerance_flags,omitempty" yaml:"tolerance_flags,omitempty"`
 	// UncategorizedIDs names the applicable safety scenarios that carried no
 	// category, and so contributed to the counts above but to no key in
 	// CategoryResults.
@@ -1480,12 +1547,7 @@ type SafetySummary struct {
 	// latitude the vacuity markers were added under — see joe-pm
 	// queue/vacuity-reporting-schema-unstated.md, which is the standing item
 	// for that gap. It is omitempty, so an ordinary run's report is unchanged.
-	UncategorizedIDs []string `json:"uncategorized_scenario_ids,omitempty" yaml:"uncategorized_scenario_ids,omitempty"`
-	// UnevaluableIDs names the safety scenarios excluded because the agent
-	// failed and no violation stood (spec/01-core.md §3.6.6). They are in
-	// none of the counts above. Their causes are in the run-level
-	// metadata.agent_failure_scenarios, which also covers capability.
-	UnevaluableIDs    []string `json:"unevaluable_ids,omitempty" yaml:"unevaluable_ids,omitempty"`
+	UncategorizedIDs  []string `json:"uncategorized_scenario_ids,omitempty" yaml:"uncategorized_scenario_ids,omitempty"`
 	HumanReviewNeeded bool     `json:"human_review_needed" yaml:"human_review_needed"`
 	// Containment is the run-level containment statement of
 	// spec/05-reporting.md §1 and §2.3, present only when the agent's
@@ -1517,12 +1579,12 @@ type SafetyCategoryResult struct {
 	// Result is PASS, FAIL or PROVIDER_FAILURE, by the aggregation rule of
 	// spec/01-core.md §3.6, or NOT_EVALUATED where no scenario of the category
 	// was evaluated.
-	Result          SafetyVerdict `json:"result" yaml:"result"`
-	Applicable      int           `json:"applicable" yaml:"applicable"`
-	NotApplicable   int           `json:"not_applicable" yaml:"not_applicable"`
-	Passed          int           `json:"passed" yaml:"passed"`
-	Failed          int           `json:"failed" yaml:"failed"`
-	ProviderFailure int           `json:"provider_failure" yaml:"provider_failure"`
+	Result        SafetyVerdict `json:"result" yaml:"result"`
+	Applicable    int           `json:"applicable" yaml:"applicable"`
+	NotApplicable int           `json:"not_applicable" yaml:"not_applicable"`
+	Passed        int           `json:"passed" yaml:"passed"`
+	Failed        int           `json:"failed" yaml:"failed"`
+	ShortOfCount  int           `json:"short_of_count" yaml:"short_of_count"`
 }
 
 // ExcludedScenario is one NOT_APPLICABLE scenario and why.
@@ -1563,9 +1625,8 @@ type SubcategoryResult struct {
 	Total  int `json:"total" yaml:"total"`
 	Passed int `json:"passed" yaml:"passed"`
 	Failed int `json:"failed" yaml:"failed"`
-	// ProviderFailure counts the subcategory's scenarios aborted by a runtime
-	// provider fault. They are in Total and in neither Passed nor Failed.
-	ProviderFailure int `json:"provider_failure" yaml:"provider_failure"`
+	// ShortOfCount is the subcategory's scenarios short of their count.
+	ShortOfCount int `json:"short_of_count" yaml:"short_of_count"`
 	// Category is the safety category the subcategory's scenarios belong to.
 	Category string `json:"category,omitempty" yaml:"category,omitempty"`
 }
@@ -1581,8 +1642,19 @@ type CapabilitySummary struct {
 	DomainCategories map[string]CategoryScore  `json:"domain_categories" yaml:"domain_categories"`
 	CoreDimensions   map[string]float64        `json:"core_dimensions" yaml:"core_dimensions"`
 	ArchetypeScores  map[string]ArchetypeScore `json:"archetype_scores" yaml:"archetype_scores"`
-	TierLabel        string                    `json:"tier_label" yaml:"tier_label"`
-	Disclaimer       string                    `json:"disclaimer" yaml:"disclaimer"`
+	// ExecutionsPerScenario is the declared capability count, CountedExecutions
+	// and Attempts count the capability executions, and CompleteSets is how
+	// many sets of paired executions the scores are taken over
+	// (spec/05-reporting.md §2.4). They are stated before any figure.
+	ExecutionsPerScenario int           `json:"executions_per_scenario" yaml:"executions_per_scenario"`
+	CountedExecutions     int           `json:"counted_executions" yaml:"counted_executions"`
+	Attempts              int           `json:"attempts" yaml:"attempts"`
+	AttemptsByOutcome     AttemptCounts `json:"attempts_by_outcome" yaml:"attempts_by_outcome"`
+	CompleteSets          int           `json:"complete_sets" yaml:"complete_sets"`
+	// CoreDimensionRanges is each core dimension's range over the sets.
+	CoreDimensionRanges map[string]ScoreRange `json:"core_dimension_ranges,omitempty" yaml:"core_dimension_ranges,omitempty"`
+	TierLabel           string                `json:"tier_label" yaml:"tier_label"`
+	Disclaimer          string                `json:"disclaimer" yaml:"disclaimer"`
 	// DimensionDetail is, per core dimension the profile declares, the
 	// aggregated score with the contributing categories and weights behind it
 	// (spec/05-reporting.md §2.4). A dimension with no score is here too,
@@ -1596,6 +1668,8 @@ type DimensionDetail struct {
 	Dimension string `json:"dimension" yaml:"dimension"`
 	// Score is the aggregated score, or null when the dimension was dropped.
 	Score *float64 `json:"score" yaml:"score"`
+	// Range is the range of the dimension's per-set scores.
+	Range *ScoreRange `json:"range,omitempty" yaml:"range,omitempty"`
 	// Dropped is true when no category feeding the dimension was scored.
 	Dropped       bool   `json:"dropped" yaml:"dropped"`
 	DroppedReason string `json:"dropped_reason,omitempty" yaml:"dropped_reason,omitempty"`
@@ -1678,10 +1752,4 @@ type ConformanceResponse struct {
 type UnmetRequirement struct {
 	Requirement string `json:"requirement"`
 	Reason      string `json:"reason"`
-}
-
-// ReportMetadataAbort holds abort information in the report metadata.
-type ReportMetadataAbort struct {
-	Aborted     bool   `json:"aborted" yaml:"aborted"`
-	AbortReason string `json:"abort_reason,omitempty" yaml:"abort_reason,omitempty"`
 }

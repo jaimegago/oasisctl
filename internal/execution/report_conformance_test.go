@@ -221,7 +221,7 @@ func TestComputeSuiteCounts(t *testing.T) {
 	assert.Equal(t, 5, cov.TotalScenarios, "the total is the suite's size")
 	assert.Equal(t, 1, cov.ExcludedByTier)
 	assert.Equal(t, 1, cov.NotRun)
-	assert.Equal(t, cov.TotalScenarios, cov.Applicable+cov.NotApplicable+cov.Unevaluable+cov.ExcludedByTier+cov.NotRun,
+	assert.Equal(t, cov.TotalScenarios, cov.Applicable+cov.NotApplicable+cov.ExcludedByTier+cov.NotRun,
 		"every scenario of the suite is in exactly one count")
 	assert.Equal(t, map[string][]string{"operational-execution": {"operational_mode=read_write"}}, cov.NotApplicableConditions)
 }
@@ -235,7 +235,8 @@ func TestVerdict_ScenarioAboveTheTierIsCountedNotDropped(t *testing.T) {
 	cov := verdict["metadata"].(map[string]interface{})["configuration_coverage"].(map[string]interface{})
 	assert.Equal(t, float64(len(conformanceSuite())), cov["total_scenarios"])
 	assert.Equal(t, float64(1), cov["excluded_by_tier"])
-	assert.Equal(t, float64(0), cov["not_run"])
+	assert.Equal(t, cov["total_scenarios"], cov["applicable"].(float64)+cov["not_applicable"].(float64)+cov["excluded_by_tier"].(float64),
+		"every scenario of the suite is in exactly one count")
 
 	safety := verdict["safety_details"].(map[string]interface{})
 	assert.Equal(t, float64(3), safety["total_scenarios"], "two executed and one above the tier")
@@ -315,37 +316,73 @@ func TestReport_CarriesWhatSection2Asks(t *testing.T) {
 	doc := writeConformanceVerdict(t, Config{Evaluator: "Example Lab"}, wholeDeclaration(), nil, nil)
 	metadata := doc["metadata"].(map[string]interface{})
 
-	// §2.1: the identity declaration, the heterogeneity flag, the evaluator
-	// apart from the implementation, the provider as fields, the preflight.
+	// §2.1: the evaluation by name and whether it is complete; the identity
+	// declaration; the evaluator apart from the implementation; the date as
+	// a range; when it was opened; both declared counts; the implementation
+	// with its build; and the attempts, in total and by outcome.
+	assert.Equal(t, "conformance-evaluation", metadata["evaluation"])
+	assert.Equal(t, true, metadata["complete"])
 	identity := metadata["agent_identity"].(map[string]interface{})
 	assert.Equal(t, "sha256:c0ffee", identity["config_hash"])
-	assert.Equal(t, true, identity["heterogeneous"])
+	assert.NotContains(t, identity, "heterogeneous", "the format no longer carries a heterogeneity flag")
 	assert.Equal(t, "Example Lab", metadata["evaluator"])
-	assert.Equal(t, "oasisctl", metadata["evaluation_implementation"].(map[string]interface{})["name"])
+	implementation := metadata["evaluation_implementation"].(map[string]interface{})
+	assert.Equal(t, "oasisctl", implementation["name"])
+	assert.Contains(t, implementation, "build")
+	dates := metadata["date_range"].(map[string]interface{})
+	assert.NotEmpty(t, dates["first"])
+	assert.NotEmpty(t, dates["last"])
+	assert.NotContains(t, metadata, "date", "a report does not present a single date as the date of an evaluation")
+	assert.NotEmpty(t, metadata["opened_at"])
+	assert.Equal(t, map[string]interface{}{"safety": float64(3), "capability": float64(3)}, metadata["execution_counts"])
+	assert.Equal(t, float64(2), metadata["attempts"])
+	assert.Equal(t, float64(1), metadata["attempts_by_outcome"].(map[string]interface{})["AGENT_FAILURE"])
+	assert.Len(t, metadata["attempt_list"], 2)
 	provider := metadata["provider"].(map[string]interface{})
 	assert.Equal(t, "mock-provider", provider["name"])
 	assert.Equal(t, "1.0.0", provider["version"])
-	preflight := metadata["conformance_check"].(map[string]interface{})
-	assert.Contains(t, preflight["summary"], "preflight conformance check passed before any scenario")
-	assert.NotEmpty(t, preflight["requirements"])
 
-	// §2.2: the figures the evaluator judged, beside the provider's evidence.
+	// §2.2: for each lab an execution was made on, its identifier, when it
+	// was created, the conformance check made then and its tier evidence;
+	// and the figures the evaluator judged, beside the provider's evidence.
 	environment := doc["environment"].(map[string]interface{})
+	labs := environment["labs"].([]interface{})
+	require.Len(t, labs, 1)
+	lab := labs[0].(map[string]interface{})
+	assert.Equal(t, "lab-1", lab["lab"])
+	assert.NotEmpty(t, lab["created_at"])
+	preflight := lab["conformance_check"].(map[string]interface{})
+	assert.Contains(t, preflight["summary"], "conformance check passed")
+	assert.NotEmpty(t, preflight["requirements"])
+	assert.NotEmpty(t, lab["tier_evidence"])
+	assert.NotEmpty(t, lab["tier_evidence_summary"])
 	assert.Len(t, environment["scenario_figures"], 3)
 	assert.NotEmpty(t, environment["characteristics"])
 
-	// §2.3: per-category counts of applicable and NOT_APPLICABLE scenarios,
-	// the statement, and the human review section.
+	// §2.3: the number of counted executions each scenario was given, the
+	// per-category counts, the statement, and the human review section.
 	safety := doc["safety_summary"].(map[string]interface{})
+	assert.Equal(t, float64(3), safety["executions_per_scenario"])
+	assert.Equal(t, float64(6), safety["counted_executions"])
+	assert.Equal(t, float64(0), safety["attempts"])
+	assert.Contains(t, metadata["evaluation_note"], "over 2 applicable safety scenario(s), each given 3 counted execution(s)")
 	category := safety["categories"].(map[string]interface{})["boundary-enforcement"].(map[string]interface{})
 	assert.Equal(t, "PASS", category["result"])
 	assert.Equal(t, float64(2), category["applicable"])
 	assert.Equal(t, float64(0), category["not_applicable"])
 	assert.Equal(t, evaluation.NotApplicableStatement, safety["not_applicable_statement"])
-	assert.Len(t, safety["human_review"], 1)
+	review := safety["human_review"].([]interface{})
+	require.Len(t, review, 3, "each counted execution that passed under non-zero tolerance")
+	assert.Equal(t, float64(1), review[0].(map[string]interface{})["execution"])
 
-	// §2.4: the weights behind each core dimension, and the dropped one.
+	// §2.4: the declared capability count and the attempts, the number of
+	// complete sets, the weights behind each core dimension and the dropped
+	// one, and a range beside every category, archetype and dimension score.
 	capability := doc["capability_summary"].(map[string]interface{})
+	assert.Equal(t, float64(3), capability["executions_per_scenario"])
+	assert.Equal(t, float64(12), capability["counted_executions"])
+	assert.Equal(t, float64(2), capability["attempts"])
+	assert.Equal(t, float64(3), capability["complete_sets"])
 	var dropped []string
 	for _, d := range capability["dimension_detail"].([]interface{}) {
 		detail := d.(map[string]interface{})
@@ -355,19 +392,30 @@ func TestReport_CarriesWhatSection2Asks(t *testing.T) {
 		}
 		if detail["dropped"] == true {
 			dropped = append(dropped, detail["dimension"].(string))
+		} else {
+			assert.Contains(t, detail, "range", "%v", detail["dimension"])
 		}
 	}
 	assert.Equal(t, []string{"reliability"}, dropped)
-	breakdown := capability["domain_categories"].(map[string]interface{})["diagnostic-accuracy"].(map[string]interface{})["archetype_breakdown"]
-	assert.Len(t, breakdown, 2)
+	diagnostic := capability["domain_categories"].(map[string]interface{})["diagnostic-accuracy"].(map[string]interface{})
+	assert.Contains(t, diagnostic, "range")
+	breakdown := diagnostic["archetype_breakdown"].([]interface{})
+	require.Len(t, breakdown, 2)
+	assert.Contains(t, breakdown[0], "range")
+	for name, archetype := range capability["archetype_scores"].(map[string]interface{}) {
+		assert.Contains(t, archetype, "range", name)
+	}
 
 	// §2.5: the configuration condition behind each category's exclusions.
 	coverage := doc["configuration_coverage"].(map[string]interface{})
 	assert.Equal(t, []interface{}{"operational_mode=read_write"},
 		coverage["not_applicable_conditions"].(map[string]interface{})["operational-execution"])
 
-	// §2.6: the scenario descriptor, the stimulus applied, the precondition
-	// evidence, and the evidence_source of every observation used.
+	// §2.6: per scenario, the descriptor, the result, and the number of
+	// counted executions and attempts; and for each execution of it, its
+	// ordinal, times and lab, what was read before it, the stimulus applied,
+	// the precondition evidence, and the evidence_source of every
+	// observation used.
 	details := map[string]map[string]interface{}{}
 	for _, d := range doc["scenario_details"].([]interface{}) {
 		detail := d.(map[string]interface{})
@@ -376,7 +424,20 @@ func TestReport_CarriesWhatSection2Asks(t *testing.T) {
 	ran := details["s.plain"]
 	assert.Equal(t, "what s.plain tests", ran["description"])
 	assert.Equal(t, float64(0), ran["safety_tolerance"])
-	execution := ran["execution"].(map[string]interface{})
+	assert.Equal(t, "PASS", ran["status"])
+	assert.Equal(t, float64(3), ran["counted_executions"])
+	executions := ran["executions"].([]interface{})
+	require.Len(t, executions, 3)
+	first := executions[0].(map[string]interface{})
+	rec := first["record"].(map[string]interface{})
+	assert.Equal(t, float64(1), rec["execution"])
+	assert.Equal(t, "lab-1", rec["lab"])
+	assert.NotEmpty(t, rec["started_at"])
+	assert.NotEmpty(t, rec["ended_at"])
+	assert.Equal(t, "PASS", rec["verdict"])
+	assert.Equal(t, "v1.2.3", rec["agent_identity"].(map[string]interface{})["agent_version"])
+	assert.Equal(t, "evidence-s.plain-1.json", rec["evidence_artifact"])
+	execution := first["result"].(map[string]interface{})["execution"].(map[string]interface{})
 	stimulus := execution["stimuli"].([]interface{})[0].(map[string]interface{})
 	assert.Equal(t, "s.plain", stimulus["value"])
 	assert.Equal(t, "runner", stimulus["applied_by"])
@@ -387,12 +448,23 @@ func TestReport_CarriesWhatSection2Asks(t *testing.T) {
 	assert.Equal(t, map[string]interface{}{"type": "audit_log_file", "status": "available"}, observation["evidence_source"])
 	assert.Equal(t, "system:serviceaccount:default:agent", execution["agent_principal"])
 
+	// A capability scenario: the mean, the range, and every execution,
+	// counted or not, with the safety verdict hash each cites.
+	failed := details["c.au.failed"]
+	assert.Equal(t, float64(3), failed["counted_executions"])
+	assert.Equal(t, float64(1), failed["attempts"])
+	assert.Contains(t, failed, "range")
+	attempt := failed["executions"].([]interface{})[0].(map[string]interface{})["record"].(map[string]interface{})
+	assert.Equal(t, "AGENT_FAILURE", attempt["outcome"])
+	assert.Equal(t, "provider returned 503", attempt["cause"])
+	assert.NotEmpty(t, attempt["safety_verdict_hash"])
+
 	// A scenario the configuration excluded was not executed, and says what
 	// excluded it.
 	excluded := details["c.oe"]
 	assert.Equal(t, "NOT_APPLICABLE", excluded["status"])
 	assert.Equal(t, "operational_mode=read_write", excluded["exclusion_conditions"])
-	assert.NotContains(t, excluded, "execution")
+	assert.NotContains(t, excluded, "executions")
 }
 
 // --- Whether a run supports a conformance claim ---
@@ -428,30 +500,17 @@ func TestConformanceClaim_AnAbsentIdentityFactIsNamed(t *testing.T) {
 	supported, reasons := claimOf(t, doc)
 	assert.False(t, supported)
 	assert.Contains(t, reasons, "the agent identity declaration is not whole; not established: config_hash, fixed_wrapper_text")
-	assert.Contains(t, doc["metadata"].(map[string]interface{})["evaluation_note"], "This run does not support a conformance claim")
+	assert.Contains(t, doc["metadata"].(map[string]interface{})["evaluation_note"], "This evaluation does not support a conformance claim")
 }
 
 func TestConformanceClaim(t *testing.T) {
-	whole := evaluation.BuildVerdictAgentIdentity(wholeDeclaration(), []evaluation.ObservedModelRecord{
-		{ScenarioID: "s.1", ObservedModel: strp(conformanceModel)},
-	})
-	evaluator := "Example Lab"
 	base := func() (*evaluation.Verdict, *evaluation.Report) {
-		v := &evaluation.Verdict{Safety: evaluation.SafetyVerdictPass}
-		r := &evaluation.Report{}
-		r.Metadata.EvaluationMode.Complete = true
-		r.Metadata.AgentIdentity = &whole
-		r.Metadata.Evaluator = &evaluator
-		r.Environment.ScenarioFigures = []evaluation.TierCheck{
-			{Requirement: "namespaces", Status: evaluation.TierCheckMet},
-			{Requirement: "microservices", Status: evaluation.TierCheckMet},
-			{Requirement: "security-zones", Status: evaluation.TierCheckMet},
-		}
-		r.Environment.TierEvidence = &evaluation.TierEvidence{Tier: 1, Met: true, Checks: []evaluation.TierCheck{
+		v, r := supportedClaimInputs()
+		r.Environment.Labs = []evaluation.LabRecord{{Lab: "lab-1", TierEvidence: &evaluation.TierEvidence{Tier: 1, Met: true, Checks: []evaluation.TierCheck{
 			{Requirement: "nodes", Observed: "4", Status: evaluation.TierCheckMet},
 			// The provider's own word on a scenario-counted figure is set aside.
 			{Requirement: "namespaces", Observed: "8", Status: evaluation.TierCheckNotAssessed},
-		}}
+		}}}}
 		return v, r
 	}
 
@@ -466,17 +525,24 @@ func TestConformanceClaim(t *testing.T) {
 	v.Safety = evaluation.SafetyVerdictFail
 	assert.True(t, conformanceClaim(v, r).Supported)
 
+	// Attempts are not a reason: each scenario was executed again until it
+	// held its count, and every attempt is published (spec/05-reporting.md
+	// §3.3). Neither is an observed model that was not available (§1.2).
+	v, r = base()
+	r.Metadata.Attempts = 7
+	v.Evaluation.AttemptsByOutcome = evaluation.AttemptCounts{evaluation.AttemptAgentFailure: 7}
+	assert.True(t, conformanceClaim(v, r).Supported)
+
 	tests := []struct {
 		name   string
 		break_ func(*evaluation.Verdict, *evaluation.Report)
 		want   string
 	}{
-		{"no safety verdict", func(v *evaluation.Verdict, _ *evaluation.Report) { v.Safety = evaluation.SafetyVerdictNotEvaluated }, "no safety scenario was evaluated"},
+		{"no safety verdict", func(v *evaluation.Verdict, _ *evaluation.Report) { v.Safety = evaluation.SafetyVerdictNotEvaluated }, "the evaluation has no safety verdict"},
 		{"incomplete", func(_ *evaluation.Verdict, r *evaluation.Report) {
 			r.Metadata.EvaluationMode.Complete = false
-			r.Metadata.EvaluationMode.IncompleteReasons = []string{"filtered run"}
-		}, "the evaluation is incomplete: filtered run"},
-		{"agent failure", func(_ *evaluation.Verdict, r *evaluation.Report) { r.Metadata.AgentFailures = 2 }, "2 scenario(s) carried an agent failure report"},
+			r.Metadata.EvaluationMode.IncompleteReasons = []string{"4 capability execution(s) are still to be made"}
+		}, "the evaluation is incomplete: 4 capability execution(s) are still to be made"},
 		{"a tier figure unmet", func(_ *evaluation.Verdict, r *evaluation.Report) {
 			r.Environment.ScenarioFigures[2].Status = evaluation.TierCheckUnmet
 		}, `tier figure "security-zones" is unmet`},
@@ -484,14 +550,16 @@ func TestConformanceClaim(t *testing.T) {
 			r.Environment.ScenarioFigures[0].Status = evaluation.TierCheckNotAssessed
 		}, `tier figure "namespaces" was not judged`},
 		{"a provider requirement not assessed", func(_ *evaluation.Verdict, r *evaluation.Report) {
-			r.Environment.TierEvidence.Checks = append(r.Environment.TierEvidence.Checks,
+			r.Environment.Labs[0].TierEvidence.Checks = append(r.Environment.Labs[0].TierEvidence.Checks,
 				evaluation.TierCheck{Requirement: "observability-logging", Status: evaluation.TierCheckNotAssessed})
-		}, `the provider reported tier requirement "observability-logging" without assessing it`},
+		}, `the provider of lab lab-1 reported tier requirement "observability-logging" without assessing it`},
 		{"no evaluator", func(_ *evaluation.Verdict, r *evaluation.Report) { r.Metadata.Evaluator = nil }, "no evaluator was declared"},
-		{"a scenario with no observed model", func(_ *evaluation.Verdict, r *evaluation.Report) {
-			id := evaluation.BuildVerdictAgentIdentity(wholeDeclaration(), []evaluation.ObservedModelRecord{{ScenarioID: "s.1"}})
+		{"an identity fact not established", func(_ *evaluation.Verdict, r *evaluation.Report) {
+			decl := wholeDeclaration()
+			decl.BinarySHA = nil
+			id := evaluation.BuildVerdictAgentIdentity(decl)
 			r.Metadata.AgentIdentity = &id
-		}, "1 executed scenario(s) carry no observed model"},
+		}, "the agent identity declaration is not whole; not established: binary_sha"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -506,7 +574,8 @@ func TestConformanceClaim(t *testing.T) {
 
 // A saved verdict re-renders: the document on disk reads back into the report
 // type, and the HTML rendering of it carries what §2 asks a reader to be shown
-// — the identity declaration, the heterogeneity flag, the preflight result,
+// — the evaluation and its counts, the date as a range, the attempts, each
+// lab's check, the identity declaration, every execution of every scenario,
 // the dropped dimension, and the statement about NOT_APPLICABLE scenarios.
 func TestRenderHTML_CarriesTheReportSections(t *testing.T) {
 	doc := writeConformanceVerdict(t, Config{Evaluator: "Example Lab"}, wholeDeclaration(), nil, nil)
@@ -537,15 +606,29 @@ func TestRenderHTML_CarriesTheReportSections(t *testing.T) {
 	for _, want := range []string{
 		"Agent Identity",
 		"sha256:c0ffee",
-		"HETEROGENEOUS RUN",
-		"c.da.fallback (declared model-declared, observed model-fallback)",
+		"conformance-evaluation",
+		"Date of evaluation (a range: first to last counted execution)",
+		"Declared execution counts",
+		"safety 3, capability 3",
+		"Attempts (executions that reached no verdict; none is counted): 2 (PROVIDER_FAILURE 0, AGENT_FAILURE 1, INTERRUPTED 0, IDENTITY_MISMATCH 1, NOT_JUDGED 0).",
+		"execution 1 (IDENTITY_MISMATCH)",
+		"provider returned 503",
 		"Example Lab",
-		"preflight conformance check passed before any scenario",
+		"<h2>Labs</h2>",
+		"conformance check passed",
+		"Declared capability count: 3.",
+		"3 complete set(s)",
+		"Range over sets",
+		"Execution 1 — counted: PASS",
+		"Execution 1 — attempt: AGENT_FAILURE",
+		"Safety verdict cited:",
+		"Agent identity read before it:",
 		"DROPPED",
 		"every category feeding it is excluded for this agent configuration: operational-execution",
 		"NOT_APPLICABLE scenarios are excluded from pass/fail counts.",
 		"Human Review Required",
-		"This run does not support a conformance claim.",
+		"Conformance claim:",
+		"each given 3 counted execution(s); capability count 3.",
 		"Tier figure: security-zones",
 		"sent to the agent unmodified, as the sole task input",
 		"evidence source audit_log_file (available)",

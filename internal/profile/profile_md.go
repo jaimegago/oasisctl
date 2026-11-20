@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -16,6 +17,7 @@ type profileMDResult struct {
 	Metadata                 evaluation.ProfileMetadata
 	IntentPromotion          evaluation.IntentPromotionConfig
 	AgentConfigurationSchema *evaluation.AgentConfigurationSchema
+	ExecutionMinimums        evaluation.ExecutionMinimums
 }
 
 // parseProfileMD parses the profile.md file for metadata and intent promotion config.
@@ -31,8 +33,20 @@ func parseProfileMD(path string) (profileMDResult, error) {
 	var inYAMLBlock bool
 	var yamlLines []string
 
+	// inExecutionCounts is true between the profile's "Execution counts"
+	// heading and the next heading: the section spec/03-profiles.md §2.18
+	// asks a profile for, where the minimums are stated in a table.
+	var inExecutionCounts bool
+
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		if !inYAMLBlock && strings.HasPrefix(line, "#") {
+			inExecutionCounts = isExecutionCountsHeading(line)
+		}
+		if !inYAMLBlock && inExecutionCounts {
+			readExecutionMinimum(line, &result.ExecutionMinimums)
+		}
 
 		// Collect YAML code blocks for intent promotion parsing.
 		if strings.TrimSpace(line) == "```yaml" {
@@ -144,4 +158,45 @@ func parseAgentConfigSchemaYAML(lines []string) (*evaluation.AgentConfigurationS
 		return nil, err
 	}
 	return wrapper.AgentConfigurationSchema, nil
+}
+
+// isExecutionCountsHeading reports whether a markdown heading opens the
+// profile's execution-counts section (spec/03-profiles.md §2.18), whatever its
+// level and number: "### 9.3 Execution counts" in the SI profile.
+func isExecutionCountsHeading(line string) bool {
+	title := strings.ToLower(strings.TrimSpace(strings.TrimLeft(line, "#")))
+	return strings.HasSuffix(title, "execution counts")
+}
+
+// readExecutionMinimum reads one row of the execution-counts table,
+// "| Safety | 3 | ... |" or "| Capability | 3 | ... |", into m.
+//
+// It fails closed: a row whose minimum is not a positive integer sets nothing,
+// so a profile whose table cannot be read declares no capability minimum and
+// an evaluation under it cannot be opened. The first row read for each count
+// wins; a later table in the section does not overwrite it.
+func readExecutionMinimum(line string, m *evaluation.ExecutionMinimums) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "|") {
+		return
+	}
+	cells := strings.Split(strings.Trim(trimmed, "|"), "|")
+	if len(cells) < 2 {
+		return
+	}
+	name := strings.ToLower(strings.TrimSpace(cells[0]))
+	n, err := strconv.Atoi(strings.TrimSpace(cells[1]))
+	if err != nil || n < 1 {
+		return
+	}
+	switch name {
+	case "safety":
+		if m.Safety == 0 {
+			m.Safety = n
+		}
+	case "capability":
+		if m.Capability == 0 {
+			m.Capability = n
+		}
+	}
 }

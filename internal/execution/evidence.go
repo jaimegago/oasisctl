@@ -18,23 +18,22 @@ import (
 // are defined over their contents — the echo-exclusion primitive cannot run
 // without them — and a truncated artifact cannot reproduce the verdict.
 type EvidenceArtifact struct {
-	ScenarioID     string                       `json:"scenario_id"`
+	ScenarioID string `json:"scenario_id"`
+	// Execution is the execution's ordinal among the executions of the
+	// scenario, attempts included. It is in the artifact's name
+	// (spec/05-reporting.md §1.2).
+	Execution      int                          `json:"execution"`
 	FinalAnswer    string                       `json:"final_answer"`
 	ReasoningTrace string                       `json:"reasoning_trace"`
 	Actions        []EvidenceAction             `json:"actions"`
 	Observations   []evaluation.ObserveResponse `json:"observations"`
-	// ObservedModel is the model that actually served this execution
-	// (spec/05-reporting.md §1.2). It is a pointer, and serialized without
-	// omitempty, so an unavailable value is recorded as an explicit JSON null
-	// rather than an empty string that would read as a real observation.
-	//
-	// It carries whatever model the agent reported on the wire, via
-	// evaluation.AgentResponse.Model. Reporting one is an adapter CAPABILITY,
-	// not a requirement of the contract: an agent whose adapter sends no model
-	// field — or sends it empty — still evaluates normally and its artifact
-	// records null here. The joe adapter reports it (joe D-0153); the value
-	// attests the model resolved at task preparation, not per LLM call.
-	ObservedModel *string `json:"observed_model"`
+	// ObservedModel is the model, or models, the agent's model provider stated
+	// served this execution (spec/05-reporting.md §1.2), as the adapter passed
+	// the statement on in evaluation.AgentResponse.ProviderStatedModels. It
+	// is an explicit JSON null where the statement was not supplied, a string
+	// for one model and a list for more. It is never the model the agent
+	// asked for, and never an empty string that would read as an observation.
+	ObservedModel evaluation.ObservedModel `json:"observed_model"`
 
 	// VacuousAssertions lists the assertions whose PASS rested on there being
 	// nothing to check rather than on evidence that the asserted behaviour
@@ -261,17 +260,18 @@ type EvidenceAction struct {
 // never omitted to signal that; the empty array says it.
 func BuildEvidenceArtifact(
 	scenarioID string,
+	execution int,
 	resp *evaluation.AgentResponse,
 	observations []evaluation.ObserveResponse,
-	observedModel *string,
 ) EvidenceArtifact {
 	artifact := EvidenceArtifact{
-		ScenarioID:    scenarioID,
-		Actions:       []EvidenceAction{},
-		Observations:  []evaluation.ObserveResponse{},
-		ObservedModel: observedModel,
+		ScenarioID:   scenarioID,
+		Execution:    execution,
+		Actions:      []EvidenceAction{},
+		Observations: []evaluation.ObserveResponse{},
 	}
 	if resp != nil {
+		artifact.ObservedModel = evaluation.NormalizeObservedModels(resp.ProviderStatedModels)
 		artifact.FinalAnswer = resp.FinalAnswer
 		artifact.ReasoningTrace = resp.Reasoning
 		// Read off the response rather than passed in beside observedModel: it
@@ -365,24 +365,27 @@ func evidenceAuditTrail(trail *evaluation.AuditTrailEvidence) *EvidenceAuditTrai
 	return out
 }
 
-// EvidenceFileName returns the artifact filename for a scenario,
-// evidence-<scenario-id>.json per spec/05-reporting.md §1.2. Path separators in
-// an identifier are replaced so a malformed id cannot escape the evidence
-// directory; conformant dotted identifiers are unaffected.
-func EvidenceFileName(scenarioID string) string {
+// EvidenceFileName returns the artifact filename for one execution of a
+// scenario, evidence-<scenario-id>-<execution>.json per spec/05-reporting.md
+// §1.2, where <execution> is the execution's ordinal among the scenario's
+// executions. Path separators in an identifier are replaced so a malformed id
+// cannot escape the evidence directory; conformant dotted identifiers are
+// unaffected.
+func EvidenceFileName(scenarioID string, execution int) string {
 	safe := strings.Map(func(r rune) rune {
 		if r == '/' || r == '\\' || r == filepath.Separator {
 			return '_'
 		}
 		return r
 	}, scenarioID)
-	return "evidence-" + safe + ".json"
+	return fmt.Sprintf("evidence-%s-%d.json", safe, execution)
 }
 
-// ResolveEvidenceDir determines where evidence artifacts are written.
-// An explicit evidence-dir wins. Otherwise artifacts land beside the report: the
-// directory of the output path, or the working directory when the report goes to
-// stdout.
+// ResolveEvidenceDir determines where evidence artifacts are written for
+// executions made outside any evaluation. An explicit evidence-dir wins.
+// Otherwise artifacts land beside the report: the directory of the output
+// path, or the working directory when the report goes to stdout. An
+// evaluation's artifacts are kept with its record instead.
 func ResolveEvidenceDir(evidenceDir, outputPath string) string {
 	if evidenceDir != "" {
 		return evidenceDir
@@ -394,12 +397,12 @@ func ResolveEvidenceDir(evidenceDir, outputPath string) string {
 }
 
 // WriteEvidenceArtifact writes the artifact into dir and returns its path
-// relative to the run output directory, which is what the scenario record
+// relative to the output directory, which is what the execution record
 // references per spec/05-reporting.md §1.2.
 //
-// A write failure is returned to the caller and surfaces as a scenario-level
-// error. An evaluation whose evidence was not persisted cannot be replayed, so
-// silently skipping the write would produce a verdict that claims a
+// A write failure is returned to the caller and makes the execution an
+// attempt. An execution whose evidence was not persisted cannot be replayed,
+// so silently skipping the write would produce a verdict that claims a
 // reproducibility property it does not have.
 func WriteEvidenceArtifact(artifact EvidenceArtifact, dir, outputPath string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -412,7 +415,7 @@ func WriteEvidenceArtifact(artifact EvidenceArtifact, dir, outputPath string) (s
 	}
 	data = append(data, '\n')
 
-	fullPath := filepath.Join(dir, EvidenceFileName(artifact.ScenarioID))
+	fullPath := filepath.Join(dir, EvidenceFileName(artifact.ScenarioID, artifact.Execution))
 	if err := os.WriteFile(fullPath, data, 0o644); err != nil {
 		return "", fmt.Errorf("write evidence artifact %s: %w", fullPath, err)
 	}

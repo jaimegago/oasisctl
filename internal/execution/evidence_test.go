@@ -77,16 +77,15 @@ func TestEvidenceArtifact_Golden(t *testing.T) {
 	outputPath := filepath.Join(dir, "report.yaml")
 
 	artifact := BuildEvidenceArtifact(
-		"infra.capability.da.single-signal-diagnosis-001",
+		"infra.capability.da.single-signal-diagnosis-001", 1,
 		goldenResponse(),
 		twoObservations(),
-		nil,
 	)
 	relPath, err := WriteEvidenceArtifact(artifact, dir, outputPath)
 	require.NoError(t, err)
 
 	t.Run("location", func(t *testing.T) {
-		assert.Equal(t, "evidence-infra.capability.da.single-signal-diagnosis-001.json", relPath,
+		assert.Equal(t, "evidence-infra.capability.da.single-signal-diagnosis-001-1.json", relPath,
 			"the recorded reference is relative to the run output directory")
 		assert.FileExists(t, filepath.Join(dir, relPath))
 	})
@@ -144,10 +143,9 @@ func TestEvidenceArtifact_Golden(t *testing.T) {
 	t.Run("bytes are stable across rewrites", func(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			again := BuildEvidenceArtifact(
-				"infra.capability.da.single-signal-diagnosis-001",
+				"infra.capability.da.single-signal-diagnosis-001", 1,
 				goldenResponse(),
 				twoObservations(),
-				nil,
 			)
 			_, err := WriteEvidenceArtifact(again, dir, outputPath)
 			require.NoError(t, err)
@@ -161,41 +159,49 @@ func TestEvidenceArtifact_Golden(t *testing.T) {
 }
 
 // TestEvidenceArtifact_ObservedModelPopulated is the golden test's other half:
-// the same artifact built for an agent that DOES report a model. The null case
-// above proves an absent model is recorded as an explicit JSON null; this proves
-// a reported one is recorded verbatim as a JSON string, so both states of the
-// field are pinned and neither can silently become the other.
+// the same artifact built for an agent whose adapter passed on what its model
+// provider stated. The null case above proves an absent statement is recorded
+// as an explicit JSON null; this proves one model is recorded as a JSON string
+// and more than one as a list, so every state of the field is pinned and none
+// can silently become another (spec/05-reporting.md §1.2).
 func TestEvidenceArtifact_ObservedModelPopulated(t *testing.T) {
 	dir := t.TempDir()
 	outputPath := filepath.Join(dir, "report.yaml")
 
-	model := "claude-sonnet-4-20250514"
-	artifact := BuildEvidenceArtifact(
-		"infra.capability.da.single-signal-diagnosis-001",
-		goldenResponse(),
-		twoObservations(),
-		&model,
-	)
-	relPath, err := WriteEvidenceArtifact(artifact, dir, outputPath)
-	require.NoError(t, err)
+	write := func(stated ...string) (map[string]json.RawMessage, EvidenceArtifact) {
+		resp := goldenResponse()
+		resp.ProviderStatedModels = stated
+		artifact := BuildEvidenceArtifact("infra.capability.da.single-signal-diagnosis-001", 2, resp, twoObservations())
+		relPath, err := WriteEvidenceArtifact(artifact, dir, outputPath)
+		require.NoError(t, err)
+		assert.Equal(t, "evidence-infra.capability.da.single-signal-diagnosis-001-2.json", relPath,
+			"the artifact is named for the execution's ordinal")
 
-	raw, err := os.ReadFile(filepath.Join(dir, relPath))
-	require.NoError(t, err)
+		raw, err := os.ReadFile(filepath.Join(dir, relPath))
+		require.NoError(t, err)
+		var loose map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &loose))
+		var got EvidenceArtifact
+		require.NoError(t, json.Unmarshal(raw, &got))
+		return loose, got
+	}
 
-	var loose map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(raw, &loose))
+	loose, got := write("claude-sonnet-4-20250514", "", "claude-sonnet-4-20250514")
 	require.Contains(t, loose, "observed_model")
 	assert.JSONEq(t, `"claude-sonnet-4-20250514"`, string(loose["observed_model"]))
-
-	var got EvidenceArtifact
-	require.NoError(t, json.Unmarshal(raw, &got))
-	require.NotNil(t, got.ObservedModel)
-	assert.Equal(t, "claude-sonnet-4-20250514", *got.ObservedModel)
+	assert.JSONEq(t, "2", string(loose["execution"]))
+	assert.Equal(t, evaluation.ObservedModel{"claude-sonnet-4-20250514"}, got.ObservedModel)
 
 	// Nothing else about the artifact moves when the model is present.
 	assert.Equal(t, "The SMTP_PORT key is missing from the smtp-config ConfigMap.", got.FinalAnswer)
 	require.Len(t, got.Actions, 3)
 	require.Len(t, got.Observations, 2)
+
+	// Where the provider's statements name more than one model across the
+	// execution's calls, every one of them is recorded.
+	loose, got = write("model-a", "model-b")
+	assert.JSONEq(t, `["model-a","model-b"]`, string(loose["observed_model"]))
+	assert.Equal(t, evaluation.ObservedModel{"model-a", "model-b"}, got.ObservedModel)
 }
 
 // TestCollectObservations_DeterministicOrder covers the ordering hazard directly:
@@ -274,11 +280,11 @@ func TestWriteEvidenceArtifact_RelativeToOutputDir(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(outputPath), 0o755))
 	evidenceDir := filepath.Join(root, "artifacts")
 
-	artifact := BuildEvidenceArtifact("infra.capability.da.x-001", goldenResponse(), nil, nil)
+	artifact := BuildEvidenceArtifact("infra.capability.da.x-001", 1, goldenResponse(), nil)
 	relPath, err := WriteEvidenceArtifact(artifact, evidenceDir, outputPath)
 	require.NoError(t, err)
 
-	assert.Equal(t, filepath.Join("..", "artifacts", "evidence-infra.capability.da.x-001.json"), relPath)
+	assert.Equal(t, filepath.Join("..", "artifacts", "evidence-infra.capability.da.x-001-1.json"), relPath)
 	assert.FileExists(t, filepath.Join(filepath.Dir(outputPath), relPath))
 }
 
@@ -286,11 +292,11 @@ func TestWriteEvidenceArtifact_RelativeToOutputDir(t *testing.T) {
 // directory is created rather than failing the scenario.
 func TestWriteEvidenceArtifact_CreatesDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "evidence")
-	artifact := BuildEvidenceArtifact("infra.capability.da.x-001", goldenResponse(), nil, nil)
+	artifact := BuildEvidenceArtifact("infra.capability.da.x-001", 1, goldenResponse(), nil)
 
 	_, err := WriteEvidenceArtifact(artifact, dir, "")
 	require.NoError(t, err)
-	assert.FileExists(t, filepath.Join(dir, "evidence-infra.capability.da.x-001.json"))
+	assert.FileExists(t, filepath.Join(dir, "evidence-infra.capability.da.x-001-1.json"))
 }
 
 // TestWriteEvidenceArtifact_FailureIsReported confirms a write failure surfaces
@@ -302,7 +308,7 @@ func TestWriteEvidenceArtifact_FailureIsReported(t *testing.T) {
 	blocked := filepath.Join(root, "evidence")
 	require.NoError(t, os.WriteFile(blocked, []byte("not a directory"), 0o600))
 
-	artifact := BuildEvidenceArtifact("infra.capability.da.x-001", goldenResponse(), nil, nil)
+	artifact := BuildEvidenceArtifact("infra.capability.da.x-001", 1, goldenResponse(), nil)
 	_, err := WriteEvidenceArtifact(artifact, blocked, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "evidence")
@@ -311,9 +317,9 @@ func TestWriteEvidenceArtifact_FailureIsReported(t *testing.T) {
 // TestEvidenceFileName confirms the mandated name, and that a pathological
 // identifier cannot escape the evidence directory.
 func TestEvidenceFileName(t *testing.T) {
-	assert.Equal(t, "evidence-infra.capability.da.single-signal-diagnosis-001.json",
-		EvidenceFileName("infra.capability.da.single-signal-diagnosis-001"))
-	assert.Equal(t, "evidence-.._.._etc_passwd.json", EvidenceFileName("../../etc/passwd"))
+	assert.Equal(t, "evidence-infra.capability.da.single-signal-diagnosis-001-1.json",
+		EvidenceFileName("infra.capability.da.single-signal-diagnosis-001", 1))
+	assert.Equal(t, "evidence-.._.._etc_passwd-1.json", EvidenceFileName("../../etc/passwd", 1))
 }
 
 // TestEvidenceArtifact_DeclaredConclusion is the far end of the pipe. The
@@ -323,7 +329,7 @@ func TestEvidenceFileName(t *testing.T) {
 // declaration could not reproduce its own verdicts.
 func TestEvidenceArtifact_DeclaredConclusion(t *testing.T) {
 	t.Run("a declared conclusion is recorded with its discards", func(t *testing.T) {
-		artifact := BuildEvidenceArtifact("s1", &evaluation.AgentResponse{
+		artifact := BuildEvidenceArtifact("s1", 1, &evaluation.AgentResponse{
 			FinalAnswer: "user-service is OOM killed",
 			Conclusion: &evaluation.DiagnosticConclusion{
 				RootCause: "a memory leak exhausting the limit",
@@ -331,7 +337,7 @@ func TestEvidenceArtifact_DeclaredConclusion(t *testing.T) {
 					{Signal: "node-1 CPU", Rationale: "the batch job's load"},
 				},
 			},
-		}, nil, nil)
+		}, nil)
 
 		if artifact.DeclaredConclusion == nil {
 			t.Fatal("DeclaredConclusion = nil, want the declaration")
@@ -349,9 +355,9 @@ func TestEvidenceArtifact_DeclaredConclusion(t *testing.T) {
 	// scores from, and JSON is where "declared and empty" quietly becomes
 	// "declared nothing" if the encoding does not keep them apart.
 	t.Run("the three states are distinct in the serialized artifact", func(t *testing.T) {
-		declaredEmpty := BuildEvidenceArtifact("s1", &evaluation.AgentResponse{
+		declaredEmpty := BuildEvidenceArtifact("s1", 1, &evaluation.AgentResponse{
 			Conclusion: &evaluation.DiagnosticConclusion{RootCause: "an OOM kill"},
-		}, nil, nil)
+		}, nil)
 		encoded, err := json.Marshal(declaredEmpty)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -363,9 +369,9 @@ func TestEvidenceArtifact_DeclaredConclusion(t *testing.T) {
 			t.Error("declared-and-empty serialized a null conclusion; it declared one")
 		}
 
-		absent := BuildEvidenceArtifact("s1", &evaluation.AgentResponse{
+		absent := BuildEvidenceArtifact("s1", 1, &evaluation.AgentResponse{
 			FinalAnswer: "Root cause: an OOM kill.",
-		}, nil, nil)
+		}, nil)
 		encoded, err = json.Marshal(absent)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -394,10 +400,9 @@ func TestEvidenceArtifact_EmptyAnswerGatePopulated(t *testing.T) {
 	resp.EmptyAnswerGate = &gate
 
 	artifact := BuildEvidenceArtifact(
-		"infra.capability.da.single-signal-diagnosis-001",
+		"infra.capability.da.single-signal-diagnosis-001", 1,
 		resp,
 		twoObservations(),
-		nil,
 	)
 	relPath, err := WriteEvidenceArtifact(artifact, dir, outputPath)
 	require.NoError(t, err)
@@ -427,6 +432,6 @@ func TestEvidenceArtifact_EmptyAnswerGatePopulated(t *testing.T) {
 // call produced nothing still gets an artifact, and its gate field is null
 // rather than a panic or a fabricated outcome.
 func TestEvidenceArtifact_NilResponseLeavesGateNull(t *testing.T) {
-	artifact := BuildEvidenceArtifact("infra.capability.da.single-signal-diagnosis-001", nil, nil, nil)
+	artifact := BuildEvidenceArtifact("infra.capability.da.single-signal-diagnosis-001", 1, nil, nil)
 	assert.Nil(t, artifact.EmptyAnswerGate)
 }

@@ -21,8 +21,9 @@
   .banner-fail { background: #ef4444; color: #fff; }
   .banner-not-evaluated { background: #111827; color: #fde047; font-size: 1.5rem; }
   .banner-provider-failure { background: #f59e0b; color: #78350f; }
-  .banner-agent-failure { background: #7c2d12; color: #fed7aa; text-align: left; font-size: 1rem; }
-  .banner-agent-failure ul { margin: 0.5rem 0 0 1.25rem; padding: 0; font-weight: 400; font-size: 0.875rem; }
+  .banner-incomplete { background: #111827; color: #fde047; font-size: 1.25rem; }
+  .banner-attempts { background: #f3f4f6; color: #374151; text-align: left; font-size: 0.9375rem; font-weight: 600; }
+  .banner-attempts ul { margin: 0.5rem 0 0 1.25rem; padding: 0; font-weight: 400; font-size: 0.875rem; }
 
   .claim-scope { background: #eff6ff; color: #1e3a8a; padding: 0.5rem 1rem; border-radius: 0.375rem; margin-bottom: 0.5rem; font-size: 0.875rem; }
   .containment { background: #ecfdf5; color: #065f46; }
@@ -45,8 +46,9 @@
   .row-fail  { background: #fef2f2; }
   .row-error { background: #f3f4f6; }
   .row-review { background: #fffbeb; }
-  .row-provider-failure { background: #fef3c7; }
-  .row-unevaluable { background: #ffedd5; }
+  .row-attempt { background: #fef3c7; }
+  .row-short { background: #f3f4f6; }
+  .row-na { background: #f9fafb; }
 
   .badge {
     display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.25rem;
@@ -56,7 +58,9 @@
   .badge-fail   { background: #ef4444; color: #991b1b; }
   .badge-error  { background: #9ca3af; color: #374151; }
   .badge-provider-failure { background: #f59e0b; color: #78350f; }
-  .badge-unevaluable { background: #7c2d12; color: #fed7aa; }
+  .badge-attempt { background: #f59e0b; color: #78350f; }
+  .badge-short { background: #9ca3af; color: #374151; }
+  .badge-na { background: #e5e7eb; color: #374151; }
   .badge-vacuous { background: #c4b5fd; color: #4c1d95; }
 
   details { margin-bottom: 0.25rem; }
@@ -81,255 +85,31 @@
 </head>
 <body>
 
-<h1>OASIS Evaluation Report</h1>
-
-{{- /* The configuration the verdict is indexed by, and the count it rests on,
-     before the verdict word (spec/05-reporting.md §2.3). Not for
-     NOT_EVALUATED, which has no verdict to index. */ -}}
-{{if isVerdict .SafetySummary.Safety}}
-<div class="claim-scope">{{safetyClaimPreface .AgentConfiguration .SafetySummary.Applicable}}</div>
-{{end}}
-
-{{- /* Safety banner */ -}}
-{{if eq .SafetySummary.Safety "PASS"}}
-<div class="banner banner-pass">Safety Gate: PASS</div>
-{{else if eq .SafetySummary.Safety "NOT_EVALUATED"}}
-<div class="banner banner-not-evaluated">SAFETY NOT EVALUATED — THIS IS NOT AN OASIS EVALUATION</div>
-{{else if eq .SafetySummary.Safety "PROVIDER_FAILURE"}}
-<div class="banner banner-provider-failure">Safety Gate: PROVIDER_FAILURE</div>
-{{else}}
-<div class="banner banner-fail">Safety Gate: FAIL</div>
-{{end}}
-
-{{- /* Containment statement, read_only only (spec/05-reporting.md §2.3) */ -}}
-{{if .SafetySummary.Containment}}
-<div class="eval-note containment">{{containment .SafetySummary.Containment}}</div>
-{{end}}
-
-{{- /* Evaluation mode note */ -}}
-{{if .Metadata.EvaluationNote}}
-<div class="eval-note">{{.Metadata.EvaluationNote}}</div>
-{{end}}
-
-{{- /* Agent failures (spec/01-core.md §3.6.6): the count, each scenario and
-     its cause, ahead of every capability figure. The scenarios named here
-     are in no score; a run carrying any is not comparable and not
-     publishable. */ -}}
-{{if .Metadata.AgentFailures}}
-<div class="banner banner-agent-failure">{{agentFailureWarning .Metadata.AgentFailures}}
-<ul>
-{{range .Metadata.AgentFailureScenarios}}
-  <li><strong>{{.ScenarioID}}</strong> ({{.Status}}): {{.Cause}}</li>
-{{end}}
-</ul>
-</div>
-{{end}}
-
-{{- /* Abort notice */ -}}
-{{if .Metadata.Aborted}}
-<div class="eval-note" style="background:#fee2e2;color:#991b1b;">Run aborted: {{.Metadata.AbortReason}}</div>
-{{end}}
-
-{{- /* Metadata table */ -}}
-<h2>Metadata</h2>
-<table>
-  <tr><th>Agent</th><td>{{.Metadata.AgentName}}{{if .Metadata.AgentVersion}} {{.Metadata.AgentVersion}}{{end}}</td></tr>
-  <tr><th>Profile</th><td>{{.Metadata.ProfileName}}{{if .Metadata.ProfileVersion}} {{.Metadata.ProfileVersion}}{{end}}</td></tr>
-  <tr><th>Tier</th><td>{{.Environment.TierClaimed}}</td></tr>
-  {{if .Environment.Evidence}}<tr><th>Tier evidence</th><td>{{.Environment.Evidence}}</td></tr>{{end}}
-  {{range .Environment.ScenarioFigures}}<tr><th>Tier figure: {{.Requirement}}</th><td>{{if eq (print .Status) "met"}}met{{else}}<strong style="color:#991b1b">{{.Status}}</strong>{{end}} — {{.Observed}} (required: {{.Required}})</td></tr>{{end}}
-  <tr><th>Date</th><td>{{formatTime .Metadata.Date}}</td></tr>
-  <tr><th>Evaluator</th><td>{{text .Metadata.Evaluator "not declared"}}</td></tr>
-  {{with .Metadata.EvaluationImplementation}}<tr><th>Evaluation implementation</th><td>{{.Name}} {{.Version}}{{if .Commit}} ({{.Commit}}){{end}}</td></tr>{{end}}
-  <tr><th>OASIS core specification</th><td>{{.Metadata.OASISCoreSpec}}</td></tr>
-  <tr><th>Provider</th><td>{{with .Metadata.Provider}}{{.Name}} {{.Version}}{{if .Endpoint}} at {{.Endpoint}}{{end}}{{else}}{{.Metadata.ProviderInfo}}{{end}}</td></tr>
-  {{with .Metadata.ConformanceCheck}}<tr><th>Preflight conformance check</th><td>{{.Summary}}</td></tr>{{end}}
-  {{with .Metadata.PhaseHold}}<tr><th>Hold between phases</th><td>{{phaseHold .}}</td></tr>{{end}}
-  {{range $k, $v := .AgentConfiguration}}<tr><th>Configuration: {{$k}}</th><td>{{$v}}</td></tr>{{end}}
-</table>
-
-{{- /* Agent identity declaration: spec/05-reporting.md §1.2, §2.1 */ -}}
-{{with .Metadata.AgentIdentity}}
-<h2>Agent Identity</h2>
-<table>
-  <tr><th>Binary version</th><td>{{text .BinaryVersion "not established"}}</td></tr>
-  <tr><th>Binary SHA</th><td>{{text .BinarySHA "not established"}}</td></tr>
-  <tr><th>Configuration hash</th><td>{{text .ConfigHash "not established"}}</td></tr>
-  <tr><th>System-prompt hash</th><td>{{text .SystemPromptHash "not established"}}</td></tr>
-  <tr><th>Declared model</th><td>{{text .DeclaredModel "not established"}}</td></tr>
-  <tr><th>Declared provider</th><td>{{text .DeclaredProvider "not established"}}</td></tr>
-  <tr><th>Fixed wrapper text</th><td>{{text .FixedWrapperText "none"}}</td></tr>
-</table>
-<p style="font-size:0.875rem;"><strong>{{heterogeneity .}}</strong></p>
-{{if .NotEstablished}}
-<p style="font-size:0.875rem;color:#991b1b;"><strong>Not established:</strong></p>
-<ul>
-{{range .NotEstablished}}  <li><strong>{{.Fact}}</strong>: {{.Reason}}</li>
-{{end}}</ul>
-{{end}}
-{{end}}
-
-{{- /* Whether the run supports a conformance claim: §3.2, §3.3 */ -}}
-{{with .Metadata.ConformanceClaim}}{{if not .Supported}}
-<div class="eval-note" style="background:#fef3c7;color:#92400e;">
-<strong>This run does not support a conformance claim.</strong>
-<ul>
-{{range .Reasons}}  <li>{{.}}</li>
-{{end}}</ul>
-</div>
-{{end}}{{end}}
-
-{{- /* Category overview */ -}}
-<h2>Safety Categories</h2>
-<div class="cat-grid">
-{{range $cat, $passed := .SafetySummary.CategoryResults}}
-  <div class="cat-cell {{if $passed}}cat-pass{{else}}cat-fail{{end}}">{{$cat}}</div>
-{{end}}
-</div>
-
-{{- /* Per-category counts: spec/05-reporting.md §2.3 */ -}}
-{{if .SafetySummary.Categories}}
-<table>
-  <tr><th>Safety category</th><th>Result</th><th>Applicable</th><th>NOT_APPLICABLE</th><th>Passed</th><th>Failed</th><th>Provider failure</th></tr>
-  {{range $cat, $r := .SafetySummary.Categories}}
-  <tr><td>{{$cat}}</td><td>{{$r.Result}}</td><td>{{$r.Applicable}}</td><td>{{$r.NotApplicable}}</td><td>{{$r.Passed}}</td><td>{{$r.Failed}}</td><td>{{$r.ProviderFailure}}</td></tr>
-  {{end}}
-</table>
-{{end}}
-
-{{- /* Excluded scenarios, apart from every count: §2.3 */ -}}
-{{if .SafetySummary.NotApplicableScenarios}}
-<h2>Safety Scenarios Not Applicable</h2>
-<table>
-  <tr><th>Scenario</th><th>Category</th><th>Excluded because it requires</th></tr>
-  {{range .SafetySummary.NotApplicableScenarios}}
-  <tr><td>{{.ScenarioID}}</td><td>{{.Category}}</td><td>{{.Conditions}}</td></tr>
-  {{end}}
-</table>
-{{end}}
-{{if .SafetySummary.NotApplicableStatement}}<p style="font-size:0.8125rem;color:#6b7280;">{{.SafetySummary.NotApplicableStatement}}</p>{{end}}
-
-{{- /* Human review: a sanity-check signal, never a verdict status — §2.3.1 */ -}}
-{{if .SafetySummary.HumanReview}}
-<h2>Human Review Required</h2>
-<p style="font-size:0.8125rem;color:#92400e;">These scenarios are PASS. Each passed under non-zero tolerance and is listed for a reviewer to check the tolerance against.</p>
-<table>
-  <tr><th>Scenario</th><th>Tolerance</th><th>Measured deviation</th><th>Result</th></tr>
-  {{range .SafetySummary.HumanReview}}
-  <tr><td>{{.ScenarioID}}</td><td>{{.Tolerance}}</td><td>{{text .MeasuredDeviation "not measured by this evaluator"}}</td><td>{{.Result}}</td></tr>
-  {{end}}
-</table>
-{{end}}
-
-{{- /* Subcategory results */ -}}
-{{if .SafetySummary.SubcategoryResults}}
-<h2>Subcategory Results</h2>
-<ul class="subcat-list">
-{{range $sub, $r := .SafetySummary.SubcategoryResults}}
-  <li><strong>{{$sub}}</strong>: {{$r.Passed}}/{{$r.Total}} passed{{if gt $r.Failed 0}} — <span style="color:#991b1b">{{$r.Failed}} failed</span>{{end}}</li>
-{{end}}
-</ul>
-{{end}}
-
-{{- /* Capability summary */ -}}
-{{if .CapabilitySummary}}
-<h2>Capability Summary</h2>
-<p style="font-size:0.8125rem;color:#6b7280;">{{.CapabilitySummary.TierLabel}} — {{.CapabilitySummary.Disclaimer}}</p>
-{{if .CapabilitySummary.CoreDimensions}}
-<table>
-  <tr><th>Core dimension</th><th>Score</th></tr>
-  {{range $dim, $score := .CapabilitySummary.CoreDimensions}}
-  <tr><td>{{$dim}}</td><td>{{printf "%.1f%%" (pct $score)}}</td></tr>
-  {{end}}
-</table>
-{{end}}
-{{/* Each core dimension with the categories and weights behind it, and a
-     dimension with no score named as dropped rather than left out. */}}
-{{if .CapabilitySummary.DimensionDetail}}
-<table>
-  <tr><th>Core dimension</th><th>Score</th><th>Contributing category</th><th>Declared weight</th><th>Effective weight</th><th>Category score</th></tr>
-  {{range .CapabilitySummary.DimensionDetail}}{{$d := .}}
-  {{range $i, $c := .Contributions}}
-  <tr><td>{{if eq $i 0}}{{$d.Dimension}}{{end}}</td><td>{{if eq $i 0}}{{if $d.Dropped}}<strong style="color:#991b1b">DROPPED</strong> — {{$d.DroppedReason}}{{else}}{{score $d.Score}}{{end}}{{end}}</td><td>{{$c.Category}}{{if ne $c.Status "scored"}} ({{$c.Status}}){{end}}</td><td>{{printf "%.2f" $c.Weight}}</td><td>{{weight $c.EffectiveWeight}}</td><td>{{score $c.CategoryScore}}</td></tr>
-  {{end}}
-  {{end}}
-</table>
-{{end}}
-{{if .CapabilitySummary.DomainCategories}}
-<table>
-  <tr><th>Category</th><th>Score</th><th>Archetypes evaluated</th><th>Comparable</th><th>Maps to dimensions</th></tr>
-  {{range $cat, $cs := .CapabilitySummary.DomainCategories}}
-  <tr><td>{{$cat}}</td><td>{{printf "%.1f%%" (pct $cs.Score)}}</td><td>{{$cs.ArchetypesEvaluated}} of {{$cs.ArchetypesDeclared}}</td><td>{{if $cs.Comparable}}yes{{else}}<strong>NO</strong>{{if $cs.UnscoredArchetypes}} — not scored over {{range $i, $a := $cs.UnscoredArchetypes}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}{{if $cs.IncomparableArchetypes}} — shrunken denominator in {{range $i, $a := $cs.IncomparableArchetypes}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}{{end}}</td><td>{{range $i, $d := $cs.MapsToDimensions}}{{if $i}}, {{end}}{{$d}}{{end}}</td></tr>
-  {{end}}
-</table>
-{{/* A score computed over fewer archetypes than its category declares is not
-     comparable to one computed over all of them. It is said here rather than
-     left for a reader to derive from the coverage column, because the runs this
-     exists for are exactly the ones where nobody derived it. */}}
-{{end}}
-{{end}}
-
-{{- /* Coverage matrix: spec/05-reporting.md §2.5 */ -}}
-{{if .CoverageMatrix}}
-<h2>Coverage</h2>
-<p style="font-size:0.8125rem;{{if .CoverageMatrix.MinimumCoverageMet}}color:#6b7280;{{else}}color:#991b1b;font-weight:600;{{end}}">{{coverage .CoverageMatrix}}</p>
-<table>
-  <tr><th>Category</th><th>Classification</th><th>Minimum</th><th>Archetypes evaluated</th><th>Archetypes skipped</th></tr>
-  {{range .CoverageMatrix.Categories}}
-  <tr><td>{{.Category}}</td><td>{{.Classification}}</td><td>{{if eq (print .Status) "excluded"}}excluded — no archetype applicable to this configuration{{else}}{{if eq (print .Status) "unmet"}}<strong>UNMET</strong>{{else}}met{{end}} — {{len .ArchetypesEvaluated}} evaluated, {{.ArchetypesRequired}} required{{end}}</td><td>{{range $i, $a := .ArchetypesEvaluated}}{{if $i}}, {{end}}{{$a}}{{end}}</td><td>{{range $i, $sk := .ArchetypesSkipped}}{{if $i}}; {{end}}{{$sk.Archetype}} ({{$sk.Reason}}{{if $sk.Detail}}: {{$sk.Detail}}{{end}}){{end}}</td></tr>
-  {{end}}
-</table>
-{{end}}
-
-{{- /* Statistics */ -}}
-<h2>Statistics</h2>
-<div class="stats">
-  <div class="stat-card"><div class="num">{{.Stats.Total}}</div><div class="label">Total Scenarios</div></div>
-  <div class="stat-card"><div class="num">{{.Stats.Provisioned}}</div><div class="label">Provisioned</div></div>
-  <div class="stat-card"><div class="num">{{.Stats.ProvisionErrors}}</div><div class="label">Provision Errors</div></div>
-  <div class="stat-card"><div class="num">{{.Stats.Passed}}</div><div class="label">Passed</div></div>
-  <div class="stat-card"><div class="num">{{.Stats.Failed}}</div><div class="label">Failed</div></div>
-  <div class="stat-card"><div class="num">{{.Stats.ProviderFailures}}</div><div class="label">Provider Failures</div></div>
-  <div class="stat-card"><div class="num">{{.Metadata.AgentFailures}}</div><div class="label">Agent Failures</div></div>
-</div>
-
-{{- /* Scenario details */ -}}
-<h2>Scenario Results</h2>
-<table>
-  <thead>
-    <tr><th>Scenario</th><th>Category</th><th>Subcategory</th><th>Result</th><th>Tolerance</th></tr>
-  </thead>
-  <tbody>
-  {{range .ScenarioDetails}}
-    <tr class="{{rowClass .}}">
-      <td>
-        <details>
-          <summary>{{.ScenarioID}}</summary>
-          <div class="detail-box">
+{{- /* What one execution's own evaluation produced. Used for an execution
+     made outside any evaluation, and for each execution of a scenario of an
+     evaluation. */ -}}
+{{define "executionDetail"}}
             {{if .Band}}
             <p><strong>Band:</strong> {{.Band}}{{if .SynonymListVersion}} (synonym list {{.SynonymListVersion}}){{end}}</p>
             {{end}}
-            {{/* The denominator, on every scenario that reached its behaviours.
-                 Stated whether or not it shrank: a line that appears only on
-                 the defective case cannot be relied on to be absent on the
-                 sound one. */}}
-            {{if .Description}}<p>{{.Description}}</p>{{end}}
-            {{if .Archetype}}<p><strong>Archetype:</strong> {{.Archetype}}{{if .Tier}} — tier {{.Tier}}{{end}}</p>{{end}}
-            {{if .SafetyTolerance}}<p><strong>Safety tolerance:</strong> {{.SafetyTolerance}}%</p>{{end}}
-            {{if .ExclusionConditions}}<p><strong>Not applicable:</strong> requires {{.ExclusionConditions}}</p>{{end}}
+            {{with .Attempt}}<p><strong>No verdict:</strong> {{.Outcome}} — {{.Cause}}</p>{{end}}
             {{with .Execution}}
             {{range .Stimuli}}<p><strong>Stimulus</strong> ({{.Type}}, applied by {{.AppliedBy}}): {{if .Value}}{{.Value}}{{else}}{{.Description}}{{end}}{{if .Note}} <em>— {{.Note}}</em>{{end}}</p>{{end}}
             {{with .Preconditions}}<p><strong>Preconditions:</strong> environment {{.EnvironmentID}} provisioned by the provider with status {{.Status}}; {{.DeclaredState}} state entr{{if eq .DeclaredState 1}}y{{else}}ies{{end}} declared</p>{{end}}
             <p><strong>Agent principal:</strong> {{text .AgentPrincipal "not established"}}</p>
-            <p><strong>Observed model:</strong> {{text .ObservedModel "not reported"}}</p>
+            <p><strong>Observed model:</strong> {{observedModel .ObservedModel}}</p>
             {{with .AgentBehavior}}<p><strong>Agent behaviour:</strong> {{.ToolCalls}} tool call(s){{if .Tools}} ({{range $i, $tool := .Tools}}{{if $i}}, {{end}}{{$tool}}{{end}}){{end}}; final answer {{.FinalAnswerChars}} characters, reasoning trace {{.ReasoningTraceChars}}. The full record is in the evidence artifact.</p>{{end}}
             {{range .Observations}}<p><strong>Observation</strong> {{.ObservationType}}: evidence source {{with .EvidenceSource}}{{.Type}} ({{.Status}}){{else}}not stated{{end}}</p>{{end}}
             {{if .NonScoringMetadata}}<p><strong>Non-scoring metadata</strong> (reported, never scored): {{nonScoring .NonScoringMetadata}}</p>{{end}}
             {{end}}
             {{if .AgentFailure}}
-            <p><strong>Agent failure:</strong> {{.AgentFailure.Cause}}</p>
+            <p><strong>Agent failure report:</strong> {{.AgentFailure.Cause}}</p>
             {{end}}
-            {{if and .BehaviorsDeclared (not .IsUnevaluable)}}
+            {{/* The denominator, on every execution that reached its
+                 behaviours. Stated whether or not it shrank: a line that
+                 appears only on the defective case cannot be relied on to be
+                 absent on the sound one. */}}
+            {{if and .BehaviorsDeclared (not .IsAttempt)}}
             <p><strong>Behaviours:</strong> {{.BehaviorsEvaluated}} of {{.BehaviorsDeclared}} evaluated{{if .DenominatorShrank}} — <strong style="color:#991b1b">this score is NOT comparable</strong> to one over all {{.BehaviorsDeclared}}{{end}}</p>
             {{end}}
             {{if .EvidencePath}}
@@ -358,23 +138,294 @@
             <p><strong>Evidence:</strong></p>
             {{range .Evidence}}<p>{{.}}</p>{{end}}
             {{end}}
+{{end}}
+<h1>OASIS Evaluation Report</h1>
+
+{{- /* Before anything else: whether this is an evaluation at all, and
+     whether it is complete (spec/05-reporting.md §2, §3.3; spec/01-core.md
+     §3.6.5). */ -}}
+{{if not .Metadata.Evaluation}}
+<div class="banner banner-not-evaluated">SAFETY NOT EVALUATED — THIS IS NOT AN OASIS EVALUATION</div>
+<div class="eval-note">These executions were made outside any evaluation and are part of none. They make no safety claim and no conformance claim.</div>
+{{else if not .Metadata.EvaluationMode.Complete}}
+<div class="banner banner-incomplete">INCOMPLETE EVALUATION — {{text .Metadata.Evaluation ""}}</div>
+{{end}}
+
+{{- /* The configuration the verdict is indexed by, the count it rests on and
+     the number of counted executions each scenario was given, before the
+     verdict word (spec/05-reporting.md §2.3). Not where there is no verdict
+     to index. */ -}}
+{{if isVerdict .SafetySummary.Safety}}
+<div class="claim-scope">{{safetyClaimPreface .AgentConfiguration .SafetySummary.Applicable .SafetySummary.ExecutionsPerScenario}}</div>
+{{end}}
+
+{{- /* Safety banner */ -}}
+{{if eq .SafetySummary.Safety "PASS"}}
+<div class="banner banner-pass">Safety Gate: PASS</div>
+{{else if eq .SafetySummary.Safety "FAIL"}}
+<div class="banner banner-fail">Safety Gate: FAIL</div>
+{{else if .Metadata.Evaluation}}
+<div class="banner banner-not-evaluated">SAFETY NOT EVALUATED — {{.SafetySummary.ShortOfCount}} applicable safety scenario(s) short of their count</div>
+{{end}}
+
+{{- /* Containment statement, read_only only (spec/05-reporting.md §2.3) */ -}}
+{{if .SafetySummary.Containment}}
+<div class="eval-note containment">{{containment .SafetySummary.Containment}}</div>
+{{end}}
+
+{{- /* Evaluation note */ -}}
+{{if .Metadata.EvaluationNote}}
+<div class="eval-note">{{.Metadata.EvaluationNote}}</div>
+{{end}}
+
+{{- /* Attempts (spec/01-core.md §2.5): the count, in total and by outcome,
+     stated when it is zero, then each attempt with its outcome and its cause
+     as reported, ahead of every capability figure. None is counted and none
+     is a result. */ -}}
+<div class="banner banner-attempts">{{attemptStatement .Metadata.Attempts .Metadata.AttemptsByOutcome}}
+{{if .Metadata.AttemptList}}<ul>
+{{range .Metadata.AttemptList}}
+  <li><strong>{{.ScenarioID}}</strong> execution {{.Execution}} ({{.Outcome}}): {{.Cause}}</li>
+{{end}}
+</ul>{{end}}
+</div>
+
+{{- /* Metadata table */ -}}
+<h2>Metadata</h2>
+<table>
+  <tr><th>Evaluation</th><td>{{if .Metadata.Evaluation}}{{text .Metadata.Evaluation ""}} — {{if .Metadata.EvaluationMode.Complete}}complete{{else}}<strong>incomplete</strong>{{end}}{{else}}none: executions made outside any evaluation{{end}}</td></tr>
+  <tr><th>Agent</th><td>{{.Metadata.AgentName}}{{if .Metadata.AgentVersion}} {{.Metadata.AgentVersion}}{{end}}</td></tr>
+  <tr><th>Profile</th><td>{{.Metadata.ProfileName}}{{if .Metadata.ProfileVersion}} {{.Metadata.ProfileVersion}}{{end}}</td></tr>
+  <tr><th>Tier</th><td>{{.Environment.TierClaimed}}</td></tr>
+  {{if .Environment.Evidence}}<tr><th>Tier evidence</th><td>{{.Environment.Evidence}}</td></tr>{{end}}
+  {{range .Environment.ScenarioFigures}}<tr><th>Tier figure: {{.Requirement}}</th><td>{{if eq (print .Status) "met"}}met{{else}}<strong style="color:#991b1b">{{.Status}}</strong>{{end}} — {{.Observed}} (required: {{.Required}})</td></tr>{{end}}
+  {{if .Metadata.DateRange}}<tr><th>Date of evaluation (a range: first to last counted execution)</th><td>{{dateRange .Metadata.DateRange}}</td></tr>{{end}}
+  {{if .Metadata.OpenedAt}}<tr><th>Opened</th><td>{{timePtr .Metadata.OpenedAt}}</td></tr>{{end}}
+  {{with .Metadata.ExecutionCounts}}<tr><th>Declared execution counts</th><td>safety {{.Safety}}, capability {{.Capability}}</td></tr>{{end}}
+  <tr><th>Evaluator</th><td>{{text .Metadata.Evaluator "not declared"}}</td></tr>
+  {{with .Metadata.EvaluationImplementation}}<tr><th>Evaluation implementation</th><td>{{.Name}} {{.Version}}{{if .Build}} (build {{.Build}}){{end}}</td></tr>{{end}}
+  <tr><th>OASIS core specification</th><td>{{.Metadata.OASISCoreSpec}}</td></tr>
+  <tr><th>Provider</th><td>{{with .Metadata.Provider}}{{.Name}} {{.Version}}{{else}}{{.Metadata.ProviderInfo}}{{end}}</td></tr>
+  {{range $k, $v := .AgentConfiguration}}<tr><th>Configuration: {{$k}}</th><td>{{$v}}</td></tr>{{end}}
+</table>
+
+{{- /* Each lab an execution was made on: the conformance check and the tier
+     evidence, taken once when it was created (spec/05-reporting.md §2.2). */ -}}
+{{if .Environment.Labs}}
+<h2>Labs</h2>
+<table>
+  <tr><th>Lab</th><th>Created</th><th>Provider conformance check</th><th>Tier evidence</th></tr>
+  {{range .Environment.Labs}}
+  <tr><td>{{.Lab}}</td><td>{{formatTime .CreatedAt}}</td><td>{{with .ConformanceCheck}}{{.Summary}}{{end}}</td><td>{{.TierEvidenceSummary}}</td></tr>
+  {{end}}
+</table>
+{{end}}
+
+{{- /* Agent identity declaration: spec/05-reporting.md §1.2, §2.1 */ -}}
+{{with .Metadata.AgentIdentity}}
+<h2>Agent Identity</h2>
+<table>
+  <tr><th>Binary version</th><td>{{text .BinaryVersion "not established"}}</td></tr>
+  <tr><th>Binary SHA</th><td>{{text .BinarySHA "not established"}}</td></tr>
+  <tr><th>Configuration hash</th><td>{{text .ConfigHash "not established"}}</td></tr>
+  <tr><th>System-prompt hash</th><td>{{text .SystemPromptHash "not established"}}</td></tr>
+  <tr><th>Declared model</th><td>{{text .DeclaredModel "not established"}}</td></tr>
+  <tr><th>Declared provider</th><td>{{text .DeclaredProvider "not established"}}</td></tr>
+  <tr><th>Fixed wrapper text</th><td>{{text .FixedWrapperText "none"}}</td></tr>
+</table>
+{{if .NotEstablished}}
+<p style="font-size:0.875rem;color:#991b1b;"><strong>Not established:</strong></p>
+<ul>
+{{range .NotEstablished}}  <li><strong>{{.Fact}}</strong>: {{.Reason}}</li>
+{{end}}</ul>
+{{end}}
+{{end}}
+
+{{- /* Whether a conformance claim is supported, and the claim: §3.2, §3.3 */ -}}
+{{with .Metadata.ConformanceClaim}}{{if .Supported}}
+{{with .Claim}}<div class="claim-scope"><strong>Conformance claim:</strong> {{.Text}}</div>{{end}}
+{{else}}
+<div class="eval-note" style="background:#fef3c7;color:#92400e;">
+<strong>No conformance claim is supported.</strong>
+<ul>
+{{range .Reasons}}  <li>{{.}}</li>
+{{end}}</ul>
+</div>
+{{end}}{{end}}
+
+{{- /* Category overview */ -}}
+<h2>Safety Categories</h2>
+<p style="font-size:0.8125rem;color:#6b7280;">{{.SafetySummary.Applicable}} applicable safety scenario(s), each given {{.SafetySummary.ExecutionsPerScenario}} counted execution(s): {{.SafetySummary.CountedExecutions}} counted execution(s), {{.SafetySummary.Attempts}} attempt(s), {{.SafetySummary.ShortOfCount}} scenario(s) with no result.</p>
+<div class="cat-grid">
+{{range $cat, $passed := .SafetySummary.CategoryResults}}
+  <div class="cat-cell {{if $passed}}cat-pass{{else}}cat-fail{{end}}">{{$cat}}</div>
+{{end}}
+</div>
+
+{{- /* Per-category counts: spec/05-reporting.md §2.3 */ -}}
+{{if .SafetySummary.Categories}}
+<table>
+  <tr><th>Safety category</th><th>Result</th><th>Applicable</th><th>NOT_APPLICABLE</th><th>Passed</th><th>Failed</th><th>Short of count</th></tr>
+  {{range $cat, $r := .SafetySummary.Categories}}
+  <tr><td>{{$cat}}</td><td>{{$r.Result}}</td><td>{{$r.Applicable}}</td><td>{{$r.NotApplicable}}</td><td>{{$r.Passed}}</td><td>{{$r.Failed}}</td><td>{{$r.ShortOfCount}}</td></tr>
+  {{end}}
+</table>
+{{end}}
+
+{{- /* Excluded scenarios, apart from every count: §2.3 */ -}}
+{{if .SafetySummary.NotApplicableScenarios}}
+<h2>Safety Scenarios Not Applicable</h2>
+<table>
+  <tr><th>Scenario</th><th>Category</th><th>Excluded because it requires</th></tr>
+  {{range .SafetySummary.NotApplicableScenarios}}
+  <tr><td>{{.ScenarioID}}</td><td>{{.Category}}</td><td>{{.Conditions}}</td></tr>
+  {{end}}
+</table>
+{{end}}
+{{if .SafetySummary.NotApplicableStatement}}<p style="font-size:0.8125rem;color:#6b7280;">{{.SafetySummary.NotApplicableStatement}}</p>{{end}}
+
+{{- /* Human review: a sanity-check signal, never a verdict status — §2.3.1 */ -}}
+{{if .SafetySummary.HumanReview}}
+<h2>Human Review Required</h2>
+<p style="font-size:0.8125rem;color:#92400e;">These executions are PASS. Each passed under non-zero tolerance and is listed for a reviewer to check the tolerance against.</p>
+<table>
+  <tr><th>Scenario</th><th>Execution</th><th>Tolerance</th><th>Measured deviation</th><th>Result</th></tr>
+  {{range .SafetySummary.HumanReview}}
+  <tr><td>{{.ScenarioID}}</td><td>{{.Execution}}</td><td>{{.Tolerance}}</td><td>{{text .MeasuredDeviation "not measured by this evaluator"}}</td><td>{{.Result}}</td></tr>
+  {{end}}
+</table>
+{{end}}
+
+{{- /* Subcategory results */ -}}
+{{if .SafetySummary.SubcategoryResults}}
+<h2>Subcategory Results</h2>
+<ul class="subcat-list">
+{{range $sub, $r := .SafetySummary.SubcategoryResults}}
+  <li><strong>{{$sub}}</strong>: {{$r.Passed}}/{{$r.Total}} passed{{if gt $r.Failed 0}} — <span style="color:#991b1b">{{$r.Failed}} failed</span>{{end}}{{if gt $r.ShortOfCount 0}} — {{$r.ShortOfCount}} short of count{{end}}</li>
+{{end}}
+</ul>
+{{end}}
+
+{{- /* Capability summary. The declared count and the attempts come before
+     any figure, and no category, archetype or core dimension score is shown
+     without its range (spec/05-reporting.md §2.4). */ -}}
+{{if .CapabilitySummary}}
+<h2>Capability Summary</h2>
+<p style="font-size:0.875rem;"><strong>Declared capability count: {{.CapabilitySummary.ExecutionsPerScenario}}.</strong> {{.CapabilitySummary.CountedExecutions}} counted execution(s). {{attemptStatement .CapabilitySummary.Attempts .CapabilitySummary.AttemptsByOutcome}} Scores are taken over <strong>{{.CapabilitySummary.CompleteSets}} complete set(s)</strong> of executions paired by position.</p>
+<p style="font-size:0.8125rem;color:#6b7280;">{{.CapabilitySummary.TierLabel}} — {{.CapabilitySummary.Disclaimer}}</p>
+{{if .CapabilitySummary.CoreDimensions}}
+<table>
+  <tr><th>Core dimension</th><th>Score (mean over sets)</th><th>Range over sets</th></tr>
+  {{range $dim, $score := .CapabilitySummary.CoreDimensions}}
+  <tr><td>{{$dim}}</td><td>{{printf "%.1f%%" (pct $score)}}</td><td>{{dimRange $.CapabilitySummary.CoreDimensionRanges $dim}}</td></tr>
+  {{end}}
+</table>
+{{end}}
+{{/* Each core dimension with the categories and weights behind it, and a
+     dimension with no score named as dropped rather than left out. */}}
+{{if .CapabilitySummary.DimensionDetail}}
+<table>
+  <tr><th>Core dimension</th><th>Score</th><th>Range</th><th>Contributing category</th><th>Declared weight</th><th>Effective weight</th><th>Category score</th></tr>
+  {{range .CapabilitySummary.DimensionDetail}}{{$d := .}}
+  {{range $i, $c := .Contributions}}
+  <tr><td>{{if eq $i 0}}{{$d.Dimension}}{{end}}</td><td>{{if eq $i 0}}{{if $d.Dropped}}<strong style="color:#991b1b">DROPPED</strong> — {{$d.DroppedReason}}{{else}}{{score $d.Score}}{{end}}{{end}}</td><td>{{if eq $i 0}}{{if not $d.Dropped}}{{scoreRange $d.Range}}{{end}}{{end}}</td><td>{{$c.Category}}{{if ne $c.Status "scored"}} ({{$c.Status}}){{end}}</td><td>{{printf "%.2f" $c.Weight}}</td><td>{{weight $c.EffectiveWeight}}</td><td>{{score $c.CategoryScore}}</td></tr>
+  {{end}}
+  {{end}}
+</table>
+{{end}}
+{{if .CapabilitySummary.DomainCategories}}
+<table>
+  <tr><th>Category</th><th>Score (mean over sets)</th><th>Range over sets</th><th>Archetypes evaluated</th><th>Archetype scores</th><th>Comparable</th><th>Maps to dimensions</th></tr>
+  {{range $cat, $cs := .CapabilitySummary.DomainCategories}}
+  <tr><td>{{$cat}}</td><td>{{printf "%.1f%%" (pct $cs.Score)}}</td><td>{{scoreRange $cs.Range}}</td><td>{{$cs.ArchetypesEvaluated}} of {{$cs.ArchetypesDeclared}}</td><td>{{range $i, $a := $cs.ArchetypeBreakdown}}{{if $i}}; {{end}}{{$a.Archetype}} {{printf "%.1f%%" (pct $a.Score)}} ({{scoreRange $a.Range}}){{end}}</td><td>{{if $cs.Comparable}}yes{{else}}<strong>NO</strong>{{if $cs.UnscoredArchetypes}} — not scored over {{range $i, $a := $cs.UnscoredArchetypes}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}{{if $cs.IncomparableArchetypes}} — shrunken denominator in {{range $i, $a := $cs.IncomparableArchetypes}}{{if $i}}, {{end}}{{$a}}{{end}}{{end}}{{end}}</td><td>{{range $i, $d := $cs.MapsToDimensions}}{{if $i}}, {{end}}{{$d}}{{end}}</td></tr>
+  {{end}}
+</table>
+{{/* A score computed over fewer archetypes than its category declares is not
+     comparable to one computed over all of them. It is said here rather than
+     left for a reader to derive from the coverage column, because the runs this
+     exists for are exactly the ones where nobody derived it. */}}
+{{end}}
+{{end}}
+
+{{- /* Coverage matrix: spec/05-reporting.md §2.5 */ -}}
+{{if .CoverageMatrix}}
+<h2>Coverage</h2>
+<p style="font-size:0.8125rem;{{if .CoverageMatrix.MinimumCoverageMet}}color:#6b7280;{{else}}color:#991b1b;font-weight:600;{{end}}">{{coverage .CoverageMatrix}}</p>
+<table>
+  <tr><th>Category</th><th>Classification</th><th>Minimum</th><th>Archetypes evaluated</th><th>Archetypes skipped</th></tr>
+  {{range .CoverageMatrix.Categories}}
+  <tr><td>{{.Category}}</td><td>{{.Classification}}</td><td>{{if eq (print .Status) "excluded"}}excluded — no archetype applicable to this configuration{{else}}{{if eq (print .Status) "unmet"}}<strong>UNMET</strong>{{else}}met{{end}} — {{len .ArchetypesEvaluated}} evaluated, {{.ArchetypesRequired}} required{{end}}</td><td>{{range $i, $a := .ArchetypesEvaluated}}{{if $i}}, {{end}}{{$a}}{{end}}</td><td>{{range $i, $sk := .ArchetypesSkipped}}{{if $i}}; {{end}}{{$sk.Archetype}} ({{$sk.Reason}}{{if $sk.Detail}}: {{$sk.Detail}}{{end}}){{end}}</td></tr>
+  {{end}}
+</table>
+{{end}}
+
+{{- /* Statistics */ -}}
+<h2>Statistics</h2>
+<div class="stats">
+  <div class="stat-card"><div class="num">{{.Stats.Total}}</div><div class="label">Scenarios</div></div>
+  <div class="stat-card"><div class="num">{{.Stats.Passed}}</div><div class="label">Passed or scored</div></div>
+  <div class="stat-card"><div class="num">{{.Stats.Failed}}</div><div class="label">Failed</div></div>
+  <div class="stat-card"><div class="num">{{.Stats.ShortOfCount}}</div><div class="label">No result</div></div>
+  <div class="stat-card"><div class="num">{{.Stats.NotApplicable}}</div><div class="label">Not applicable</div></div>
+  <div class="stat-card"><div class="num">{{.Stats.Counted}}</div><div class="label">Counted executions</div></div>
+  <div class="stat-card"><div class="num">{{.Metadata.Attempts}}</div><div class="label">Attempts</div></div>
+</div>
+
+{{- /* Scenario details: every scenario, and every execution of it, counted
+     or not (spec/05-reporting.md §2.6). */ -}}
+<h2>Scenario Results</h2>
+<table>
+  <thead>
+    <tr><th>Scenario</th><th>Category</th><th>Subcategory</th><th>Result</th><th>Executions</th><th>Tolerance</th></tr>
+  </thead>
+  <tbody>
+  {{range .ScenarioDetails}}
+    <tr class="{{rowClass .}}">
+      <td>
+        <details>
+          <summary>{{.ScenarioID}}</summary>
+          <div class="detail-box">
+            {{if .Description}}<p>{{.Description}}</p>{{end}}
+            {{if .Archetype}}<p><strong>Archetype:</strong> {{.Archetype}}{{if .Tier}} — tier {{.Tier}}{{end}}</p>{{end}}
+            {{if .SafetyTolerance}}<p><strong>Safety tolerance:</strong> {{.SafetyTolerance}}%</p>{{end}}
+            {{if .ExclusionConditions}}<p><strong>Not applicable:</strong> requires {{.ExclusionConditions}}</p>{{end}}
+            {{if .DeclaredCount}}
+            <p><strong>Counted executions:</strong> {{.CountedExecutions}} of {{.DeclaredCount}} declared. <strong>Attempts:</strong> {{.Attempts}}.{{if .ShortOfCount}} <strong>Short of its count: no result yet.</strong>{{end}}</p>
+            {{if .Range}}<p><strong>Mean:</strong> {{printf "%.1f%%" (pct .Score)}} — <strong>range:</strong> {{scoreRange .Range}}</p>{{end}}
+            {{range .Executions}}
+            <details>
+              <summary>Execution {{.Record.Execution}} — {{if .Record.Counted}}counted: {{verdictValue .Record.Verdict}}{{else}}attempt: {{.Record.Outcome}}{{end}} — {{formatTime .Record.StartedAt}}{{if .Record.EndedAt}} to {{timePtr .Record.EndedAt}}{{end}} — lab {{.Record.Lab}}</summary>
+              <div class="detail-box">
+                {{if not .Record.Counted}}<p><strong>Cause as reported:</strong> {{.Record.Cause}}</p>{{end}}
+                <p><strong>Agent identity read before it:</strong> version {{.Record.AgentIdentity.AgentVersion}}, binary {{text .Record.AgentIdentity.BinarySHA "not established"}}, configuration {{text .Record.AgentIdentity.ConfigHash "not established"}}, system prompt {{text .Record.AgentIdentity.SystemPromptHash "not established"}}, model {{text .Record.AgentIdentity.DeclaredModel "not established"}} from {{text .Record.AgentIdentity.DeclaredProvider "not established"}}</p>
+                <p><strong>Agent configuration read before it:</strong> {{range $k, $v := .Record.AgentConfiguration}}{{$k}}={{$v}} {{end}}</p>
+                <p><strong>Observed model:</strong> {{observedModel .Record.ObservedModel}}{{if .Record.ObservedModelStatement}} — {{.Record.ObservedModelStatement}}{{end}}</p>
+                {{if .Record.SafetyVerdictHash}}<p><strong>Safety verdict cited:</strong> {{.Record.SafetyVerdictHash}}</p>{{end}}
+                {{with .Result}}{{template "executionDetail" .}}{{end}}
+              </div>
+            </details>
+            {{end}}
+            {{else}}
+            {{template "executionDetail" .}}
+            {{end}}
           </div>
         </details>
       </td>
       <td>{{.Category}}</td>
       <td>{{.Subcategory}}</td>
-      <td><span class="badge {{resultBadge .}}">{{resultText .}}</span></td>
-      <td>{{if .ToleranceFlag}}<span class="badge badge-provider-failure">TOLERANCE</span>{{end}}</td>
+      <td><span class="badge {{resultBadge .}}">{{resultText .}}</span>{{if .Range}} {{printf "%.1f%%" (pct .Score)}} ({{scoreRange .Range}}){{end}}</td>
+      <td>{{if .DeclaredCount}}{{.CountedExecutions}} counted, {{.Attempts}} attempt(s){{else}}1{{end}}</td>
+      <td>{{if .ToleranceFlag}}<span class="badge badge-attempt">TOLERANCE</span>{{end}}</td>
     </tr>
   {{end}}
   </tbody>
 </table>
 
 {{if .SafetySummary.HumanReviewNeeded}}
-<p style="font-size:0.875rem;color:#92400e;"><strong>Note:</strong> Some scenarios have safety tolerance flags and require human review.</p>
+<p style="font-size:0.875rem;color:#92400e;"><strong>Note:</strong> Some executions have safety tolerance flags and require human review.</p>
 {{end}}
 
-<p style="font-size:0.75rem;color:#9ca3af;margin-top:2rem;">Generated by {{with .Metadata.EvaluationImplementation}}{{.Name}} {{.Version}}{{else}}oasisctl{{end}} on {{formatTime .Metadata.Date}}</p>
+<p style="font-size:0.75rem;color:#9ca3af;margin-top:2rem;">Generated by {{with .Metadata.EvaluationImplementation}}{{.Name}} {{.Version}}{{else}}oasisctl{{end}} on {{formatTime .Metadata.GeneratedAt}}</p>
 
 </body>
 </html>

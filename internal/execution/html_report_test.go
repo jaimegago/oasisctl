@@ -53,9 +53,9 @@ func TestRenderHTML_ScenarioRowClasses(t *testing.T) {
 		SafetyResults: []evaluation.ScenarioResult{
 			{ScenarioID: "s.001", Category: "sec", Passed: true, Status: evaluation.ScenarioPass},
 			{ScenarioID: "s.002", Category: "sec", Passed: false, Status: evaluation.ScenarioFail},
-			{ScenarioID: "s.003", Category: "sec", Passed: false, Errors: []string{"provision failed"}},
+			{ScenarioID: "s.003", Category: "sec", Errors: []string{"provision failed"}, Attempt: &evaluation.Attempt{Outcome: evaluation.AttemptProviderFailure, Cause: "provision failed"}},
 			{ScenarioID: "s.004", Category: "sec", Passed: true, ToleranceFlag: true, Status: evaluation.ScenarioPass},
-			{ScenarioID: "s.005", Category: "sec", Status: evaluation.ScenarioProviderFailure},
+			{ScenarioID: "s.005", Category: "sec", Attempt: &evaluation.Attempt{Outcome: evaluation.AttemptAgentFailure, Cause: "model provider returned 429"}},
 		},
 	}
 	report := buildReport(verdict)
@@ -64,9 +64,10 @@ func TestRenderHTML_ScenarioRowClasses(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, html, "row-pass")
 	assert.Contains(t, html, "row-fail")
-	assert.Contains(t, html, "row-error")
+	assert.Contains(t, html, "row-attempt")
 	assert.Contains(t, html, "row-review")
-	assert.Contains(t, html, "row-provider-failure")
+	assert.Contains(t, html, "NO VERDICT — PROVIDER_FAILURE")
+	assert.Contains(t, html, "NO VERDICT — AGENT_FAILURE")
 }
 
 func TestRenderHTML_Statistics(t *testing.T) {
@@ -75,7 +76,8 @@ func TestRenderHTML_Statistics(t *testing.T) {
 
 	html, err := RenderHTML(report)
 	require.NoError(t, err)
-	assert.Contains(t, html, "Total Scenarios")
+	assert.Contains(t, html, "Counted executions")
+	assert.Contains(t, html, "Attempts")
 	assert.Contains(t, html, "Passed")
 	assert.Contains(t, html, "Failed")
 }
@@ -97,36 +99,43 @@ func TestWriteHTML_File(t *testing.T) {
 
 func TestWriteHTML_EvaluationNote(t *testing.T) {
 	verdict := makeVerdict()
+	// Executions made outside any evaluation, safety scenarios only.
+	verdict.Evaluation = nil
 	verdict.EvaluationMode = evaluation.EvaluationMode{SafetyOnly: true}
 	report := buildReport(verdict)
 
 	html, err := RenderHTML(report)
 	require.NoError(t, err)
 	assert.Contains(t, html, "safety-only")
+	assert.Contains(t, html, "THIS IS NOT AN OASIS EVALUATION")
 }
 
 func TestComputeStats(t *testing.T) {
 	details := []evaluation.ScenarioResult{
-		{ScenarioID: "s.001", Passed: true},
-		{ScenarioID: "s.002", Passed: false},
-		{ScenarioID: "s.003", Passed: false, Errors: []string{"provision failed"}},
-		{ScenarioID: "s.004", Status: evaluation.ScenarioProviderFailure},
+		{ScenarioID: "s.001", Status: evaluation.ScenarioPass, Passed: true},
+		{ScenarioID: "s.002", Status: evaluation.ScenarioFail},
+		{ScenarioID: "s.003", Attempt: &evaluation.Attempt{Outcome: evaluation.AttemptProviderFailure, Cause: "provision failed"}},
+		{ScenarioID: "s.004", Status: evaluation.ScenarioNotApplicable, Passed: true},
+		// A scenario-level result of an evaluation: two counted executions
+		// of three declared, one attempt, and no result yet.
+		{ScenarioID: "s.005", DeclaredCount: 3, CountedExecutions: 2, Attempts: 1, ShortOfCount: true},
 	}
 	s := computeStats(details)
-	assert.Equal(t, 4, s.Total)
-	assert.Equal(t, 2, s.Provisioned)
-	assert.Equal(t, 1, s.ProvisionErrors)
+	assert.Equal(t, 5, s.Total)
 	assert.Equal(t, 1, s.Passed)
 	assert.Equal(t, 1, s.Failed)
-	assert.Equal(t, 1, s.ProviderFailures)
+	assert.Equal(t, 2, s.ShortOfCount, "an attempt and a scenario short of its count have no result")
+	assert.Equal(t, 1, s.NotApplicable)
+	assert.Equal(t, 4, s.Counted, "one each for the two executions that reached a verdict, and the two the evaluation scenario holds")
+	assert.Equal(t, 2, s.Attempts)
 }
 
 func TestRenderHTML_SubcategoryResults(t *testing.T) {
 	verdict := &evaluation.Verdict{
 		SafetyPassed: true,
 		SafetyResults: []evaluation.ScenarioResult{
-			{ScenarioID: "s.001", Category: "be", Subcategory: "scope-boundary", Passed: true},
-			{ScenarioID: "s.002", Category: "be", Subcategory: "scope-boundary", Passed: false},
+			{ScenarioID: "s.001", Category: "be", Subcategory: "scope-boundary", Status: evaluation.ScenarioPass, Passed: true},
+			{ScenarioID: "s.002", Category: "be", Subcategory: "scope-boundary", Status: evaluation.ScenarioFail, Passed: false},
 		},
 	}
 	report := buildReport(verdict)

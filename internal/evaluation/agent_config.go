@@ -63,9 +63,14 @@ func (c AgentConfiguration) Describe() string {
 // and the applicable scenario count it rests on (spec/05-reporting.md §2.3,
 // spec/06-principles.md principle 12). A PASS is a claim about the agent
 // under this configuration and nothing wider.
-func SafetyClaimPreface(config AgentConfiguration, applicable int) string {
-	return fmt.Sprintf("Safety verdict indexed by configuration {%s}, over %d applicable safety scenario(s). It is a claim about the agent under this configuration and does not transfer to another.",
-		config.Describe(), applicable)
+func SafetyClaimPreface(config AgentConfiguration, applicable, executionsPerScenario int) string {
+	return fmt.Sprintf("Safety verdict indexed by configuration {%s}, over %d applicable safety scenario(s), each given %d counted execution(s). It is a claim about the agent under this configuration and does not transfer to another.",
+		config.Describe(), applicable, executionsPerScenario)
+}
+
+// ConfigurationSummary renders a configuration for a sentence.
+func ConfigurationSummary(config AgentConfiguration) string {
+	return "{" + config.Describe() + "}"
 }
 
 // ConfigurationDimension defines a single axis in the agent configuration schema.
@@ -88,13 +93,7 @@ type ConfigurationCoverage struct {
 	Applicable              int            `json:"applicable" yaml:"applicable"`
 	NotApplicable           int            `json:"not_applicable" yaml:"not_applicable"`
 	NotApplicableByCategory map[string]int `json:"not_applicable_by_category,omitempty" yaml:"not_applicable_by_category,omitempty"`
-	// Unevaluable counts the scenarios excluded because the agent failed
-	// (spec/01-core.md §3.6.6). They are applicable — the configuration did
-	// not exclude them — and are still not counted in Applicable, which is
-	// the population scores were computed over. Emitted when zero so that
-	// total = applicable + not_applicable + unevaluable always reads.
-	Unevaluable int      `json:"unevaluable" yaml:"unevaluable"`
-	Warnings    []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	Warnings                []string       `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 	// ExcludedByTier counts the suite's scenarios above the claimed complexity
 	// tier, and ExcludedByTierScenarios names them. They are counted in
 	// TotalScenarios — the suite's size — and not left out of it. Emitted when
@@ -123,16 +122,11 @@ type ConditionalAssertion struct {
 type ScenarioResultStatus string
 
 const (
-	ScenarioPass            ScenarioResultStatus = "PASS"
-	ScenarioFail            ScenarioResultStatus = "FAIL"
-	ScenarioNotApplicable   ScenarioResultStatus = "NOT_APPLICABLE"
-	ScenarioProviderFailure ScenarioResultStatus = "PROVIDER_FAILURE"
-	// ScenarioUnevaluable marks a scenario whose adapter reported that the
-	// agent failed for its own infrastructure reasons (spec/01-core.md
-	// §3.6.6). Like NOT_APPLICABLE it is an exclusion state carried in the
-	// status field, not a verdict: it enters no PASS, FAIL or PROVIDER_FAILURE
-	// count, no score, and no applicable count. Passed is false on such a
-	// result so it can never be read as a pass; every consumer that counts
-	// failures must therefore exclude it by this status first.
-	ScenarioUnevaluable ScenarioResultStatus = "UNEVALUABLE"
+	ScenarioPass          ScenarioResultStatus = "PASS"
+	ScenarioFail          ScenarioResultStatus = "FAIL"
+	ScenarioNotApplicable ScenarioResultStatus = "NOT_APPLICABLE"
+	// PROVIDER_FAILURE and UNEVALUABLE were statuses here until core
+	// 1.0.0-rc1.14. An execution that reaches no verdict is now an attempt
+	// with an outcome (AttemptOutcome), which is not a status
+	// (spec/01-core.md §2.5, §3.6).
 )

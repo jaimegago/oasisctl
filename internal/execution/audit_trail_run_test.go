@@ -109,7 +109,7 @@ func (p *trailProvider) Conformance(_ context.Context, _ string) (*evaluation.Co
 		Requirements: evaluation.ConformanceRequirements{
 			EnvironmentType:          "kubernetes-cluster",
 			ComplexityTierSupported:  3,
-			OASISCoreSpecVersion:     []string{"1.0.0-rc1.13"},
+			OASISCoreSpecVersion:     []string{"1.0.0-rc1.14"},
 			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "state_diff", "response_content", "value_containment"},
 			StateInjection:           true,
 			AuditPolicyInstallation:  true,
@@ -190,7 +190,7 @@ func runTrailScenarios(t *testing.T, agent *trailAgent, provider *trailProvider,
 		execution.NewAssertionEngine(p), execution.NewScorer(), execution.NewReportWriter(), nil,
 		execution.Config{Tier: 1, EvidenceDir: evidenceDir, AgentPrincipal: ejAgentPrincipal},
 	)
-	verdict, err := orch.Run(context.Background(), vendoredProfileDir, scenarios,
+	verdict, err := orch.Try(context.Background(), vendoredProfileDir, scenarios,
 		"agent", "provider", "json", filepath.Join(t.TempDir(), "verdict.json"))
 	require.NoError(t, err)
 	return trailRun{verdict: verdict, evidenceDir: evidenceDir}
@@ -209,7 +209,7 @@ func (r trailRun) result(t *testing.T, id string) evaluation.ScenarioResult {
 
 func (r trailRun) artifact(t *testing.T, id string) map[string]json.RawMessage {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(r.evidenceDir, execution.EvidenceFileName(id)))
+	data, err := os.ReadFile(filepath.Join(r.evidenceDir, execution.EvidenceFileName(id, 1)))
 	require.NoError(t, err)
 	var artifact map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(data, &artifact))
@@ -283,7 +283,7 @@ func TestAuditTrailRun_NotImplementedScoresZeroAndIsNotAnAgentFailure(t *testing
 		assert.Nil(t, recorded.Failure, id)
 	}
 
-	assert.Zero(t, run.verdict.Report.Metadata.AgentFailures, "non-implementation is an answer, not a failure")
+	assert.Zero(t, run.verdict.Report.Metadata.Attempts, "non-implementation is an answer, not a failure: the execution is scored, not an attempt")
 	category := run.verdict.CategoryScores["auditability"]
 	assert.Equal(t, 0.0, category.Score, "zero is the measurement and it reaches the category")
 
@@ -309,7 +309,10 @@ func TestAuditTrailRun_AFailedOperationIsAnAgentFailure(t *testing.T) {
 		run := runTrailScenarios(t, agent, &trailProvider{}, au002)
 
 		result := run.result(t, au002)
-		assert.Equal(t, evaluation.ScenarioUnevaluable, result.Status, tc.name)
+		require.NotNil(t, result.Attempt, tc.name)
+		assert.Equal(t, evaluation.AttemptAgentFailure, result.Attempt.Outcome, tc.name)
+		assert.Equal(t, tc.cause, result.Attempt.Cause, tc.name)
+		assert.Empty(t, result.Status, tc.name)
 		require.NotNil(t, result.AgentFailure, tc.name)
 		assert.Equal(t, tc.cause, result.AgentFailure.Cause, tc.name)
 		assert.False(t, result.Passed, tc.name)
@@ -317,12 +320,13 @@ func TestAuditTrailRun_AFailedOperationIsAnAgentFailure(t *testing.T) {
 		assert.Equal(t, "session-1", result.SessionID, tc.name)
 
 		md := run.verdict.Report.Metadata
-		assert.Equal(t, 1, md.AgentFailures, tc.name)
-		require.Len(t, md.AgentFailureScenarios, 1, tc.name)
-		assert.Equal(t, au002, md.AgentFailureScenarios[0].ScenarioID, tc.name)
+		assert.Equal(t, 1, md.Attempts, tc.name)
+		assert.Equal(t, 1, md.AttemptsByOutcome[evaluation.AttemptAgentFailure], tc.name)
+		require.Len(t, md.AttemptList, 1, tc.name)
+		assert.Equal(t, au002, md.AttemptList[0].ScenarioID, tc.name)
 
 		_, scored := run.verdict.CategoryScores["auditability"]
-		assert.False(t, scored, "%s: an unevaluable scenario contributes to no score", tc.name)
+		assert.False(t, scored, "%s: an attempt contributes to no score", tc.name)
 
 		artifact := run.artifact(t, au002)
 		assert.JSONEq(t, fmt.Sprintf(`{"cause":%q}`, tc.cause), string(artifact["agent_failure"]), tc.name)
@@ -344,18 +348,20 @@ func TestAuditTrailRun_AFailedSecondReadIsAnAgentFailure(t *testing.T) {
 		agent := &trailAgent{trail: twoLinkedEntries(), trailErr: err, trailErrAfter: 2}
 		run := runTrailScenarios(t, agent, &trailProvider{}, au005)
 		result := run.result(t, au005)
-		assert.Equal(t, evaluation.ScenarioUnevaluable, result.Status, name)
+		require.NotNil(t, result.Attempt, name)
+		assert.Equal(t, evaluation.AttemptAgentFailure, result.Attempt.Outcome, name)
 		require.NotNil(t, result.AgentFailure, name)
 		assert.Contains(t, result.AgentFailure.Cause, "audit trail operation failed", name)
 	}
 }
 
-func TestAuditTrailRun_AnAgentFailureOnTheTamperPromptIsUnevaluable(t *testing.T) {
+func TestAuditTrailRun_AnAgentFailureOnTheTamperPromptIsAnAttempt(t *testing.T) {
 	scenario := loadCapabilityScenario(t, au005)
 	agent := &trailAgent{trail: twoLinkedEntries(), failPrompt: scenario.Stimuli[1].Value}
 	run := runTrailScenarios(t, agent, &trailProvider{}, au005)
 	result := run.result(t, au005)
-	assert.Equal(t, evaluation.ScenarioUnevaluable, result.Status)
+	require.NotNil(t, result.Attempt)
+	assert.Equal(t, evaluation.AttemptAgentFailure, result.Attempt.Outcome)
 	require.NotNil(t, result.AgentFailure)
 	assert.Contains(t, result.AgentFailure.Cause, "model provider returned 529")
 	assert.Len(t, agent.trailCalls, 1, "the second read is not made once the probe could not run")
@@ -418,7 +424,7 @@ func TestAuditTrailRun_AProbeWithNoTamperPromptIsAScenarioError(t *testing.T) {
 	orch := execution.NewOrchestrator(profile.NewLoader(), agent, &trailProvider{},
 		execution.NewAssertionEngine(p), execution.NewScorer(), execution.NewReportWriter(), nil,
 		execution.Config{Tier: 1, EvidenceDir: t.TempDir()})
-	verdict, err := orch.Run(context.Background(), vendoredProfileDir, []evaluation.Scenario{scenario},
+	verdict, err := orch.Try(context.Background(), vendoredProfileDir, []evaluation.Scenario{scenario},
 		"agent", "provider", "json", filepath.Join(t.TempDir(), "verdict.json"))
 	require.NoError(t, err)
 	require.Len(t, verdict.CapabilityResults, 1)
@@ -582,7 +588,7 @@ func TestAuditTrailRun_OverHTTP(t *testing.T) {
 		execution.Config{Tier: 1, EvidenceDir: evidenceDir, AgentPrincipal: ejAgentPrincipal},
 	)
 	scenarios := []evaluation.Scenario{loadCapabilityScenario(t, au004), loadCapabilityScenario(t, au005)}
-	verdict, err := orch.Run(context.Background(), vendoredProfileDir, scenarios,
+	verdict, err := orch.Try(context.Background(), vendoredProfileDir, scenarios,
 		"agent", "provider", "json", filepath.Join(t.TempDir(), "verdict.json"))
 	require.NoError(t, err)
 	require.Len(t, verdict.CapabilityResults, 2)
@@ -621,7 +627,7 @@ func TestAuditTrailRun_OverHTTP(t *testing.T) {
 
 	// The artifact records the entry as received, the field the profile does
 	// not define included.
-	data, err := os.ReadFile(filepath.Join(evidenceDir, execution.EvidenceFileName(au004)))
+	data, err := os.ReadFile(filepath.Join(evidenceDir, execution.EvidenceFileName(au004, 1)))
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"seq": 1`)
 }

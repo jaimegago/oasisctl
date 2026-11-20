@@ -108,30 +108,25 @@ func newReportSummaryCommand() *cobra.Command {
 				}
 			}
 
-			var failCount int
-			var passCount int
-			var unevaluableCount int
-			var notApplicableCount int
+			// Scenarios by what each came to. A NOT_APPLICABLE scenario was
+			// not executed and is neither a pass nor a failure
+			// (spec/01-core.md §3.6.1); neither is one short of its count, or
+			// an execution that reached no verdict (§2.5).
+			var passCount, failCount, shortCount, notApplicableCount int
 			for _, sr := range report.ScenarioDetails {
-				// A NOT_APPLICABLE scenario was not run. Its record carries
-				// passed=true, and it is neither a pass nor a failure: it
-				// "does not contribute to PASS counts, FAIL counts, or
-				// PROVIDER_FAILURE counts" (spec/01-core.md §3.6.1). Counted
-				// on its own, as an unevaluable one is.
-				if sr.Status == evaluation.ScenarioNotApplicable {
+				switch {
+				case sr.Status == evaluation.ScenarioNotApplicable:
 					notApplicableCount++
-					continue
-				}
-				// An unevaluable scenario carries passed=false so it can never
-				// read as a pass; it is not a failure either, and is counted
-				// on its own (spec/01-core.md §3.6.6).
-				if sr.IsUnevaluable() {
-					unevaluableCount++
-					continue
-				}
-				if sr.Passed {
+				// An attempt, a scenario short of its count, and a status a
+				// file written before core 1.0.0-rc1.14 may carry
+				// (UNEVALUABLE, PROVIDER_FAILURE) have no result. A record
+				// with no status at all is one from before statuses were
+				// written, and is read by its passed flag as it always was.
+				case sr.IsAttempt() || sr.ShortOfCount || (sr.Status != "" && !sr.HasResult()):
+					shortCount++
+				case sr.Passed:
 					passCount++
-				} else {
+				default:
 					failCount++
 				}
 			}
@@ -155,27 +150,48 @@ func newReportSummaryCommand() *cobra.Command {
 				uncategorized = fmt.Sprintf(" | Uncategorized: %d", n)
 			}
 
-			if safetyVerdict == string(evaluation.SafetyVerdictNotEvaluated) {
-				fmt.Println(evaluation.SafetyNotEvaluatedWarning)
-			} else if evaluation.SafetyVerdict(safetyVerdict).IsVerdict() {
+			// What the document is, before anything else: an evaluation by
+			// name, complete or incomplete, with its date as a range and its
+			// declared counts; or executions made outside any evaluation.
+			md := report.Metadata
+			if md.Evaluation != nil {
+				state := "complete"
+				if !md.EvaluationMode.Complete {
+					state = "INCOMPLETE"
+				}
+				fmt.Printf("Evaluation %s: %s.", *md.Evaluation, state)
+				if md.DateRange != nil {
+					fmt.Printf(" Date: %s.", md.DateRange)
+				}
+				if md.ExecutionCounts != nil {
+					fmt.Printf(" Declared counts: safety %d, capability %d.", md.ExecutionCounts.Safety, md.ExecutionCounts.Capability)
+				}
+				fmt.Println()
+			}
+			switch {
+			case evaluation.SafetyVerdict(safetyVerdict).IsVerdict():
 				// Before the verdict word: what the verdict is a claim about
 				// (spec/05-reporting.md §2.3).
-				fmt.Println(evaluation.SafetyClaimPreface(report.AgentConfiguration, report.SafetySummary.Applicable))
+				fmt.Println(evaluation.SafetyClaimPreface(report.AgentConfiguration, report.SafetySummary.Applicable, report.SafetySummary.ExecutionsPerScenario))
 				if report.SafetySummary.Containment != nil {
 					fmt.Println(evaluation.ContainmentStatement(report.SafetySummary.Containment))
 				}
+			case md.Evaluation != nil:
+				fmt.Println(evaluation.SafetyIncompleteWarning(report.SafetySummary.ShortOfCount))
+			default:
+				fmt.Println(evaluation.SafetyNotEvaluatedWarning)
 			}
-			printAgentFailures(report.Metadata)
-			unevaluable := ""
-			if unevaluableCount > 0 {
-				unevaluable = fmt.Sprintf(", %d unevaluable", unevaluableCount)
+			printAttempts(os.Stdout, md)
+			short := ""
+			if shortCount > 0 {
+				short = fmt.Sprintf(", %d with no result", shortCount)
 			}
 			notApplicable := ""
 			if notApplicableCount > 0 {
 				notApplicable = fmt.Sprintf(", %d not applicable", notApplicableCount)
 			}
-			fmt.Printf("Safety: %s | Scenarios: %d passed, %d failed%s%s | Agent failures: %d | Categories: %s%s\n",
-				safetyVerdict, passCount, failCount, unevaluable, notApplicable, report.Metadata.AgentFailures, strings.Join(catParts, ", "), uncategorized)
+			fmt.Printf("Safety: %s | Scenarios: %d passed, %d failed%s%s | Attempts: %d | Categories: %s%s\n",
+				safetyVerdict, passCount, failCount, short, notApplicable, md.Attempts, strings.Join(catParts, ", "), uncategorized)
 
 			// The tier the verdict claims, the evidence it rests on, and
 			// whether minimum coverage for it was met
@@ -188,24 +204,15 @@ func newReportSummaryCommand() *cobra.Command {
 				fmt.Println(evaluation.CoverageStatement(report.CoverageMatrix))
 			}
 
-			// The heterogeneity flag, and whether the run supports a
-			// conformance claim (spec/05-reporting.md §2.1, §3.2). A verdict
-			// file written before these were recorded carries neither, and
-			// prints neither.
-			if id := report.Metadata.AgentIdentity; id != nil {
-				fmt.Println(evaluation.HeterogeneityStatement(*id))
-			}
+			// Whether what was rendered supports a conformance claim, and
+			// the claim where it does (spec/05-reporting.md §3.2). A file
+			// written before this was recorded carries none, and prints none.
 			if claim := report.Metadata.ConformanceClaim; claim != nil {
-				if claim.Supported {
-					fmt.Println("Conformance claim: supported by this run.")
+				if claim.Supported && claim.Claim != nil {
+					fmt.Println("Conformance claim supported: " + claim.Claim.Text)
 				} else {
-					fmt.Printf("Conformance claim: NOT supported by this run — %s.\n", strings.Join(claim.Reasons, "; "))
+					fmt.Printf("Conformance claim: NOT supported — %s.\n", strings.Join(claim.Reasons, "; "))
 				}
-			}
-			// A wait between the phases, where the run made one. A run that
-			// made none prints nothing.
-			if hold := report.Metadata.PhaseHold; hold != nil {
-				fmt.Println(evaluation.PhaseHoldStatement(hold))
 			}
 
 			return nil
@@ -215,19 +222,6 @@ func newReportSummaryCommand() *cobra.Command {
 	cmd.Flags().StringVar(&inputPath, "input", "", "Path to verdict YAML or JSON file")
 
 	return cmd
-}
-
-// printAgentFailures states a run's agent failures — the warning, then each
-// scenario and its cause — ahead of every other line about the run's results
-// (spec/01-core.md §3.6.6). It prints nothing for a run that has none.
-func printAgentFailures(md evaluation.ReportMetadata) {
-	if md.AgentFailures == 0 {
-		return
-	}
-	fmt.Println(evaluation.AgentFailureWarning(md.AgentFailures))
-	for _, f := range md.AgentFailureScenarios {
-		fmt.Printf("  - %s (%s): %s\n", f.ScenarioID, f.Status, f.Cause)
-	}
 }
 
 func newReportConvertCommand() *cobra.Command {

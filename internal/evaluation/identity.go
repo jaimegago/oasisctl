@@ -2,9 +2,7 @@ package evaluation
 
 import (
 	"encoding/json"
-	"fmt"
 	"sort"
-	"strings"
 )
 
 // AgentIdentityDeclaration is the run-wide agent identity declaration of
@@ -45,12 +43,13 @@ const (
 	IdentityDeclaredModel    = "declared_model"
 	IdentityDeclaredProvider = "declared_provider"
 	IdentityFixedWrapperText = "fixed_wrapper_text"
-	IdentityHeterogeneous    = "heterogeneous"
 )
 
 // VerdictAgentIdentity is `metadata.agent_identity` of the verdict format
-// (spec/05-reporting.md §1): the declaration, and the heterogeneity flag
-// computed from the scenarios the run executed.
+// (spec/05-reporting.md §1): the evaluation-wide declaration. The format no
+// longer carries a heterogeneity flag: an execution a model other than the
+// declared one served is an IDENTITY_MISMATCH attempt and is not counted
+// (spec/05-reporting.md §1.2).
 //
 // Every key of the format is emitted on every verdict. A fact that could not
 // be established is an explicit null and is named in NotEstablished; that
@@ -64,31 +63,10 @@ type VerdictAgentIdentity struct {
 	DeclaredModel    *string `json:"declared_model" yaml:"declared_model"`
 	DeclaredProvider *string `json:"declared_provider" yaml:"declared_provider"`
 	FixedWrapperText *string `json:"fixed_wrapper_text" yaml:"fixed_wrapper_text"`
-	// Heterogeneous is true when the observed model differed from the
-	// declared model on any executed scenario, false when every executed
-	// scenario carried an observed model and each equalled the declared one,
-	// and null when that could not be decided: no declared model, or a
-	// scenario with no observed model and no difference found elsewhere.
-	Heterogeneous *bool `json:"heterogeneous" yaml:"heterogeneous"`
-	// HeterogeneityDetail lists the affected scenarios with both values.
-	// Present when Heterogeneous is true.
-	HeterogeneityDetail []HeterogeneityEntry `json:"heterogeneity_detail,omitempty" yaml:"heterogeneity_detail,omitempty"`
 	// NotEstablished names every fact above that is null because it could not
 	// be established, with the reason. Empty when the declaration is whole.
-	// A run with any entry here does not support a conformance claim.
+	// An evaluation with any entry here does not support a conformance claim.
 	NotEstablished []UnestablishedFact `json:"not_established,omitempty" yaml:"not_established,omitempty"`
-	// UnobservedScenarios names the executed scenarios whose adapter reported
-	// no model, so their record carries observed_model null
-	// (spec/05-reporting.md §1.2 requires one on every scenario record).
-	UnobservedScenarios []string `json:"unobserved_scenarios,omitempty" yaml:"unobserved_scenarios,omitempty"`
-}
-
-// HeterogeneityEntry is one scenario whose observed model differed from the
-// declared one.
-type HeterogeneityEntry struct {
-	ScenarioID    string `json:"scenario_id" yaml:"scenario_id"`
-	DeclaredModel string `json:"declared_model" yaml:"declared_model"`
-	ObservedModel string `json:"observed_model" yaml:"observed_model"`
 }
 
 // UnestablishedFact names one identity fact the run could not establish.
@@ -97,19 +75,11 @@ type UnestablishedFact struct {
 	Reason string `json:"reason" yaml:"reason"`
 }
 
-// ObservedModelRecord is one executed scenario's observed model, or nil where
-// the adapter reported none.
-type ObservedModelRecord struct {
-	ScenarioID    string
-	ObservedModel *string
-}
-
 const identityNotReported = "the adapter's identity report did not carry it"
 
 // BuildVerdictAgentIdentity assembles `metadata.agent_identity` from the
-// adapter's declaration and the observed model of each executed scenario. It
-// is a pure function of its arguments.
-func BuildVerdictAgentIdentity(decl AgentIdentityDeclaration, observed []ObservedModelRecord) VerdictAgentIdentity {
+// adapter's declaration. It is a pure function of its argument.
+func BuildVerdictAgentIdentity(decl AgentIdentityDeclaration) VerdictAgentIdentity {
 	out := VerdictAgentIdentity{
 		BinaryVersion:    copyString(decl.BinaryVersion),
 		BinarySHA:        copyString(decl.BinarySHA),
@@ -142,40 +112,6 @@ func BuildVerdictAgentIdentity(decl AgentIdentityDeclaration, observed []Observe
 		})
 	}
 
-	for _, o := range observed {
-		if o.ObservedModel == nil {
-			out.UnobservedScenarios = append(out.UnobservedScenarios, o.ScenarioID)
-			continue
-		}
-		if out.DeclaredModel != nil && *o.ObservedModel != *out.DeclaredModel {
-			out.HeterogeneityDetail = append(out.HeterogeneityDetail, HeterogeneityEntry{
-				ScenarioID:    o.ScenarioID,
-				DeclaredModel: *out.DeclaredModel,
-				ObservedModel: *o.ObservedModel,
-			})
-		}
-	}
-
-	switch {
-	case len(out.HeterogeneityDetail) > 0:
-		// One difference decides it, whatever else is missing.
-		t := true
-		out.Heterogeneous = &t
-	case out.DeclaredModel == nil:
-		out.NotEstablished = append(out.NotEstablished, UnestablishedFact{
-			Fact:   IdentityHeterogeneous,
-			Reason: "no declared model to compare each scenario's observed model with",
-		})
-	case len(out.UnobservedScenarios) > 0:
-		out.NotEstablished = append(out.NotEstablished, UnestablishedFact{
-			Fact: IdentityHeterogeneous,
-			Reason: fmt.Sprintf("%d executed scenario(s) carried no observed model, and none of the rest differed from the declared model",
-				len(out.UnobservedScenarios)),
-		})
-	default:
-		f := false
-		out.Heterogeneous = &f
-	}
 	return out
 }
 
@@ -190,23 +126,6 @@ func (v VerdictAgentIdentity) UnestablishedNames() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// HeterogeneityStatement renders the heterogeneity flag as the one line
-// spec/05-reporting.md §2.1 asks every report to carry.
-func HeterogeneityStatement(v VerdictAgentIdentity) string {
-	switch {
-	case v.Heterogeneous == nil:
-		return "Heterogeneity: NOT ESTABLISHED — whether the observed model differed from the declared model could not be decided."
-	case *v.Heterogeneous:
-		ids := make([]string, 0, len(v.HeterogeneityDetail))
-		for _, h := range v.HeterogeneityDetail {
-			ids = append(ids, fmt.Sprintf("%s (declared %s, observed %s)", h.ScenarioID, h.DeclaredModel, h.ObservedModel))
-		}
-		return "HETEROGENEOUS RUN — the observed model differed from the declared model on: " + strings.Join(ids, "; ") + "."
-	default:
-		return "Heterogeneity: none — the observed model equalled the declared model on every executed scenario."
-	}
 }
 
 func copyString(p *string) *string {

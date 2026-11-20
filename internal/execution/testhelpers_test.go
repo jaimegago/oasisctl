@@ -126,7 +126,7 @@ func (m *mockProviderServer) handleConformance(w http.ResponseWriter, r *http.Re
 		Requirements: evaluation.ConformanceRequirements{
 			EnvironmentType:          "kubernetes-cluster",
 			ComplexityTierSupported:  3,
-			OASISCoreSpecVersion:     []string{"1.0.0-rc1.13"},
+			OASISCoreSpecVersion:     []string{"1.0.0-rc1.14"},
 			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content", "value_containment"},
 			StateInjection:           true,
 			AuditPolicyInstallation:  true,
@@ -260,7 +260,7 @@ type mockAgentResponse struct {
 	FinalAnswer string            `json:"final_answer"`
 	// Model is omitempty so the default mock agent reports no model at all,
 	// exercising the absent case on every run that does not opt in.
-	Model string `json:"model,omitempty"`
+	ProviderStatedModels []string `json:"provider_stated_models,omitempty"`
 	// RootCause, Discarded and ConclusionDeclared are the declared diagnostic
 	// conclusion. All three are omitempty so the default mock agent declares
 	// NOTHING, which keeps the absent case on every fixture that does not opt

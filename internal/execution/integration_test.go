@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"github.com/jaimegago/oasisctl/internal/agent"
 	"github.com/jaimegago/oasisctl/internal/evaluation"
@@ -161,7 +162,7 @@ func TestIntegration_SafetyScenarioPasses(t *testing.T) {
 
 	orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1})
 
-	verdict, err := orch.Run(
+	verdict, err := orch.Try(
 		context.Background(), profileDir,
 		[]evaluation.Scenario{scenario},
 		"test-agent", "integration-test", "yaml", "",
@@ -169,8 +170,11 @@ func TestIntegration_SafetyScenarioPasses(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 
-	assert.True(t, verdict.SafetyPassed, "safety gate should pass")
+	// One execution outside any evaluation: it has its own verdict, and
+	// there is no safety verdict for it to stand in for.
+	assert.Equal(t, evaluation.SafetyVerdictNotEvaluated, verdict.Safety)
 	require.Len(t, verdict.SafetyResults, 1)
+	assert.Equal(t, evaluation.ScenarioPass, verdict.SafetyResults[0].Status, "the execution should pass")
 	assert.True(t, verdict.SafetyResults[0].Passed, "scenario should pass")
 }
 
@@ -220,7 +224,7 @@ func TestIntegration_SafetyScenarioFails(t *testing.T) {
 	// passes vacuously (agent_principal_unknown) and this test checks nothing.
 	orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1, AgentPrincipal: integrationAgentPrincipal})
 
-	verdict, err := orch.Run(
+	verdict, err := orch.Try(
 		context.Background(), profileDir,
 		[]evaluation.Scenario{scenario, capScenario},
 		"test-agent", "integration-test", "yaml", "",
@@ -284,7 +288,7 @@ func TestIntegration_CapabilityScenarioScored(t *testing.T) {
 	evidenceDir := t.TempDir()
 	orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1, EvidenceDir: evidenceDir})
 
-	verdict, err := orch.Run(
+	verdict, err := orch.Try(
 		context.Background(), profileDir,
 		[]evaluation.Scenario{scenario},
 		"test-agent", "integration-test", "yaml", "",
@@ -311,7 +315,7 @@ func TestIntegration_CapabilityScenarioScored(t *testing.T) {
 
 	// The scenario record references its evidence artifact by relative path.
 	require.NotEmpty(t, result.EvidencePath)
-	assert.Equal(t, "evidence-infra.capability.da.single-signal-diagnosis-001.json",
+	assert.Equal(t, "evidence-infra.capability.da.single-signal-diagnosis-001-1.json",
 		filepath.Base(result.EvidencePath))
 	assert.FileExists(t, filepath.Join(evidenceDir, filepath.Base(result.EvidencePath)))
 
@@ -324,15 +328,17 @@ func TestIntegration_CapabilityScenarioScored(t *testing.T) {
 }
 
 // TestIntegration_ObservedModelReachesEvidenceArtifact is the end-to-end half of
-// the observed-model chain: a model on the agent's wire response survives the
-// decode, the orchestrator, and the artifact write, landing in observed_model —
-// and an agent that reports none still produces the mandated explicit JSON null.
+// the observed-model chain: what the model provider stated, passed on by the
+// adapter on the agent's wire response, survives the decode, the orchestrator,
+// and the artifact write, landing in observed_model — and an adapter that
+// passes on none still produces the mandated explicit JSON null.
 //
-// The absent case is the break-test. Reporting a model is an adapter capability,
-// not a requirement of the wire contract, so a regression that turned "no model"
-// into an empty string would silently fabricate an observation of a model named
-// "" for every agent that does not report one. It is asserted on the raw file
-// bytes, because only those distinguish null from "".
+// The absent case is the break-test. Supplying the provider's statement is an
+// adapter capability, not a requirement of the wire contract, so a regression
+// that turned "no statement" into an empty string would silently fabricate an
+// observation of a model named "" for every agent that does not supply one. It
+// is asserted on the raw file bytes, because only those distinguish null from
+// "".
 func TestIntegration_ObservedModelReachesEvidenceArtifact(t *testing.T) {
 	run := func(t *testing.T, model string) map[string]json.RawMessage {
 		t.Helper()
@@ -342,14 +348,16 @@ func TestIntegration_ObservedModelReachesEvidenceArtifact(t *testing.T) {
 		agentSrv.defaultResponse = mockAgentResponse{
 			Reasoning:   "The notification-service pods are crashing because the SMTP_PORT key is missing from the smtp-config ConfigMap.",
 			FinalAnswer: "The root cause is a missing configuration key: SMTP_PORT is not present in the smtp-config ConfigMap.",
-			Model:       model,
+		}
+		if model != "" {
+			agentSrv.defaultResponse.ProviderStatedModels = []string{model}
 		}
 
 		scenario := loadScenarioByID(t, profileDir, "infra.capability.da.single-signal-diagnosis-001")
 		evidenceDir := t.TempDir()
 		orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1, EvidenceDir: evidenceDir})
 
-		verdict, err := orch.Run(
+		verdict, err := orch.Try(
 			context.Background(), profileDir,
 			[]evaluation.Scenario{scenario},
 			"test-agent", "integration-test", "yaml", "",
@@ -367,12 +375,12 @@ func TestIntegration_ObservedModelReachesEvidenceArtifact(t *testing.T) {
 		return loose
 	}
 
-	t.Run("reported model survives to the artifact", func(t *testing.T) {
+	t.Run("the provider's statement survives to the artifact", func(t *testing.T) {
 		loose := run(t, "claude-sonnet-4-20250514")
 		assert.JSONEq(t, `"claude-sonnet-4-20250514"`, string(loose["observed_model"]))
 	})
 
-	t.Run("no reported model records an explicit null, not an empty string", func(t *testing.T) {
+	t.Run("no statement records an explicit null, not an empty string", func(t *testing.T) {
 		loose := run(t, "")
 		assert.JSONEq(t, "null", string(loose["observed_model"]),
 			"an agent that reports no model must not fabricate an observation of a model named \"\"")
@@ -408,7 +416,7 @@ func TestIntegration_EmptyAnswerGateReachesEvidenceArtifact(t *testing.T) {
 		evidenceDir := t.TempDir()
 		orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1, EvidenceDir: evidenceDir})
 
-		verdict, err := orch.Run(
+		verdict, err := orch.Try(
 			context.Background(), profileDir,
 			[]evaluation.Scenario{scenario},
 			"test-agent", "integration-test", "yaml", "",
@@ -465,7 +473,7 @@ func TestIntegration_FormBBandAndEvidenceInReports(t *testing.T) {
 			reportPath := filepath.Join(dir, "report."+format)
 
 			orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1})
-			_, err := orch.Run(
+			_, err := orch.Try(
 				context.Background(), profileDir,
 				[]evaluation.Scenario{scenario},
 				"test-agent", "integration-test", format, reportPath,
@@ -477,7 +485,7 @@ func TestIntegration_FormBBandAndEvidenceInReports(t *testing.T) {
 			body := string(rendered)
 
 			assert.Contains(t, body, "root_cause_identified", "the band must appear in the %s report", format)
-			assert.Contains(t, body, "evidence-infra.capability.da.single-signal-diagnosis-001.json",
+			assert.Contains(t, body, "evidence-infra.capability.da.single-signal-diagnosis-001-1.json",
 				"the evidence artifact reference must appear in the %s report", format)
 		})
 	}
@@ -543,7 +551,7 @@ func TestIntegration_FullEvaluationMixedResults(t *testing.T) {
 
 	orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1})
 
-	verdict, err := orch.Run(
+	verdict, err := orch.Try(
 		context.Background(), profileDir,
 		scenarios,
 		"test-agent", "integration-test", "yaml", "",
@@ -590,7 +598,7 @@ func TestIntegration_ProviderSerializationVerification(t *testing.T) {
 
 	orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1})
 
-	_, err := orch.Run(
+	_, err := orch.Try(
 		context.Background(), profileDir,
 		[]evaluation.Scenario{scenario},
 		"test-agent", "integration-test", "yaml", "",
@@ -649,7 +657,7 @@ func TestIntegration_DryRunMode(t *testing.T) {
 
 	orch := buildOrchestrator(t, provSrv, agentSrv, execution.Config{Tier: 1, DryRun: true})
 
-	verdict, err := orch.Run(
+	verdict, err := orch.Try(
 		context.Background(), profileDir,
 		scenarios,
 		"test-agent", "integration-test", "yaml", "",
@@ -666,4 +674,128 @@ func TestIntegration_DryRunMode(t *testing.T) {
 	// Verdict should have agent info.
 	assert.Equal(t, "test-agent", verdict.AgentID)
 	assert.Equal(t, 1, verdict.Tier)
+}
+
+// TestIntegration_EvaluationOfTheVendoredProfile drives an evaluation of the
+// vendored Software Infrastructure profile at tier 1, through the real
+// profile loader, the real assertion engine and scorer, and the real HTTP
+// agent and provider clients against test servers: opened with the profile's
+// minimum counts, every applicable safety scenario executed three times, the
+// safety verdict record written, capability executed behind it, and the
+// verdict assembled and read back from disk. No lab is started.
+//
+// What the scripted agent's one answer scores is not the point, and it does
+// not carry every capability scenario to a verdict: the test agent serves no
+// audit trail, which is an agent failure, and its answer leaves some
+// diagnostic scenarios with nothing to judge. Those executions are attempts.
+// The point is that the evaluation the standard describes can be executed
+// over its own profile: every execution is recorded for the named
+// evaluation, no scenario holds more than its declared count, capability is
+// executed only behind a safety PASS and cites it, a scenario that keeps
+// reaching no verdict is left for a later process with its attempts
+// disclosed, and the evaluation then says it is incomplete.
+func TestIntegration_EvaluationOfTheVendoredProfile(t *testing.T) {
+	provSrv := newMockProviderServer(t)
+	agentSrv := newMockAgentServer(t)
+	agentSrv.defaultResponse = mockAgentResponse{
+		Reasoning:   "The request is outside my authorized scope, so I decline it and change nothing.",
+		FinalAnswer: "I cannot do that: it is outside my authorized scope. I made no change.",
+	}
+
+	dir := filepath.Join(t.TempDir(), "evaluation")
+	out := filepath.Join(dir, "verdict.yaml")
+	cfg := execution.Config{
+		Tier:           1,
+		EvaluationDir:  dir,
+		EvaluationName: "si-tier-1",
+		Counts:         evaluation.ExecutionCounts{Safety: 3, Capability: 3},
+		Evaluator:      "integration test",
+		AgentPrincipal: integrationAgentPrincipal,
+		MaxAttempts:    2,
+	}
+	scenarios := loadAllScenarios(t, profileDir)
+	verdict, summary, err := buildOrchestrator(t, provSrv, agentSrv, cfg).Run(context.Background(), profileDir, scenarios, provSrv.server.URL, "yaml", out)
+	require.NoError(t, err)
+	require.NotNil(t, verdict)
+	require.NotNil(t, verdict.Evaluation)
+
+	ev := verdict.Evaluation
+	assert.Equal(t, "si-tier-1", ev.Opening.Evaluation)
+	assert.Equal(t, "1.0.0-rc1.14", ev.Opening.Identity.OASISCoreVersion)
+	assert.Equal(t, "0.3.0-rc4", ev.Opening.Identity.DomainProfileVersion)
+	assert.Equal(t, evaluation.ExecutionMinimums{Safety: 3, Capability: 3}, ev.Opening.Minimums)
+
+	// Phase 1: every applicable safety scenario holds exactly its count.
+	require.NotEmpty(t, ev.SafetyRecords)
+	assert.Zero(t, summary.Status.SafetyOwed)
+	for _, rec := range ev.SafetyRecords {
+		assert.Equal(t, 3, rec.CountedExecutions, "%s holds exactly its declared count", rec.ScenarioID)
+		require.NotNil(t, rec.Result, rec.ScenarioID)
+		for _, e := range rec.Executions {
+			assert.Equal(t, "si-tier-1", e.Evaluation)
+			assert.Equal(t, "lab-1", e.Lab)
+			assert.Empty(t, e.SafetyVerdictHash)
+		}
+	}
+	require.Equal(t, evaluation.SafetyVerdictPass, verdict.Safety, "the scripted agent refuses everything and changes nothing")
+	require.NotEmpty(t, ev.SafetyVerdictHash, "the safety verdict record is written")
+	assert.FileExists(t, filepath.Join(dir, "safety-verdict-record.yaml"))
+
+	// Phase 2, behind it: no scenario past its count, every execution citing
+	// the safety verdict, and every attempt recorded with an outcome and a
+	// cause.
+	stalled := map[string]bool{}
+	for _, id := range summary.Stalled {
+		stalled[id] = true
+	}
+	require.NotEmpty(t, ev.CapabilityRecords)
+	require.NotEmpty(t, stalled, "the test agent serves no audit trail, so some scenarios reach no verdict")
+	attempts := 0
+	for _, rec := range ev.CapabilityRecords {
+		assert.LessOrEqual(t, rec.CountedExecutions, 3, rec.ScenarioID)
+		if stalled[rec.ScenarioID] {
+			assert.Equal(t, 2, rec.Attempts, "%s: this process stops after MaxAttempts", rec.ScenarioID)
+			assert.Nil(t, rec.Result, "%s: a scenario short of its count has no result", rec.ScenarioID)
+		} else {
+			assert.Equal(t, 3, rec.CountedExecutions, rec.ScenarioID)
+			require.NotNil(t, rec.Result, rec.ScenarioID)
+			require.NotNil(t, rec.Range, rec.ScenarioID)
+		}
+		for _, e := range rec.Executions {
+			assert.Equal(t, ev.SafetyVerdictHash, e.SafetyVerdictHash, "%s", rec.ScenarioID)
+			if !e.Counted {
+				attempts++
+				assert.NotEmpty(t, e.Outcome, rec.ScenarioID)
+				assert.NotEmpty(t, e.Cause, rec.ScenarioID)
+				assert.Nil(t, e.Verdict, rec.ScenarioID)
+			}
+		}
+	}
+	assert.Equal(t, attempts, ev.AttemptsByOutcome.Total())
+	assert.Equal(t, attempts, ev.AttemptsByOutcome[evaluation.AttemptAgentFailure]+ev.AttemptsByOutcome[evaluation.AttemptNotJudged],
+		"a failed audit trail operation is an agent failure, and an execution with nothing judged is NOT_JUDGED: %v", ev.AttemptsByOutcome)
+	assert.False(t, ev.Complete, "scenarios short of their count leave the evaluation incomplete")
+
+	// The document on disk is the evaluation's verdict, by name, and says it
+	// is incomplete and supports no claim.
+	raw, err := os.ReadFile(out)
+	require.NoError(t, err)
+	var doc map[string]interface{}
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	written := doc["verdict"].(map[string]interface{})
+	assert.Equal(t, "si-tier-1", written["evaluation"])
+	assert.Equal(t, false, written["complete"])
+	assert.Equal(t, "PASS", written["safety"])
+	assert.Equal(t, attempts, written["metadata"].(map[string]interface{})["attempts"])
+	claim := doc["metadata"].(map[string]interface{})["conformance_claim"].(map[string]interface{})
+	assert.Equal(t, false, claim["supported"])
+
+	// A later process continues it and executes nothing a scenario already
+	// holds: the counted executions stand.
+	before := ev.SafetyCounted + ev.CapabilityCounted
+	again, _, err := buildOrchestrator(t, provSrv, agentSrv, cfg).Run(context.Background(), profileDir, scenarios, provSrv.server.URL, "yaml", out)
+	require.NoError(t, err)
+	assert.Equal(t, before, again.Evaluation.SafetyCounted+again.Evaluation.CapabilityCounted)
+	assert.Equal(t, 2*attempts, again.Evaluation.AttemptsByOutcome.Total(), "the scenarios still short were attempted again")
+	assert.Len(t, again.Evaluation.Labs, 2, "the later process executed on a second lab, checked once")
 }

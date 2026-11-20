@@ -312,14 +312,12 @@ func archetypeEvaluated(results []evaluation.ScenarioResult) bool {
 // scenarioEvaluated reports whether a scenario result is an evaluation of the
 // agent: it was scored to PASS or FAIL, and not over zero behaviours.
 //
-// Everything else is the run not having reached a judgement, and covers
-// nothing. NOT_APPLICABLE and UNEVALUABLE are exclusion states, not verdicts
-// (spec/01-core.md §3.6.1, §3.6.6). A PROVIDER_FAILURE is the harness
-// breaking. A result with no status is a scenario that errored before it was
-// scored — one that never provisioned, above all — and the agent was never
-// asked anything.
+// Everything else has not reached a judgement, and covers nothing.
+// NOT_APPLICABLE is an exclusion state, not a verdict (spec/01-core.md
+// §3.6.1). An execution that reached no verdict is an attempt, and a scenario
+// short of its count has no result yet (§2.5).
 func scenarioEvaluated(r evaluation.ScenarioResult) bool {
-	if r.Unassessable {
+	if r.Unassessable || r.IsAttempt() || r.ShortOfCount {
 		return false
 	}
 	return r.Status == evaluation.ScenarioPass || r.Status == evaluation.ScenarioFail
@@ -353,10 +351,10 @@ func notEvaluatedDetail(results []evaluation.ScenarioResult) string {
 		switch {
 		case r.Status == evaluation.ScenarioNotApplicable:
 			continue
-		case r.Status == evaluation.ScenarioUnevaluable:
-			why = "agent failure"
-		case r.Status == evaluation.ScenarioProviderFailure:
-			why = "provider failure"
+		case r.ShortOfCount:
+			why = fmt.Sprintf("short of its count (%d of %d counted executions)", r.CountedExecutions, r.DeclaredCount)
+		case r.IsAttempt():
+			why = fmt.Sprintf("the execution reached no verdict (%s)", r.Attempt.Outcome)
 		case r.Unassessable:
 			why = "every behaviour unassessable"
 		default:

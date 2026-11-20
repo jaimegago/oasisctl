@@ -8,100 +8,48 @@ import (
 	"github.com/jaimegago/oasisctl/internal/evaluation"
 )
 
-// executed reports whether a scenario was executed: it has a result other
-// than NOT_APPLICABLE. A scenario the configuration excluded was never
-// provisioned and has no scenario record.
-func executed(r evaluation.ScenarioResult) bool {
-	return r.Status != evaluation.ScenarioNotApplicable
-}
-
-// observedModels returns the observed model of each executed scenario, in run
-// order, safety first. It is what the heterogeneity flag is computed from
-// (spec/05-reporting.md §1.2).
-func observedModels(v *evaluation.Verdict) []evaluation.ObservedModelRecord {
-	var out []evaluation.ObservedModelRecord
-	for _, rs := range [][]evaluation.ScenarioResult{v.SafetyResults, v.CapabilityResults} {
-		for _, r := range rs {
-			if !executed(r) {
-				continue
-			}
-			rec := evaluation.ObservedModelRecord{ScenarioID: r.ScenarioID}
-			if r.Execution != nil {
-				rec.ObservedModel = r.Execution.ObservedModel
-			}
-			out = append(out, rec)
-		}
-	}
-	return out
-}
-
-// agentPrincipals returns, for each environment the run provisioned, the
-// principal the agent authenticated as, as the provider declared it, or null
-// (spec/05-reporting.md §1.2, environment identity). An environment whose
-// principal was not established is listed with a null rather than left out.
-func agentPrincipals(v *evaluation.Verdict) []evaluation.EnvironmentPrincipal {
-	out := []evaluation.EnvironmentPrincipal{}
-	for _, rs := range [][]evaluation.ScenarioResult{v.SafetyResults, v.CapabilityResults} {
-		for _, r := range rs {
-			if r.Execution == nil || r.Execution.Preconditions == nil {
-				continue
-			}
-			out = append(out, evaluation.EnvironmentPrincipal{
-				ScenarioID:     r.ScenarioID,
-				EnvironmentID:  r.Execution.Preconditions.EnvironmentID,
-				AgentPrincipal: r.Execution.AgentPrincipal,
-			})
-		}
-	}
-	return out
-}
-
 // buildStandardVerdict assembles the verdict in the format of
-// spec/05-reporting.md §1 from the run and the report built from it. It reads
-// counts from the report's summaries rather than recounting, so the verdict
-// and the report published beside it cannot disagree.
+// spec/05-reporting.md §1 from the assembled evaluation and the report built
+// from it. It reads counts from the report's summaries rather than
+// recounting, so the verdict and the report published beside it cannot
+// disagree. It is called only for an evaluation: executions made outside one
+// have no verdict to emit.
 func buildStandardVerdict(v *evaluation.Verdict, r *evaluation.Report) *evaluation.StandardVerdict {
+	ev := v.Evaluation
+	opening := ev.Opening
+	id := opening.Identity
 	ss := r.SafetySummary
 
-	safetyExcludedByTier, safetyNotRun := 0, 0
-	for _, s := range v.SuiteCounts.ExcludedByTier {
+	safetyExcludedByTier := 0
+	for _, s := range opening.ExcludedByTier {
 		if s.Classification == evaluation.ClassificationSafety {
 			safetyExcludedByTier++
 		}
 	}
-	for _, s := range v.SuiteCounts.NotRun {
-		if s.Classification == evaluation.ClassificationSafety {
-			safetyNotRun++
-		}
-	}
 
 	details := evaluation.VerdictSafetyDetails{
-		TotalScenarios:    len(v.SafetyResults) + safetyExcludedByTier + safetyNotRun,
-		Applicable:        ss.Applicable,
-		NotApplicable:     ss.NotApplicable,
-		Passed:            ss.PassedCount,
-		Failed:            ss.Failed,
-		ProviderFailure:   ss.ProviderFailures,
-		ToleranceAdjusted: ss.ToleranceAdjusted,
-		Failures:          []evaluation.VerdictFailure{},
-		ProviderFailures:  []evaluation.VerdictProviderFailure{},
-		Containment:       ss.Containment,
-		HumanReview:       ss.HumanReview,
-		Unevaluable:       len(ss.UnevaluableIDs),
-		ExcludedByTier:    safetyExcludedByTier,
-		NotRun:            safetyNotRun,
+		ExecutionsPerScenario: opening.ExecutionCounts.Safety,
+		TotalScenarios:        ss.Applicable + ss.NotApplicable + safetyExcludedByTier,
+		Applicable:            ss.Applicable,
+		NotApplicable:         ss.NotApplicable,
+		Passed:                ss.PassedCount,
+		Failed:                ss.Failed,
+		ShortOfCount:          ss.ShortOfCount,
+		CountedExecutions:     ss.CountedExecutions,
+		Attempts:              ss.Attempts,
+		ToleranceAdjusted:     ss.ToleranceAdjusted,
+		Failures:              []evaluation.VerdictFailure{},
+		VerdictRecord:         ev.SafetyVerdictRecord,
+		VerdictRecordHash:     ev.SafetyVerdictHash,
+		Containment:           ss.Containment,
+		HumanReview:           ss.HumanReview,
+		ExcludedByTier:        safetyExcludedByTier,
 	}
 	if details.HumanReview == nil {
 		details.HumanReview = []evaluation.HumanReviewEntry{}
 	}
 	for _, sr := range v.SafetyResults {
-		switch {
-		case sr.Status == evaluation.ScenarioNotApplicable || sr.IsUnevaluable():
-		case sr.Status == evaluation.ScenarioProviderFailure:
-			details.ProviderFailures = append(details.ProviderFailures, evaluation.VerdictProviderFailure{
-				ScenarioID: sr.ScenarioID, Cause: firstLine(sr.Evidence, sr.Errors),
-			})
-		case !sr.Passed:
+		if sr.Status == evaluation.ScenarioFail {
 			details.Failures = append(details.Failures, evaluation.VerdictFailure{
 				ScenarioID: sr.ScenarioID, Description: failureDescription(sr),
 			})
@@ -114,72 +62,65 @@ func buildStandardVerdict(v *evaluation.Verdict, r *evaluation.Report) *evaluati
 				details.SubcategoryResults[sub.Category] = map[string]evaluation.VerdictSubcategoryResult{}
 			}
 			details.SubcategoryResults[sub.Category][name] = evaluation.VerdictSubcategoryResult{
-				Total: sub.Total, Passed: sub.Passed, Failed: sub.Failed, ProviderFailure: sub.ProviderFailure,
+				Total: sub.Total, Passed: sub.Passed, Failed: sub.Failed, ShortOfCount: sub.ShortOfCount,
 			}
 		}
 	}
 
 	out := &evaluation.StandardVerdict{
-		Safety:          v.Safety,
-		SafetyDetails:   details,
-		ScenarioRecords: []evaluation.ScenarioRecord{},
+		Evaluation:    opening.Evaluation,
+		Complete:      ev.Complete,
+		Safety:        v.Safety,
+		SafetyDetails: details,
+		Scenarios:     []evaluation.ScenarioRecord{},
 	}
+	out.Scenarios = append(out.Scenarios, ev.SafetyRecords...)
+	out.Scenarios = append(out.Scenarios, ev.CapabilityRecords...)
 
-	// `capability` is present only if safety = PASS. A run that evaluated no
-	// safety scenario may still score capability (spec/01-core.md §3.6.5),
-	// and the report's capability_summary carries those figures; the verdict
-	// does not, because it has no safety verdict for them to stand behind.
-	if v.Safety == evaluation.SafetyVerdictPass && r.CapabilitySummary != nil {
+	// `capability` is present only if safety = PASS.
+	if v.Safety == evaluation.SafetyVerdictPass {
 		out.Capability = buildVerdictCapability(v, r)
 	}
 
-	md := r.Metadata
+	labs := []evaluation.VerdictLab{}
+	for _, lab := range ev.Labs {
+		entry := evaluation.VerdictLab{Lab: lab.Lab, CreatedAt: lab.CreatedAt, TierEvidence: lab.TierEvidenceSummary}
+		if lab.ConformanceCheck != nil {
+			entry.ConformanceCheck = lab.ConformanceCheck.Summary
+		}
+		labs = append(labs, entry)
+	}
+
+	agentConfiguration := id.AgentConfiguration
+	if agentConfiguration == nil {
+		agentConfiguration = evaluation.AgentConfiguration{}
+	}
 	out.Metadata = evaluation.VerdictMetadata{
-		Agent:                md.AgentName,
-		AgentVersion:         md.AgentVersion,
-		AgentConfiguration:   v.AgentConfiguration,
-		DomainProfile:        md.ProfileName,
-		DomainProfileVersion: md.ProfileVersion,
-		OASISCoreVersion:     coreVersion(md.OASISCoreSpec),
+		Agent:                    id.Agent,
+		AgentVersion:             id.AgentVersion,
+		AgentIdentity:            id.AgentIdentity,
+		AgentConfiguration:       agentConfiguration,
+		DomainProfile:            id.DomainProfile,
+		DomainProfileVersion:     id.DomainProfileVersion,
+		OASISCoreVersion:         id.OASISCoreVersion,
+		EvaluationImplementation: id.EvaluationImplementation,
 		Environment: evaluation.VerdictEnvironment{
-			Provider:        v.Provider.Name,
-			ProviderVersion: v.Provider.Version,
-			Tier:            v.Tier,
-			TierEvidence:    r.Environment.Evidence,
-			AgentPrincipals: r.Environment.AgentPrincipals,
+			Provider:        id.Environment.Provider,
+			ProviderVersion: id.Environment.ProviderVersion,
+			Tier:            id.Environment.Tier,
+			Labs:            labs,
+			ScenarioFigures: scenarioFiguresSummary(r.Environment.ScenarioFigures),
 		},
-		Evaluator:     md.Evaluator,
-		Timestamp:     md.Date,
-		Duration:      md.DurationSeconds,
-		Aborted:       md.Aborted,
-		AbortReason:   md.AbortReason,
-		AgentFailures: md.AgentFailures,
-		// The format's entry is the scenario and its cause; the status the
-		// report's own list also carries is on the scenario record.
-		AgentFailureScenarios: md.AgentFailureScenarios,
-		PhaseHold:             md.PhaseHold,
-	}
-	if out.Metadata.AgentConfiguration == nil {
-		out.Metadata.AgentConfiguration = evaluation.AgentConfiguration{}
-	}
-	if md.AgentIdentity != nil {
-		out.Metadata.AgentIdentity = *md.AgentIdentity
-	}
-	if md.EvaluationImplementation != nil {
-		out.Metadata.EvaluationImplementation = *md.EvaluationImplementation
-	}
-	if md.ConformanceCheck != nil {
-		out.Metadata.Environment.ConformanceCheck = md.ConformanceCheck.Summary
-	}
-	for _, sr := range v.SafetyResults {
-		if executed(sr) {
-			out.Metadata.ScenarioCount.Safety++
-		}
-	}
-	for _, sr := range v.CapabilityResults {
-		if executed(sr) {
-			out.Metadata.ScenarioCount.Capability++
-		}
+		Evaluator:       id.Evaluator,
+		OpenedAt:        opening.OpenedAt,
+		DateRange:       ev.DateRange,
+		ExecutionCounts: opening.ExecutionCounts,
+		ScenarioCount: evaluation.ScenarioCount{
+			Safety:     len(ev.SafetyRecords),
+			Capability: len(ev.CapabilityRecords),
+		},
+		Attempts:          ev.AttemptsByOutcome.Total(),
+		AttemptsByOutcome: ev.AttemptsByOutcome,
 	}
 
 	cov := evaluation.VerdictConfigurationCoverage{
@@ -190,27 +131,24 @@ func buildStandardVerdict(v *evaluation.Verdict, r *evaluation.Report) *evaluati
 		cov.TotalScenarios = c.TotalScenarios
 		cov.Applicable = c.Applicable
 		cov.NotApplicable = c.NotApplicable
-		cov.Unevaluable = c.Unevaluable
 		cov.ExcludedByTier = c.ExcludedByTier
-		cov.NotRun = c.NotRun
 		for k, n := range c.NotApplicableByCategory {
 			cov.NotApplicableByCategory[k] = n
 		}
 		cov.Warnings = append(cov.Warnings, c.Warnings...)
 	}
 	out.Metadata.ConfigurationCoverage = cov
-
-	for _, sr := range v.SafetyResults {
-		if executed(sr) {
-			out.ScenarioRecords = append(out.ScenarioRecords, scenarioRecord(sr, false))
-		}
-	}
-	for _, sr := range v.CapabilityResults {
-		if executed(sr) {
-			out.ScenarioRecords = append(out.ScenarioRecords, scenarioRecord(sr, true))
-		}
-	}
 	return out
+}
+
+// scenarioFiguresSummary renders, in one line, the tier figures the
+// evaluator judged from the scenarios executed.
+func scenarioFiguresSummary(figures []evaluation.TierCheck) string {
+	parts := make([]string, 0, len(figures))
+	for _, f := range figures {
+		parts = append(parts, fmt.Sprintf("%s: %s (%s)", f.Requirement, f.Observed, f.Status))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // coreVersion renders the profile's OASIS core dependency as the bare version
@@ -221,38 +159,57 @@ func coreVersion(dependency string) string {
 	return strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(dependency), "≥>=~^ "))
 }
 
-// buildVerdictCapability assembles `capability`.
+// buildVerdictCapability assembles `capability`. Every score in it is the
+// mean of the scores computed from the complete sets of paired executions,
+// and carries their range (spec/01-core.md §4.3). With no complete set there
+// is no score to carry: the categories are empty and every core dimension is
+// null and named as dropped.
 func buildVerdictCapability(v *evaluation.Verdict, r *evaluation.Report) *evaluation.VerdictCapability {
+	ev := v.Evaluation
 	c := &evaluation.VerdictCapability{
-		Tier:             v.Tier,
-		DomainCategories: map[string]evaluation.VerdictCategory{},
-		CoreDimensions:   map[string]*float64{},
+		ExecutionsPerScenario: ev.Opening.ExecutionCounts.Capability,
+		Tier:                  v.Tier,
+		CountedExecutions:     ev.CapabilityCounted,
+		Attempts:              ev.CapabilityAttempts,
+		CompleteSets:          ev.CompleteSets,
+		DomainCategories:      map[string]evaluation.VerdictCategory{},
+		CoreDimensions:        map[string]*evaluation.VerdictDimension{},
 	}
-	for name, cs := range r.CapabilitySummary.DomainCategories {
+	for name, cs := range v.CategoryScores {
+		if cs.Range == nil {
+			continue
+		}
 		dims := cs.MapsToDimensions
 		if dims == nil {
 			dims = []string{}
 		}
 		c.DomainCategories[name] = evaluation.VerdictCategory{
-			Score: cs.Score, ArchetypesEvaluated: cs.ArchetypesEvaluated, MapsToDimensions: dims,
+			Score: cs.Score, Range: *cs.Range, ArchetypesEvaluated: cs.ArchetypesEvaluated, MapsToDimensions: dims,
 		}
 	}
 
 	// Every dimension the profile declares is a key. One with no score is an
 	// explicit null and is named as dropped, with why.
-	for _, d := range r.CapabilitySummary.DimensionDetail {
-		c.CoreDimensions[d.Dimension] = d.Score
-		if d.Dropped {
-			c.DroppedDimensions = append(c.DroppedDimensions, evaluation.DroppedDimension{
-				Dimension: d.Dimension, Reason: d.DroppedReason,
-			})
+	for _, d := range v.DimensionDetail {
+		if d.Score != nil && d.Range != nil {
+			c.CoreDimensions[d.Dimension] = &evaluation.VerdictDimension{Score: *d.Score, Range: *d.Range}
+			continue
 		}
+		c.CoreDimensions[d.Dimension] = nil
+		reason := d.DroppedReason
+		if ev.CompleteSets == 0 {
+			reason = "no complete set of paired capability executions yet, so there is no score to report"
+		}
+		c.DroppedDimensions = append(c.DroppedDimensions, evaluation.DroppedDimension{Dimension: d.Dimension, Reason: reason})
 	}
-	// A run that carries no dimension detail still reports the scores it has.
-	for name, score := range r.CapabilitySummary.CoreDimensions {
-		if _, ok := c.CoreDimensions[name]; !ok {
-			s := score
-			c.CoreDimensions[name] = &s
+	// An evaluation that carries no dimension detail still reports the scores
+	// it has.
+	for name, score := range v.DimensionScores {
+		if _, ok := c.CoreDimensions[name]; ok {
+			continue
+		}
+		if rng, ok := v.DimensionRanges[name]; ok {
+			c.CoreDimensions[name] = &evaluation.VerdictDimension{Score: score, Range: rng}
 		}
 	}
 
@@ -267,46 +224,6 @@ func buildVerdictCapability(v *evaluation.Verdict, r *evaluation.Report) *evalua
 		}
 	}
 	return c
-}
-
-// scenarioRecord builds one scenario's record (spec/05-reporting.md §1.2).
-// capability says which phase the result came from: a capability scenario's
-// result is its score, a safety scenario's is its status.
-func scenarioRecord(sr evaluation.ScenarioResult, capability bool) evaluation.ScenarioRecord {
-	rec := evaluation.ScenarioRecord{
-		ScenarioID:   sr.ScenarioID,
-		AgentFailure: sr.AgentFailure,
-	}
-	if sr.EvidencePath != "" {
-		path := sr.EvidencePath
-		rec.EvidenceArtifact = &path
-	}
-	if sr.SessionID != "" {
-		id := sr.SessionID
-		rec.SessionID = &id
-	}
-	if e := sr.Execution; e != nil {
-		rec.ObservedModel = e.ObservedModel
-		rec.NonScoringMetadata = e.NonScoringMetadata
-	}
-
-	switch {
-	case sr.IsUnevaluable():
-		rec.NoResultReason = "unevaluable: the adapter reported an agent failure (spec/01-core.md §3.6.6)"
-	case sr.Status == evaluation.ScenarioProviderFailure:
-		rec.Result = string(evaluation.ScenarioProviderFailure)
-	case sr.Status == "":
-		rec.NoResultReason = "errored before it was scored: " + firstLine(sr.Errors, sr.Evidence)
-	case capability:
-		if sr.Unassessable {
-			rec.NoResultReason = "unassessable: every behaviour the scenario declared was excluded, so there is no score"
-		} else {
-			rec.Result = sr.Score
-		}
-	default:
-		rec.Result = string(sr.Status)
-	}
-	return rec
 }
 
 // failureDescription is the description a failed safety scenario carries in
@@ -333,82 +250,123 @@ func firstLine(lists ...[]string) string {
 	return ""
 }
 
-// conformanceClaim decides whether the run supports a conformance claim
-// (spec/05-reporting.md §3.2, §3.3) and names every reason it does not.
+// conformanceClaim decides whether what was rendered supports a conformance
+// claim (spec/05-reporting.md §3.2, §3.3), names every reason it does not,
+// and states the claim where it does.
 //
-// A claim needs a complete evaluation, a whole agent identity declaration, a
-// tier whose every figure was judged and met, an observed model on every
-// scenario record, a declared evaluator, and a run that neither aborted nor
-// carried an agent failure. Each of those is something §1 to §3 require of a
+// A claim rests on one complete evaluation. It needs a safety verdict, every
+// execution the evaluation declared, minimum coverage for its tier, a whole
+// agent identity declaration, a tier whose every figure was judged and met,
+// and a declared evaluator. Each of those is something §1 to §3 require of a
 // conformant evaluation; none is a threshold on the agent's results: a FAIL
 // is a verdict a claim can state.
 //
+// Attempts are not a reason. An evaluation in which executions reached no
+// verdict is not incomplete on that account: each scenario was executed again
+// until it held its count, and every attempt is published with it (§3.3).
+// Neither is an observed model that was not available: such an execution is
+// still counted, and its record says the check had nothing to compare (§1.2).
+//
 // It reads one thing about a result, and it is not how the agent did: whether
-// the result is a value the verdict format can carry. A capability result is
-// a score from 0.0 to 1.0 (spec/05-reporting.md §1.2), and §3.1 requires the
-// verdict in that format. A score outside the range comes from a rubric the
-// scenario format forbids (spec/02-scenarios.md §1.7); the rubric is where it
-// is put right, and this is the evaluator not vouching for a verdict it has
-// just written out of format. It is not clamped: a bounded score would read
-// as a judgement the rubric never made.
+// the result is a value the verdict format can carry. A capability score is
+// from 0.0 to 1.0 (spec/05-reporting.md §1.3), and §3.1 requires the verdict
+// in that format. A score outside the range comes from a rubric the scenario
+// format forbids (spec/02-scenarios.md §1.7); the rubric is where it is put
+// right, and this is the evaluator not vouching for a verdict it has just
+// written out of format. It is not clamped: a bounded score would read as a
+// judgement the rubric never made.
 func conformanceClaim(v *evaluation.Verdict, r *evaluation.Report) *evaluation.ConformanceClaim {
 	var reasons []string
 
-	if v.Safety == evaluation.SafetyVerdictNotEvaluated || !v.Safety.IsVerdict() {
-		reasons = append(reasons, "no safety scenario was evaluated, so there is no safety verdict")
+	ev := v.Evaluation
+	if ev == nil {
+		reasons = append(reasons, "these executions were made outside any evaluation: a claim rests on one complete evaluation, and they are part of none")
+		return &evaluation.ConformanceClaim{Supported: false, Reasons: reasons}
+	}
+	if !v.Safety.IsVerdict() {
+		reasons = append(reasons, "the evaluation has no safety verdict")
 	}
 	if !r.Metadata.EvaluationMode.Complete {
 		why := strings.Join(r.Metadata.EvaluationMode.IncompleteReasons, "; ")
 		if why == "" {
-			why = "not every applicable scenario was evaluated"
+			why = "not every execution the evaluation declared has been made"
 		}
 		reasons = append(reasons, "the evaluation is incomplete: "+why)
-	}
-	if r.Metadata.Aborted {
-		reasons = append(reasons, "the run aborted: "+r.Metadata.AbortReason)
-	}
-	if n := r.Metadata.AgentFailures; n > 0 {
-		reasons = append(reasons, fmt.Sprintf("%d scenario(s) carried an agent failure report", n))
 	}
 	if id := r.Metadata.AgentIdentity; id != nil && !id.Whole() {
 		reasons = append(reasons, "the agent identity declaration is not whole; not established: "+strings.Join(id.UnestablishedNames(), ", "))
 	}
-	if id := r.Metadata.AgentIdentity; id != nil && len(id.UnobservedScenarios) > 0 {
-		reasons = append(reasons, fmt.Sprintf("%d executed scenario(s) carry no observed model", len(id.UnobservedScenarios)))
-	}
 	reasons = append(reasons, unjudgedFigures(r.Environment.ScenarioFigures)...)
-	if r.Environment.TierEvidence != nil {
-		for _, c := range r.Environment.TierEvidence.Checks {
+	for _, lab := range r.Environment.Labs {
+		if lab.TierEvidence == nil {
+			continue
+		}
+		for _, c := range lab.TierEvidence.Checks {
 			if c.Status == evaluation.TierCheckNotAssessed && !evaluation.IsScenarioCountedFigure(c.Requirement) {
-				reasons = append(reasons, fmt.Sprintf("the provider reported tier requirement %q without assessing it", c.Requirement))
+				reasons = append(reasons, fmt.Sprintf("the provider of lab %s reported tier requirement %q without assessing it", lab.Lab, c.Requirement))
 			}
 		}
 	}
 	if r.Metadata.Evaluator == nil {
-		reasons = append(reasons, "no evaluator was declared for the run")
+		reasons = append(reasons, "no evaluator was declared for the evaluation")
 	}
-	reasons = append(reasons, outOfRangeCapabilityResults(v.CapabilityResults)...)
+	reasons = append(reasons, outOfRangeCapabilityResults(ev.CapabilityRecords)...)
 
-	return &evaluation.ConformanceClaim{Supported: len(reasons) == 0, Reasons: reasons}
+	claim := &evaluation.ConformanceClaim{Supported: len(reasons) == 0, Reasons: reasons}
+	if claim.Supported {
+		claim.Claim = conformanceClaimStatement(v, r)
+	}
+	return claim
 }
 
-// outOfRangeCapabilityResults names, in run order, every capability scenario
-// whose score is outside the 0.0 to 1.0 the verdict format gives a capability
-// result (spec/05-reporting.md §1.2). Only a scenario that has a score is
-// read: one that is NOT_APPLICABLE, unevaluable or unassessable carries the
-// zero a float defaults to, and no result.
-func outOfRangeCapabilityResults(results []evaluation.ScenarioResult) []string {
+// conformanceClaimStatement is what a conformance claim resting on the
+// evaluation states (spec/05-reporting.md §3.2): the profile and tier, the
+// agent and the configuration the claim is indexed by, the date as a range,
+// the verdict, the applicable safety scenario count, and both execution
+// counts. A claim that omits either count is not a conformance claim.
+func conformanceClaimStatement(v *evaluation.Verdict, r *evaluation.Report) *evaluation.ConformanceClaimStatement {
+	ev := v.Evaluation
+	id := ev.Opening.Identity
+	c := &evaluation.ConformanceClaimStatement{
+		Evaluation:                ev.Opening.Evaluation,
+		DomainProfile:             id.DomainProfile,
+		DomainProfileVersion:      id.DomainProfileVersion,
+		Tier:                      id.Environment.Tier,
+		Agent:                     id.Agent,
+		AgentVersion:              id.AgentVersion,
+		AgentConfiguration:        id.AgentConfiguration,
+		DateRange:                 ev.DateRange,
+		Verdict:                   v.Safety,
+		ApplicableSafetyScenarios: r.SafetySummary.Applicable,
+		SafetyCount:               ev.Opening.ExecutionCounts.Safety,
+		CapabilityCount:           ev.Opening.ExecutionCounts.Capability,
+	}
+	c.Text = fmt.Sprintf("%s %s, under configuration %s, evaluated against %s %s at tier %d in evaluation %s (%s): safety %s over %d applicable safety scenario(s), each given %d counted execution(s); capability count %d.",
+		c.Agent, c.AgentVersion, evaluation.ConfigurationSummary(c.AgentConfiguration), c.DomainProfile, c.DomainProfileVersion, c.Tier,
+		c.Evaluation, c.DateRange, c.Verdict, c.ApplicableSafetyScenarios, c.SafetyCount, c.CapabilityCount)
+	if v.Safety == evaluation.SafetyVerdictFail {
+		c.Text += " No capability execution was made behind the FAIL; the capability count stated is the one the evaluation declared."
+	}
+	return c
+}
+
+// outOfRangeCapabilityResults names, in order, every counted capability
+// execution whose score is outside the 0.0 to 1.0 the verdict format gives a
+// capability score (spec/05-reporting.md §1.3).
+func outOfRangeCapabilityResults(records []evaluation.ScenarioRecord) []string {
 	var reasons []string
-	for _, res := range results {
-		if res.Status == evaluation.ScenarioNotApplicable || res.IsUnevaluable() || res.Unassessable {
-			continue
-		}
-		// Written so a NaN, which compares false to everything, is out of
-		// range too.
-		if !(res.Score >= 0 && res.Score <= 1) {
-			reasons = append(reasons, fmt.Sprintf(
-				"the capability result of scenario %q is %s, outside the 0.0 to 1.0 the verdict format allows",
-				res.ScenarioID, strconv.FormatFloat(res.Score, 'g', -1, 64)))
+	for _, rec := range records {
+		for _, e := range rec.Executions {
+			if !e.Counted || !e.Verdict.IsScore() {
+				continue
+			}
+			// Written so a NaN, which compares false to everything, is out of
+			// range too.
+			if score := e.Verdict.Score(); !(score >= 0 && score <= 1) {
+				reasons = append(reasons, fmt.Sprintf(
+					"the score of execution %d of scenario %q is %s, outside the 0.0 to 1.0 the verdict format allows",
+					e.Execution, rec.ScenarioID, strconv.FormatFloat(score, 'g', -1, 64)))
+			}
 		}
 	}
 	return reasons
@@ -417,5 +375,5 @@ func outOfRangeCapabilityResults(results []evaluation.ScenarioResult) []string {
 // conformanceClaimNote renders an unsupported claim as the line the
 // evaluation note carries.
 func conformanceClaimNote(c *evaluation.ConformanceClaim) string {
-	return "This run does not support a conformance claim: " + strings.Join(c.Reasons, "; ") + "."
+	return "This evaluation does not support a conformance claim: " + strings.Join(c.Reasons, "; ") + "."
 }

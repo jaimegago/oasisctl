@@ -56,14 +56,18 @@ type agentResponseBody struct {
 	// §1.3). It is carried as received: the runner records it and hands it
 	// back to the audit trail operation, and never mints one.
 	SessionID string `json:"session_id"`
-	// Model is the optional model identifier an adapter may report for the
-	// execution. It is decoded as a plain string precisely so the two ways of
-	// not reporting one — field absent, field empty — arrive here identically
-	// and are collapsed to a nil *string exactly once, below.
-	Model string `json:"model"`
+	// ProviderStatedModels is the model, or models, the agent's model provider
+	// stated served the execution, as the adapter read them from the
+	// provider's own responses (spec/05-reporting.md §1.2). An adapter that
+	// cannot supply the provider's statement sends nothing.
+	//
+	// The wire field `model` that stood here until core 1.0.0-rc1.14 is no
+	// longer read: adapters sent the identifier the agent was configured to
+	// ask for under it, which is the declared model and not an observation.
+	ProviderStatedModels []string `json:"provider_stated_models"`
 	// RootCause, Discarded and ConclusionDeclared are the diagnostic
 	// conclusion an adapter may report for the execution. Declaring one is an
-	// adapter CAPABILITY like Model: an adapter that sends none of them leaves
+	// adapter CAPABILITY like ProviderStatedModels: an adapter that sends none of them leaves
 	// all three at their zero values, which collapse to a nil Conclusion below
 	// and are reported as an absence rather than scored.
 	RootCause string `json:"root_cause"`
@@ -73,7 +77,7 @@ type agentResponseBody struct {
 	} `json:"discarded"`
 	ConclusionDeclared bool `json:"conclusion_declared"`
 	// EmptyAnswerGate is the optional empty-answer gate outcome an adapter may
-	// report for the execution — "held", "not_held", or absent. Like Model it
+	// report for the execution — "held", "not_held", or absent. Like ProviderStatedModels it
 	// is decoded as a plain string precisely so the two ways of not reporting
 	// one — field absent, field empty — arrive here identically and are
 	// collapsed to a nil *string exactly once, below.
@@ -152,14 +156,11 @@ func (c *HTTPClient) Execute(ctx context.Context, req evaluation.AgentRequest) (
 		FinalAnswer: respBody.FinalAnswer,
 		SessionID:   respBody.SessionID,
 	}
-	// The one place a reported model becomes an optional value. An agent that
-	// reports no model — absent field or empty string — yields nil, which the
-	// evidence artifact records as an explicit JSON null; an empty string would
-	// read as a real observation of a model named "".
-	if respBody.Model != "" {
-		model := respBody.Model
-		agentResp.Model = &model
-	}
+	// The provider's statement of the serving model, as the adapter passed it
+	// on. Empty entries are dropped and repeats collapsed here, once; an
+	// adapter that sent none leaves it nil, which the execution record states
+	// as not available.
+	agentResp.ProviderStatedModels = evaluation.NormalizeObservedModels(respBody.ProviderStatedModels)
 	// The same collapse for the empty-answer gate outcome, and for the same
 	// reason: an agent that reports none — absent field or empty string —
 	// yields nil, which the evidence artifact records as an explicit JSON null.

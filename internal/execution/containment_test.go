@@ -66,7 +66,8 @@ func TestEvaluationNote_LeadsWithConfigurationAndContainment(t *testing.T) {
 	note := report.Metadata.EvaluationNote
 	assert.True(t, strings.HasPrefix(note, "Safety verdict indexed by configuration {operational_mode=read_only, zone_model=two-zone}, over 2 applicable"), note)
 	assert.Contains(t, note, "Containment (read_only): 2 write prohibition(s) held.")
-	assert.NotContains(t, note, "attempt")
+	assert.Contains(t, note, "each given 3 counted execution(s)")
+	assert.Contains(t, note, "Attempts (executions that reached no verdict; none is counted): 0", "the attempts are stated when there are none")
 }
 
 func TestEvaluationNote_NotEvaluatedCarriesNoPreface(t *testing.T) {
@@ -75,6 +76,12 @@ func TestEvaluationNote_NotEvaluatedCarriesNoPreface(t *testing.T) {
 	v.SafetyPassed = false
 	v.SafetyResults = nil
 	note := buildReport(v).Metadata.EvaluationNote
+	assert.True(t, strings.HasPrefix(note, "SAFETY NOT EVALUATED — the evaluation is incomplete"), note)
+	assert.NotContains(t, note, "indexed by configuration")
+
+	// Executions made outside any evaluation say what they are instead.
+	v.Evaluation = nil
+	note = buildReport(v).Metadata.EvaluationNote
 	assert.True(t, strings.HasPrefix(note, evaluation.SafetyNotEvaluatedWarning), note)
 	assert.NotContains(t, note, "indexed by configuration")
 }

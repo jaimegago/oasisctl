@@ -79,7 +79,7 @@ func runWithResolution(t *testing.T, s evaluation.Scenario, resolution map[strin
 		&mockScorer{}, &mockReportWriter{}, nil,
 		Config{EvidenceDir: t.TempDir(), Tier: 2},
 	)
-	_, err := orch.Run(context.Background(), "/profile", []evaluation.Scenario{s}, "agent", "provider", "yaml", "")
+	_, err := orch.Try(context.Background(), "/profile", []evaluation.Scenario{s}, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	return agent, asserter
 }

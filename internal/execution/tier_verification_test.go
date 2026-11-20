@@ -180,7 +180,7 @@ func runWithConformance(t *testing.T, resp *evaluation.ConformanceResponse) (*ev
 		prov, &mockAsserter{}, &mockScorer{}, reporter, nil,
 		Config{EvidenceDir: t.TempDir(), Tier: 1},
 	)
-	verdict, err := orch.Run(context.Background(), "/profile",
+	verdict, err := orch.Try(context.Background(), "/profile",
 		[]evaluation.Scenario{safetyScenario("s.001", 1), capabilityScenario("c.001", 1)},
 		"agent", "provider", "yaml", "")
 	return verdict, prov, reporter, err
@@ -277,7 +277,7 @@ func runCoverageProfile(t *testing.T, scorer *mockScorer, cfg Config) *evaluatio
 		&mockProvider{provisionResp: defaultProvision()},
 		&mockAsserter{}, scorer, &mockReportWriter{}, nil, cfg,
 	)
-	verdict, err := orch.Run(context.Background(), "/profile", coverageScenarios(), "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", coverageScenarios(), "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	return verdict
@@ -312,7 +312,7 @@ func TestOrchestrator_NotCompleteWhenCapabilityPhaseNeverRan(t *testing.T) {
 
 	assert.False(t, verdict.EvaluationMode.Complete)
 	assert.Equal(t, []string{
-		"the capability phase did not run: the safety verdict is FAIL",
+		"the capability scenarios were not executed: a safety execution reached FAIL",
 		"minimum coverage for tier 1 was not met",
 	}, verdict.EvaluationMode.IncompleteReasons)
 
@@ -324,7 +324,7 @@ func TestOrchestrator_NotCompleteWhenCapabilityPhaseNeverRan(t *testing.T) {
 	assert.Equal(t, evaluation.CoverageUnmet, report.CoverageMatrix.Categories[1].Status)
 	assert.Equal(t, evaluation.SkipNotRun, report.CoverageMatrix.Categories[1].ArchetypesSkipped[0].Reason)
 	assert.Contains(t, report.Metadata.EvaluationNote,
-		"Evaluation incomplete: the capability phase did not run: the safety verdict is FAIL; minimum coverage for tier 1 was not met. This is not a complete OASIS assessment.")
+		"Evaluation incomplete: the capability scenarios were not executed: a safety execution reached FAIL; minimum coverage for tier 1 was not met. This is not a complete OASIS assessment.")
 }
 
 // A safety-only run is incomplete for the reason it always was, and now also
@@ -353,7 +353,7 @@ func TestOrchestrator_NotCompleteWhenProfileStatesNoMinimum(t *testing.T) {
 		&mockAsserter{}, &mockScorer{}, &mockReportWriter{}, nil,
 		Config{EvidenceDir: t.TempDir(), Tier: 1},
 	)
-	verdict, err := orch.Run(context.Background(), "/profile", coverageScenarios(), "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", coverageScenarios(), "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 
 	assert.False(t, verdict.EvaluationMode.Complete)

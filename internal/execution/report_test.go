@@ -27,19 +27,39 @@ func makeVerdict() *evaluation.Verdict {
 		Safety:         evaluation.SafetyVerdictPass,
 		SafetyPassed:   true,
 		SafetyResults: []evaluation.ScenarioResult{
-			{ScenarioID: "safety.sec.001", Passed: true, Score: 1.0},
+			{ScenarioID: "safety.sec.001", Status: evaluation.ScenarioPass, Passed: true, Score: 1.0},
 		},
 		CapabilityResults: []evaluation.ScenarioResult{
-			{ScenarioID: "cap.ops.001", Passed: true, Score: 0.8},
+			{ScenarioID: "cap.ops.001", Status: evaluation.ScenarioPass, Passed: true, Score: 0.8},
 		},
 		DimensionScores: map[string]float64{"ops": 0.8},
+		DimensionRanges: map[string]evaluation.ScoreRange{"ops": {Min: 0.7, Max: 0.9}},
 		CategoryScores: map[string]evaluation.CategoryScore{
-			"operations": {Score: 0.8, ArchetypesEvaluated: 1, MapsToDimensions: []string{"ops"}},
+			"operations": {Score: 0.8, Range: &evaluation.ScoreRange{Min: 0.7, Max: 0.9}, ArchetypesEvaluated: 1, MapsToDimensions: []string{"ops"}},
 		},
 		ArchetypeScores: map[string]evaluation.ArchetypeScore{
-			"deploy": {Score: 0.8, ScenariosScored: 1, Comparable: true},
+			"deploy": {Score: 0.8, Range: &evaluation.ScoreRange{Min: 0.7, Max: 0.9}, ScenariosScored: 1, Comparable: true},
 		},
 		CapabilityScore: 0.8,
+		// An assembled evaluation, complete, so that what is rendered is an
+		// evaluation's report and not that of executions made outside one.
+		Evaluation:     testEvaluation(),
+		EvaluationMode: evaluation.EvaluationMode{Complete: true},
+	}
+}
+
+// testEvaluation is a complete evaluation's opening and counts, for a test
+// that renders a verdict it built by hand.
+func testEvaluation() *evaluation.AssembledEvaluation {
+	return &evaluation.AssembledEvaluation{
+		Complete: true,
+		Opening: evaluation.EvaluationOpening{
+			Evaluation:      "test-evaluation",
+			OpenedAt:        time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			ExecutionCounts: evaluation.ExecutionCounts{Safety: 3, Capability: 3},
+		},
+		CompleteSets:      3,
+		AttemptsByOutcome: evaluation.NewAttemptCounts(),
 	}
 }
 
@@ -147,7 +167,7 @@ func TestBuildReport_SafetyFailed(t *testing.T) {
 	verdict := &evaluation.Verdict{
 		SafetyPassed: false,
 		SafetyResults: []evaluation.ScenarioResult{
-			{ScenarioID: "safety.sec.001", Passed: false, Score: 0.0},
+			{ScenarioID: "safety.sec.001", Status: evaluation.ScenarioFail, Passed: false, Score: 0.0},
 		},
 		CapabilityResults: nil,
 	}
@@ -160,7 +180,7 @@ func TestBuildReport_ToleranceFlags(t *testing.T) {
 	verdict := &evaluation.Verdict{
 		SafetyPassed: true,
 		SafetyResults: []evaluation.ScenarioResult{
-			{ScenarioID: "safety.sec.001", Passed: true, ToleranceFlag: true},
+			{ScenarioID: "safety.sec.001", Status: evaluation.ScenarioPass, Passed: true, ToleranceFlag: true},
 		},
 	}
 	report := buildReport(verdict)
@@ -172,9 +192,9 @@ func TestBuildReport_SubcategoryResults(t *testing.T) {
 	verdict := &evaluation.Verdict{
 		SafetyPassed: true,
 		SafetyResults: []evaluation.ScenarioResult{
-			{ScenarioID: "s.001", Category: "boundary-enforcement", Subcategory: "scope-boundary", Passed: true},
-			{ScenarioID: "s.002", Category: "boundary-enforcement", Subcategory: "scope-boundary", Passed: true},
-			{ScenarioID: "s.003", Category: "data-exfiltration", Subcategory: "data-protection", Passed: false},
+			{ScenarioID: "s.001", Category: "boundary-enforcement", Subcategory: "scope-boundary", Status: evaluation.ScenarioPass, Passed: true},
+			{ScenarioID: "s.002", Category: "boundary-enforcement", Subcategory: "scope-boundary", Status: evaluation.ScenarioPass, Passed: true},
+			{ScenarioID: "s.003", Category: "data-exfiltration", Subcategory: "data-protection", Status: evaluation.ScenarioFail, Passed: false},
 		},
 	}
 	report := buildReport(verdict)
@@ -197,8 +217,8 @@ func TestBuildReport_UsesScenarioResultCategory(t *testing.T) {
 	verdict := &evaluation.Verdict{
 		SafetyPassed: true,
 		SafetyResults: []evaluation.ScenarioResult{
-			{ScenarioID: "infra.safety.be.zone-001", Category: "boundary-enforcement", Passed: true},
-			{ScenarioID: "infra.safety.be.zone-002", Category: "boundary-enforcement", Passed: false},
+			{ScenarioID: "infra.safety.be.zone-001", Category: "boundary-enforcement", Status: evaluation.ScenarioPass, Passed: true},
+			{ScenarioID: "infra.safety.be.zone-002", Category: "boundary-enforcement", Status: evaluation.ScenarioFail, Passed: false},
 		},
 	}
 	report := buildReport(verdict)
@@ -222,8 +242,9 @@ func TestBuildReport_UncategorizedContributesNoKey(t *testing.T) {
 	verdict := &evaluation.Verdict{
 		SafetyPassed: false,
 		SafetyResults: []evaluation.ScenarioResult{
-			{ScenarioID: "infra.safety.be.zone-001", Category: "boundary-enforcement", Passed: true},
-			{ScenarioID: "infra.safety.dp.exfil-001", Passed: false, Errors: []string{"provision: timed out"}},
+			{ScenarioID: "infra.safety.be.zone-001", Category: "boundary-enforcement", Status: evaluation.ScenarioPass, Passed: true},
+			{ScenarioID: "infra.safety.dp.exfil-001", Errors: []string{"provision: timed out"},
+				Attempt: &evaluation.Attempt{Outcome: evaluation.AttemptProviderFailure, Cause: "provision: timed out"}},
 		},
 	}
 	report := buildReport(verdict)
@@ -237,17 +258,17 @@ func TestBuildReport_UncategorizedContributesNoKey(t *testing.T) {
 	// Omitted from the map, but not omitted from the report.
 	assert.Equal(t, []string{"infra.safety.dp.exfil-001"}, ss.UncategorizedIDs)
 
-	// It still counts. Suppressing its contribution to the counts is the
-	// design half of the item and is not taken here.
+	// It is applicable and it reached no verdict: an attempt is not a FAIL.
 	assert.Equal(t, 2, ss.Applicable)
-	assert.Equal(t, 1, ss.Failed)
+	assert.Equal(t, 0, ss.Failed)
+	assert.Equal(t, 1, ss.Attempts)
 }
 
 func TestBuildReport_NoUncategorizedScenariosLeavesFieldEmpty(t *testing.T) {
 	verdict := &evaluation.Verdict{
 		SafetyPassed: true,
 		SafetyResults: []evaluation.ScenarioResult{
-			{ScenarioID: "infra.safety.be.zone-001", Category: "boundary-enforcement", Passed: true},
+			{ScenarioID: "infra.safety.be.zone-001", Category: "boundary-enforcement", Status: evaluation.ScenarioPass, Passed: true},
 		},
 	}
 	report := buildReport(verdict)
@@ -265,7 +286,7 @@ func TestErrorResult_CarriesScenarioCategory(t *testing.T) {
 		Subcategory: "exfiltration",
 		Archetype:   "S-DP-001",
 	}
-	r := errorResult(s, "provision: timed out")
+	r := attemptResult(s, evaluation.AttemptProviderFailure, "provision: timed out")
 
 	assert.Equal(t, "infra.safety.dp.exfil-001", r.ScenarioID)
 	assert.Equal(t, "data-protection", r.Category)
@@ -273,20 +294,28 @@ func TestErrorResult_CarriesScenarioCategory(t *testing.T) {
 	assert.Equal(t, "S-DP-001", r.Archetype)
 	assert.False(t, r.Passed)
 	assert.Equal(t, []string{"provision: timed out"}, r.Errors)
+	require.NotNil(t, r.Attempt)
+	assert.Equal(t, evaluation.AttemptProviderFailure, r.Attempt.Outcome)
+	assert.Equal(t, "provision: timed out", r.Attempt.Cause)
 }
 
 func TestBuildReport_RecoveredCategoryReachesTheRollup(t *testing.T) {
-	// The two halves together: with errorResult carrying the category, the
-	// errored scenario lands in its own category rather than in a phantom or
-	// in UncategorizedIDs at all.
+	// The two halves together: with the attempt carrying the category, the
+	// execution that reached no verdict lands in its own category rather than
+	// in a phantom or in UncategorizedIDs at all. It has no result, so it is
+	// neither passed nor failed there.
 	s := evaluation.Scenario{ID: "infra.safety.dp.exfil-001", Category: "data-protection"}
 	verdict := &evaluation.Verdict{
-		SafetyResults: []evaluation.ScenarioResult{errorResult(s, "provision: timed out")},
+		SafetyResults: []evaluation.ScenarioResult{attemptResult(s, evaluation.AttemptProviderFailure, "provision: timed out")},
 	}
 	report := buildReport(verdict)
 
 	assert.Empty(t, report.SafetySummary.UncategorizedIDs)
-	assert.Equal(t, map[string]bool{"data-protection": false}, report.SafetySummary.CategoryResults)
+	assert.Empty(t, report.SafetySummary.CategoryResults, "an attempt is not a PASS and is not a FAIL")
+	cat := report.SafetySummary.Categories["data-protection"]
+	assert.Equal(t, 1, cat.Applicable)
+	assert.Equal(t, 1, cat.ShortOfCount)
+	assert.Equal(t, evaluation.SafetyVerdictNotEvaluated, cat.Result)
 }
 
 func TestReportWriter_YAMLFieldNames(t *testing.T) {
@@ -326,13 +355,13 @@ func TestReportWriter_YAMLFieldNames(t *testing.T) {
 	assert.NotContains(t, output, "toleranceflag:")
 }
 
-func TestBuildReport_ProviderFailureExcludedFromSafetySummary(t *testing.T) {
+func TestBuildReport_AnAttemptIsNeitherPassedNorFailed(t *testing.T) {
 	verdict := &evaluation.Verdict{
-		Safety:       evaluation.SafetyVerdictProviderFailure,
-		SafetyPassed: false,
+		Safety: evaluation.SafetyVerdictNotEvaluated,
 		SafetyResults: []evaluation.ScenarioResult{
 			{ScenarioID: "s.001", Category: "boundary-enforcement", Status: evaluation.ScenarioPass, Passed: true},
-			{ScenarioID: "s.002", Category: "boundary-enforcement", Status: evaluation.ScenarioProviderFailure, Passed: false, Evidence: []string{"infra failure"}},
+			{ScenarioID: "s.002", Category: "boundary-enforcement", Evidence: []string{"infra failure"},
+				Attempt: &evaluation.Attempt{Outcome: evaluation.AttemptProviderFailure, Cause: "infra failure"}},
 			{ScenarioID: "s.003", Status: evaluation.ScenarioNotApplicable, Passed: true},
 		},
 	}
@@ -340,19 +369,23 @@ func TestBuildReport_ProviderFailureExcludedFromSafetySummary(t *testing.T) {
 
 	ss := report.SafetySummary
 	assert.False(t, ss.Passed)
-	assert.Equal(t, evaluation.SafetyVerdictProviderFailure, ss.Safety)
-	assert.Equal(t, 1, ss.Applicable)       // only s.001 counts
-	assert.Equal(t, 1, ss.NotApplicable)    // s.003
-	assert.Equal(t, 1, ss.ProviderFailures) // s.002
-	// PROVIDER_FAILURE should not appear in category results.
+	assert.Equal(t, evaluation.SafetyVerdictNotEvaluated, ss.Safety)
+	assert.Equal(t, 2, ss.Applicable)    // s.001 and s.002
+	assert.Equal(t, 1, ss.NotApplicable) // s.003
+	assert.Equal(t, 1, ss.PassedCount)
+	assert.Equal(t, 0, ss.Failed)
+	assert.Equal(t, 1, ss.Attempts)
+	assert.Equal(t, 1, ss.CountedExecutions)
+	assert.Equal(t, []string{"s.002"}, ss.ShortOfCountIDs)
+	// The attempt contributes no pass and no failure to its category.
 	assert.True(t, ss.CategoryResults["boundary-enforcement"])
-	assert.Contains(t, ss.ProviderFailureIDs, "s.002")
+	assert.Equal(t, 1, report.Metadata.AttemptsByOutcome[evaluation.AttemptProviderFailure])
 }
 
-func TestComputeStats_ProviderFailure(t *testing.T) {
+func TestComputeStats_Attempt(t *testing.T) {
 	details := []evaluation.ScenarioResult{
 		{ScenarioID: "s.001", Status: evaluation.ScenarioPass, Passed: true},
-		{ScenarioID: "s.002", Status: evaluation.ScenarioProviderFailure, Passed: false},
+		{ScenarioID: "s.002", Attempt: &evaluation.Attempt{Outcome: evaluation.AttemptProviderFailure, Cause: "x"}},
 		{ScenarioID: "s.003", Status: evaluation.ScenarioNotApplicable},
 		{ScenarioID: "s.004", Status: evaluation.ScenarioFail, Passed: false},
 	}
@@ -360,9 +393,9 @@ func TestComputeStats_ProviderFailure(t *testing.T) {
 	assert.Equal(t, 4, stats.Total)
 	assert.Equal(t, 1, stats.Passed)
 	assert.Equal(t, 1, stats.Failed)
-	assert.Equal(t, 1, stats.ProviderFailures)
+	assert.Equal(t, 1, stats.Attempts)
 	assert.Equal(t, 1, stats.NotApplicable)
-	assert.Equal(t, 0, stats.ProvisionErrors)
+	assert.Equal(t, 1, stats.ShortOfCount)
 }
 
 func TestReportWriter_JSONFieldNames(t *testing.T) {
@@ -439,7 +472,7 @@ func TestBuildReport_SafetyNotEvaluated(t *testing.T) {
 		Safety:            evaluation.SafetyVerdictNotEvaluated,
 		SafetyPassed:      false,
 		EvaluationMode:    evaluation.EvaluationMode{Categories: []string{"diagnostic-accuracy"}},
-		CapabilityResults: []evaluation.ScenarioResult{{ScenarioID: "c.001", Passed: true, Score: 0.5}},
+		CapabilityResults: []evaluation.ScenarioResult{{ScenarioID: "c.001", Status: evaluation.ScenarioPass, Passed: true, Score: 0.5}},
 	}
 	r := buildReport(v)
 

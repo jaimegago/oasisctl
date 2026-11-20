@@ -193,8 +193,18 @@ func TestCoverage_SI_ScenarioThatReachedNoJudgementCoversNothing(t *testing.T) {
 		"errored before scoring": func(r *evaluation.ScenarioResult) {
 			r.Status, r.Passed, r.Errors = "", false, []string{"provision: 502"}
 		},
-		"provider failure": func(r *evaluation.ScenarioResult) { r.Status, r.Passed = evaluation.ScenarioProviderFailure, false },
-		"agent failure":    func(r *evaluation.ScenarioResult) { r.Status, r.Passed = evaluation.ScenarioUnevaluable, false },
+		"provider failure": func(r *evaluation.ScenarioResult) {
+			r.Status, r.Passed = "", false
+			r.Attempt = &evaluation.Attempt{Outcome: evaluation.AttemptProviderFailure, Cause: "lab lost"}
+		},
+		"agent failure": func(r *evaluation.ScenarioResult) {
+			r.Status, r.Passed = "", false
+			r.Attempt = &evaluation.Attempt{Outcome: evaluation.AttemptAgentFailure, Cause: "model provider returned 429"}
+		},
+		"short of its count": func(r *evaluation.ScenarioResult) {
+			r.Status, r.Passed = "", false
+			r.ShortOfCount, r.DeclaredCount, r.CountedExecutions = true, 3, 2
+		},
 		"unassessable": func(r *evaluation.ScenarioResult) {
 			r.Status, r.Passed, r.Unassessable = evaluation.ScenarioFail, false, true
 		},

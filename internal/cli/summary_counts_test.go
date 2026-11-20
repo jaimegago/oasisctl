@@ -58,5 +58,5 @@ func TestReportSummary_NotApplicableIsNotCountedAsPassed(t *testing.T) {
 	assert.NotContains(t, out, "6 passed")
 
 	// A report with none says nothing about them.
-	assert.Contains(t, summaryOf(t, heldReportYAML), "Scenarios: 1 passed, 0 failed |")
+	assert.Contains(t, summaryOf(t, evaluationReportYAML), "Scenarios: 2 passed, 0 failed |")
 }

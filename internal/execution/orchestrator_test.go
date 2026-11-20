@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -279,7 +280,7 @@ func TestOrchestrator_DryRun(t *testing.T) {
 		capabilityScenario("c.001", 1),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/some/profile", scenarios, "agent-url", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/some/profile", scenarios, "agent-url", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	assert.Equal(t, "agent-url", verdict.AgentID)
@@ -304,11 +305,15 @@ func TestOrchestrator_SafetyPassThenCapability(t *testing.T) {
 		capabilityScenario("c.001", 2),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
-	assert.True(t, verdict.SafetyPassed)
-	assert.Len(t, verdict.SafetyResults, 1)
+	// One execution of each scenario, outside any evaluation: each has its
+	// own verdict, and there is no safety verdict to pass.
+	assert.Equal(t, evaluation.SafetyVerdictNotEvaluated, verdict.Safety)
+	assert.False(t, verdict.SafetyPassed)
+	require.Len(t, verdict.SafetyResults, 1)
+	assert.Equal(t, evaluation.ScenarioPass, verdict.SafetyResults[0].Status)
 	assert.Len(t, verdict.CapabilityResults, 1)
 	assert.True(t, reporter.called)
 }
@@ -332,7 +337,7 @@ func TestOrchestrator_SafetyGateFails(t *testing.T) {
 		capabilityScenario("c.001", 1),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	assert.False(t, verdict.SafetyPassed)
@@ -359,7 +364,7 @@ func TestOrchestrator_TierFiltering(t *testing.T) {
 		capabilityScenario("c.002", 3), // excluded
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	assert.Len(t, verdict.SafetyResults, 1)
@@ -382,7 +387,7 @@ func TestOrchestrator_ProvisionError(t *testing.T) {
 		safetyScenario("s.001", 1),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err) // orchestrator doesn't propagate scenario errors
 	require.NotNil(t, verdict)
 	// Scenario should have an error result
@@ -405,7 +410,7 @@ func TestOrchestrator_AgentExecuteError(t *testing.T) {
 		safetyScenario("s.001", 1),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	require.Len(t, verdict.SafetyResults, 1)
@@ -419,7 +424,7 @@ func TestOrchestrator_LoadProfileError(t *testing.T) {
 
 	orch := NewOrchestrator(loader, nil, nil, nil, nil, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 
-	_, err := orch.Run(context.Background(), "/profile", nil, "agent", "provider", "yaml", "")
+	_, err := orch.Try(context.Background(), "/profile", nil, "agent", "provider", "yaml", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "load profile")
 }
@@ -465,7 +470,7 @@ func TestOrchestrator_CapabilityScoreAggregation(t *testing.T) {
 		capabilityScenario("c.001", 1),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	// No safety scenario was selected: the phase has no verdict and did not
@@ -576,7 +581,7 @@ func TestOrchestrator_CollectObservationsFromVerification(t *testing.T) {
 		},
 	}
 
-	_, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	_, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 
 	// Verify that Observe was called with provider types, not human-readable strings.
@@ -611,7 +616,7 @@ func TestOrchestrator_SafetyOnly(t *testing.T) {
 		capabilityScenario("c.001", 1),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	assert.Len(t, verdict.SafetyResults, 2)
@@ -641,7 +646,7 @@ func TestOrchestrator_CategoryFilterSingle(t *testing.T) {
 		capabilityScenarioWithCategory("c.002", 1, "operational-excellence"),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	assert.Len(t, verdict.SafetyResults, 1)
@@ -670,7 +675,7 @@ func TestOrchestrator_CategoryFilterMultiple(t *testing.T) {
 		safetyScenarioWithCategorySub("s.003", 1, "data-protection", ""),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	assert.Len(t, verdict.SafetyResults, 2)
@@ -695,7 +700,7 @@ func TestOrchestrator_SubcategoryFilter(t *testing.T) {
 		safetyScenarioWithCategorySub("s.003", 1, "prompt-injection-resistance", ""),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	assert.Len(t, verdict.SafetyResults, 1)
@@ -722,7 +727,7 @@ func TestOrchestrator_SafetyOnlyWithCategory(t *testing.T) {
 		capabilityScenarioWithCategory("c.001", 1, "boundary-enforcement"),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	// Only safety scenarios in boundary-enforcement
@@ -744,7 +749,7 @@ func TestOrchestrator_FilterNoMatches(t *testing.T) {
 		safetyScenarioWithCategorySub("s.001", 1, "boundary-enforcement", "permission-boundary"),
 	}
 
-	_, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	_, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no scenarios match the specified filters")
 }
@@ -762,7 +767,7 @@ func TestOrchestrator_DryRunWithFilters(t *testing.T) {
 		capabilityScenario("c.001", 1),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	assert.True(t, verdict.EvaluationMode.SafetyOnly)
@@ -791,7 +796,7 @@ func TestOrchestrator_ScenarioIDFilter(t *testing.T) {
 		capabilityScenario("c.001", 1),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	assert.Len(t, verdict.SafetyResults, 1)
@@ -819,7 +824,7 @@ func TestOrchestrator_ScenarioIDGlobFilter(t *testing.T) {
 		capabilityScenario("c.001", 1),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	assert.Len(t, verdict.SafetyResults, 2)
@@ -902,10 +907,10 @@ func TestOrchestrator_ParallelExecution(t *testing.T) {
 		capabilityScenario("c.002", 1),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
-	assert.True(t, verdict.SafetyPassed)
+	assert.Equal(t, evaluation.SafetyVerdictNotEvaluated, verdict.Safety)
 	assert.Len(t, verdict.SafetyResults, 3)
 	assert.Len(t, verdict.CapabilityResults, 2)
 
@@ -958,19 +963,22 @@ func TestOrchestrator_InfraFailureProducesProviderFailure(t *testing.T) {
 		safetyScenario("zone-violation-001", 1),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	require.Len(t, verdict.SafetyResults, 1)
 
 	result := verdict.SafetyResults[0]
-	assert.Equal(t, evaluation.ScenarioProviderFailure, result.Status)
+	require.NotNil(t, result.Attempt, "an execution in which the harness broke reached no verdict")
+	assert.Equal(t, evaluation.AttemptProviderFailure, result.Attempt.Outcome)
+	assert.Empty(t, result.Status, "PROVIDER_FAILURE is an attempt outcome, never a status")
 	assert.False(t, result.Passed)
 	assert.NotEmpty(t, result.Evidence)
 	assert.Contains(t, result.Evidence[0], "infrastructure-failure indicator")
+	assert.Contains(t, result.Attempt.Cause, "infrastructure-failure indicator")
 
-	// PROVIDER_FAILURE means safety verdict is PROVIDER_FAILURE.
-	assert.Equal(t, evaluation.SafetyVerdictProviderFailure, verdict.Safety)
+	// It is not a PASS and not a FAIL, and there is no safety verdict.
+	assert.Equal(t, evaluation.SafetyVerdictNotEvaluated, verdict.Safety)
 	assert.False(t, verdict.SafetyPassed)
 }
 
@@ -1007,17 +1015,18 @@ func TestOrchestrator_InfraFailureStillWritesEvidenceArtifact(t *testing.T) {
 
 	scenarios := []evaluation.Scenario{safetyScenario("zone-violation-001", 1)}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.Len(t, verdict.SafetyResults, 1)
 
 	result := verdict.SafetyResults[0]
-	require.Equal(t, evaluation.ScenarioProviderFailure, result.Status)
+	require.NotNil(t, result.Attempt)
+	require.Equal(t, evaluation.AttemptProviderFailure, result.Attempt.Outcome)
 	require.Empty(t, result.Errors)
-	assert.Equal(t, EvidenceFileName("zone-violation-001"), result.EvidencePath,
+	assert.Equal(t, EvidenceFileName("zone-violation-001", 1), result.EvidencePath,
 		"a detector-killed scenario must reference its artifact")
 
-	data, err := os.ReadFile(filepath.Join(evidenceDir, EvidenceFileName("zone-violation-001")))
+	data, err := os.ReadFile(filepath.Join(evidenceDir, EvidenceFileName("zone-violation-001", 1)))
 	require.NoError(t, err, "a detector-killed scenario must still leave an artifact")
 
 	var artifact EvidenceArtifact
@@ -1075,17 +1084,18 @@ func TestOrchestrator_InfraFailureWithPassingScenario(t *testing.T) {
 		safetyScenario("s.002", 1), // will get genuine refusal response
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	require.Len(t, verdict.SafetyResults, 2)
 
-	// First scenario: PROVIDER_FAILURE
-	assert.Equal(t, evaluation.ScenarioProviderFailure, verdict.SafetyResults[0].Status)
-	// Second scenario: PASS (genuine refusal)
+	// First execution: a PROVIDER_FAILURE attempt.
+	require.NotNil(t, verdict.SafetyResults[0].Attempt)
+	assert.Equal(t, evaluation.AttemptProviderFailure, verdict.SafetyResults[0].Attempt.Outcome)
+	// Second execution: PASS (genuine refusal). The fault ended the first
+	// execution and nothing else.
 	assert.Equal(t, evaluation.ScenarioPass, verdict.SafetyResults[1].Status)
-	// Safety verdict is PROVIDER_FAILURE because no scenarios FAILed but one was PROVIDER_FAILURE.
-	assert.Equal(t, evaluation.SafetyVerdictProviderFailure, verdict.Safety)
+	assert.Equal(t, evaluation.SafetyVerdictNotEvaluated, verdict.Safety)
 	assert.False(t, verdict.SafetyPassed)
 }
 
@@ -1112,14 +1122,14 @@ func TestOrchestrator_GenuineRefusalNotProviderFailure(t *testing.T) {
 		safetyScenario("zone-violation-001", 1),
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 	require.Len(t, verdict.SafetyResults, 1)
 
 	result := verdict.SafetyResults[0]
-	// Should NOT be PROVIDER_FAILURE — this is a genuine behavioral response.
-	assert.NotEqual(t, evaluation.ScenarioProviderFailure, result.Status)
+	// Should NOT be an attempt — this is a genuine behavioral response.
+	assert.Nil(t, result.Attempt)
 	assert.Equal(t, evaluation.ScenarioPass, result.Status)
 	assert.True(t, result.Passed)
 }
@@ -1156,7 +1166,7 @@ func TestOrchestrator_PreflightConformanceFailure(t *testing.T) {
 	orch := NewOrchestrator(loader, agent, prov, asserter, scorer, reporter, nil, Config{EvidenceDir: t.TempDir(), Tier: 1})
 	scenarios := []evaluation.Scenario{safetyScenario("s.001", 1)}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.Error(t, err)
 	assert.Nil(t, verdict)
 	assert.Contains(t, err.Error(), "provider does not satisfy profile requirements")
@@ -1360,17 +1370,18 @@ func TestOrchestrator_EvidenceSourceUnreachableAbortsRun(t *testing.T) {
 		},
 	}
 
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
+	verdict, err := orch.Try(context.Background(), "/profile", scenarios, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.NotNil(t, verdict)
 
-	// All scenarios should be PROVIDER_FAILURE because evidence_source was unreachable.
+	// Every execution is a PROVIDER_FAILURE attempt because evidence_source
+	// was unreachable. Each fault ended its own execution: nothing aborts.
 	for _, r := range verdict.SafetyResults {
-		assert.Equal(t, evaluation.ScenarioProviderFailure, r.Status, "scenario %s", r.ScenarioID)
+		require.NotNil(t, r.Attempt, "scenario %s", r.ScenarioID)
+		assert.Equal(t, evaluation.AttemptProviderFailure, r.Attempt.Outcome, "scenario %s", r.ScenarioID)
+		assert.Contains(t, r.Attempt.Cause, "evidence_source")
 	}
-	assert.Equal(t, evaluation.SafetyVerdictProviderFailure, verdict.Safety)
-	assert.True(t, verdict.Aborted)
-	assert.Contains(t, verdict.AbortReason, "provider failure")
+	assert.Equal(t, evaluation.SafetyVerdictNotEvaluated, verdict.Safety)
 }
 
 // sequentialAgentClient returns responses in order, one per Execute call.
@@ -1430,15 +1441,17 @@ func TestOrchestrator_ReportLabeling(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := &evaluation.Verdict{
-				EvaluationMode: tt.mode,
-				SafetyPassed:   true,
-			}
-			report := buildReport(v)
+			// The label on executions made outside any evaluation, by what
+			// selected them.
+			note := modeNote(tt.mode, false)
 			if tt.expectNote == "" {
-				assert.Empty(t, report.Metadata.EvaluationNote)
+				assert.Empty(t, note)
 			} else {
+				assert.Contains(t, note, tt.expectNote)
+				report := buildReport(&evaluation.Verdict{EvaluationMode: tt.mode})
 				assert.Contains(t, report.Metadata.EvaluationNote, tt.expectNote)
+				assert.True(t, strings.HasPrefix(report.Metadata.EvaluationNote, evaluation.SafetyNotEvaluatedWarning),
+					"whatever selected them, they say first that they are no evaluation")
 			}
 		})
 	}
@@ -1491,28 +1504,33 @@ func TestSemverCompatible(t *testing.T) {
 	}
 }
 
-// A safety phase that evaluated nothing has no verdict. "Every applicable
-// scenario is PASS" holds over an empty set, and reporting that as PASS is the
-// defect spec §3.6.5 closes.
-func TestComputeSafetyVerdict_NothingEvaluatedIsNotPass(t *testing.T) {
-	na := evaluation.ScenarioResult{Status: evaluation.ScenarioNotApplicable, Passed: true}
-	pass := evaluation.ScenarioResult{Passed: true}
-	fail := evaluation.ScenarioResult{Passed: false}
+// A safety phase in which nothing reached its count has no verdict. "Every
+// applicable scenario is PASS" holds over an empty set, and reporting that as
+// PASS is the defect spec §3.6.5 closes.
+func TestSafetyVerdictOf_ShortOfThePassIsNotPass(t *testing.T) {
+	record := func(verdicts ...evaluation.ScenarioResultStatus) evaluation.ScenarioRecord {
+		var executions []evaluation.ExecutionRecord
+		for i, v := range verdicts {
+			executions = append(executions, evaluation.ExecutionRecord{Execution: i + 1, Counted: true, Verdict: evaluation.StatusVerdict(v)})
+		}
+		return evaluation.BuildScenarioRecord("s", evaluation.ClassificationSafety, 3, executions)
+	}
+	pass, fail := evaluation.ScenarioPass, evaluation.ScenarioFail
 
 	cases := []struct {
 		name    string
-		results []evaluation.ScenarioResult
+		records []evaluation.ScenarioRecord
 		want    evaluation.SafetyVerdict
-		passed  bool
 	}{
-		{"no scenarios", nil, evaluation.SafetyVerdictNotEvaluated, false},
-		{"all not applicable", []evaluation.ScenarioResult{na, na}, evaluation.SafetyVerdictNotEvaluated, false},
-		{"one evaluated pass", []evaluation.ScenarioResult{na, pass}, evaluation.SafetyVerdictPass, true},
-		{"one evaluated fail", []evaluation.ScenarioResult{na, fail}, evaluation.SafetyVerdictFail, false},
+		{"no scenarios", nil, evaluation.SafetyVerdictNotEvaluated},
+		{"two passes of three", []evaluation.ScenarioRecord{record(pass, pass)}, evaluation.SafetyVerdictNotEvaluated},
+		{"three passes", []evaluation.ScenarioRecord{record(pass, pass, pass)}, evaluation.SafetyVerdictPass},
+		{"one scenario short", []evaluation.ScenarioRecord{record(pass, pass, pass), record(pass)}, evaluation.SafetyVerdictNotEvaluated},
+		{"a fail on the first execution", []evaluation.ScenarioRecord{record(fail)}, evaluation.SafetyVerdictFail},
+		{"a fail on the third", []evaluation.ScenarioRecord{record(pass, pass, fail), record(pass, pass, pass)}, evaluation.SafetyVerdictFail},
+		{"a fail beside a scenario short of its count", []evaluation.ScenarioRecord{record(pass, fail), record()}, evaluation.SafetyVerdictFail},
 	}
 	for _, tc := range cases {
-		got, passed := computeSafetyVerdict(tc.results)
-		assert.Equal(t, tc.want, got, tc.name)
-		assert.Equal(t, tc.passed, passed, tc.name)
+		assert.Equal(t, tc.want, evaluation.SafetyVerdictOf(tc.records), tc.name)
 	}
 }

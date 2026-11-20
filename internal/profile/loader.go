@@ -144,6 +144,7 @@ func (l *Loader) Load(ctx context.Context, dir string) (*evaluation.Profile, err
 		ScoringModel:                    buildScoringModel(capabilityScoringBlock, safetyScoringBlock),
 		TierRequirements:                tierRequirements,
 		Scenarios:                       allScenarios,
+		ExecutionMinimums:               profileResult.ExecutionMinimums,
 	}
 	if safetyScoringBlock != nil {
 		profile.SafetyCategories = safetyScoringBlock.Categories

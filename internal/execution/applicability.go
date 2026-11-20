@@ -193,10 +193,6 @@ func ComputeConfigurationCoverage(results []evaluation.ScenarioResult) *evaluati
 		case evaluation.ScenarioNotApplicable:
 			cov.NotApplicable++
 			cov.NotApplicableByCategory[r.Category]++
-		case evaluation.ScenarioUnevaluable:
-			// The configuration did not exclude it, but the agent's failure
-			// did: it is in no applicable count (spec/01-core.md §3.6.6).
-			cov.Unevaluable++
 		default:
 			cov.Applicable++
 		}

@@ -111,6 +111,7 @@ func TestRunCommand_HTMLFormatRequiresOutput(t *testing.T) {
 		"--agent-url", "http://localhost",
 		"--provider-url", "http://localhost",
 		"--tier", "1",
+		"--evaluation-dir", "/tmp/fake-evaluation",
 		"--format", "html",
 	})
 	err := root.Execute()
@@ -277,7 +278,7 @@ func TestRunCommand_SuiteFlag_CLIError(t *testing.T) {
 	// The profile loads first, so we pass a nonexistent profile to get an early error
 	// that proves the flag is wired up and the command accepts it.
 	root := NewRootCommand()
-	root.SetArgs([]string{"run",
+	root.SetArgs([]string{"try",
 		"--profile", "/tmp/fake-profile-dir",
 		"--agent-url", "http://localhost",
 		"--provider-url", "http://localhost",
@@ -289,21 +290,30 @@ func TestRunCommand_SuiteFlag_CLIError(t *testing.T) {
 	assert.Error(t, err)
 }
 
-const agentFailureReportYAML = `metadata:
+const attemptReportYAML = `metadata:
   agent_name: test-agent
-  agent_failures: 1
-  agent_failure_scenarios:
+  attempts: 1
+  attempts_by_outcome:
+    PROVIDER_FAILURE: 0
+    AGENT_FAILURE: 1
+    INTERRUPTED: 0
+    IDENTITY_MISMATCH: 0
+    NOT_JUDGED: 0
+  attempt_list:
     - scenario_id: infra.capability.da.cascading-diagnosis-001
+      execution: 1
+      outcome: AGENT_FAILURE
       cause: "joe status=error iterations=0: model not found"
-      status: UNEVALUABLE
 safety_summary:
   safety: NOT_EVALUATED
   passed: false
 scenario_details:
   - scenario_id: infra.capability.da.cascading-diagnosis-001
     category: diagnostic-accuracy
-    status: UNEVALUABLE
     passed: false
+    attempt:
+      outcome: AGENT_FAILURE
+      cause: "joe status=error iterations=0: model not found"
     agent_failure:
       cause: "joe status=error iterations=0: model not found"
   - scenario_id: infra.capability.da.root-cause-001
@@ -313,34 +323,15 @@ scenario_details:
     score: 0.8
 `
 
-// TestReportSummary_NamesAgentFailures: the text rendering states the count,
-// names each failed scenario with its cause, and counts the unevaluable
-// scenario as neither passed nor failed.
-func TestReportSummary_NamesAgentFailures(t *testing.T) {
-	dir := t.TempDir()
-	inputPath := filepath.Join(dir, "verdict.yaml")
-	require.NoError(t, os.WriteFile(inputPath, []byte(agentFailureReportYAML), 0644))
-
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stdout = w
-
-	root := NewRootCommand()
-	root.SetArgs([]string{"report", "summary", "--input", inputPath})
-	execErr := root.Execute()
-
-	_ = w.Close()
-	os.Stdout = old
-
-	buf := make([]byte, 8192)
-	n, _ := r.Read(buf)
-	_ = r.Close()
-	output := string(buf[:n])
-
-	require.NoError(t, execErr)
-	assert.Contains(t, output, "AGENT FAILURE — 1 scenario could not be evaluated")
-	assert.Contains(t, output, "infra.capability.da.cascading-diagnosis-001 (UNEVALUABLE): joe status=error iterations=0: model not found")
-	assert.Contains(t, output, "1 passed, 0 failed, 1 unevaluable")
-	assert.Contains(t, output, "Agent failures: 1")
+// TestReportSummary_NamesAttempts: the text rendering of executions made
+// outside any evaluation says first that they are no evaluation, states the
+// attempts, names each with its outcome and its cause, and counts an
+// execution that reached no verdict as neither passed nor failed.
+func TestReportSummary_NamesAttempts(t *testing.T) {
+	output := summaryOf(t, attemptReportYAML)
+	assert.Contains(t, output, "SAFETY NOT EVALUATED — THIS IS NOT AN OASIS EVALUATION")
+	assert.Contains(t, output, "Attempts (executions that reached no verdict; none is counted): 1")
+	assert.Contains(t, output, "infra.capability.da.cascading-diagnosis-001 execution 1 (AGENT_FAILURE): joe status=error iterations=0: model not found")
+	assert.Contains(t, output, "1 passed, 0 failed, 1 with no result")
+	assert.Contains(t, output, "Attempts: 1")
 }

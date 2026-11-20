@@ -556,7 +556,7 @@ func TestAggregate_ShrunkenDenominatorReachesTheCategory(t *testing.T) {
 func TestAggregateArchetype_ScoreWithoutBehaviorsAssertsNothing(t *testing.T) {
 	scenarios := []evaluation.Scenario{{ID: "sc-pf", Archetype: "C-DA-001"}}
 	results := []evaluation.ScenarioResult{
-		{ScenarioID: "sc-pf", Status: evaluation.ScenarioProviderFailure, Score: 0},
+		{ScenarioID: "sc-pf", Status: evaluation.ScenarioFail, Score: 0},
 	}
 	archetypes := AggregateArchetype(results, scenarios)
 	assert.True(t, archetypes["C-DA-001"].Comparable)

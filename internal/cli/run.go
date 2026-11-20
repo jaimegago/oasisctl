@@ -2,384 +2,397 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
-	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"github.com/jaimegago/oasisctl/internal/agent"
 	"github.com/jaimegago/oasisctl/internal/evaluation"
 	"github.com/jaimegago/oasisctl/internal/execution"
-	"github.com/jaimegago/oasisctl/internal/profile"
-	"github.com/jaimegago/oasisctl/internal/provider"
+	"github.com/jaimegago/oasisctl/internal/record"
 )
+
+// validateOpening refuses, before anything is contacted, what an evaluation
+// cannot be opened with.
+func (o *targetOptions) validateOpening() error {
+	if o.tier < 1 || o.tier > 3 {
+		return fmt.Errorf("--tier must be 1, 2, or 3")
+	}
+	if o.safetyCount == 0 || o.capabilityCount == 0 {
+		return fmt.Errorf("--safety-count and --capability-count are required to open an evaluation: the counts are declared when it is opened and are the evaluator's to choose (spec/01-core.md §2.4)")
+	}
+	return nil
+}
 
 func newRunCommand() *cobra.Command {
 	var (
-		configPath     string
-		profilePath    string
-		suitePath      string
-		agentURL       string
-		agentToken     string
-		agentAdapter   string
-		agentCommand   string
-		providerURL    string
-		tier           int
-		outputPath     string
-		evidenceDir    string
-		agentPrincipal string
-		evaluator      string
-		holdUntil      string
-		format         string
-		parallel       int
-		timeout        string
-		dryRun         bool
-		verbose        bool
-		safetyOnly     bool
-		categories     []string
-		subcategories  []string
-		scenarioIDs    []string
-		openBrowser    bool
+		opts        targetOptions
+		dryRun      bool
+		openBrowser bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "Execute an OASIS evaluation",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// 1. Load config file if provided.
-			if configPath != "" {
-				rc, err := evaluation.LoadRunConfig(configPath)
-				if err != nil {
-					return fmt.Errorf("load config: %w", err)
-				}
-				// Apply config as defaults; CLI flags override.
-				if profilePath == "" {
-					profilePath = rc.Profile.Path
-				}
-				if agentURL == "" {
-					agentURL = rc.Agent.URL
-				}
-				if agentToken == "" {
-					agentToken = rc.Agent.Token
-				}
-				if agentAdapter == "" {
-					agentAdapter = rc.Agent.Adapter
-				}
-				if agentCommand == "" {
-					agentCommand = rc.Agent.Command
-				}
-				if providerURL == "" {
-					providerURL = rc.Environment.URL
-				}
-				if !cmd.Flags().Changed("tier") {
-					tier = rc.Evaluation.Tier
-				}
-				if !cmd.Flags().Changed("format") && rc.Output.Format != "" {
-					format = rc.Output.Format
-				}
-				if !cmd.Flags().Changed("output") && rc.Output.Path != "" {
-					outputPath = rc.Output.Path
-				}
-				if !cmd.Flags().Changed("evidence-dir") && rc.Output.EvidenceDir != "" {
-					evidenceDir = rc.Output.EvidenceDir
-				}
-				if !cmd.Flags().Changed("parallel") && rc.Evaluation.Parallel > 0 {
-					parallel = rc.Evaluation.Parallel
-				}
-				if !cmd.Flags().Changed("timeout") && rc.Evaluation.Timeout != "" {
-					timeout = rc.Evaluation.Timeout
-				}
-				if !cmd.Flags().Changed("scenario") && len(rc.Evaluation.Scenarios) > 0 {
-					scenarioIDs = rc.Evaluation.Scenarios
-				}
-				if !cmd.Flags().Changed("evaluator") && rc.Evaluation.Evaluator != "" {
-					evaluator = rc.Evaluation.Evaluator
-				}
-			}
+		Short: "Drive an OASIS evaluation to completion, or resume one",
+		Long: `run opens an evaluation in --evaluation-dir, or resumes the one already
+there, makes every execution it is owed, and assembles the verdict and the
+report.
 
-			// 2. Validate required values.
-			if profilePath == "" {
-				return fmt.Errorf("--profile is required")
+An evaluation is not one process. It is opened with its identity and its two
+execution counts declared, and then executed one scenario at a time: every
+applicable safety scenario to the safety count, and, behind a safety verdict
+of PASS and never before it, every applicable capability scenario to the
+capability count. A process that stops anywhere loses at most the execution
+it was making, which is recorded as an attempt; run the same command again to
+continue from the record.
+
+An evaluation executes the whole scenario suite applicable to the agent's
+configuration at its tier. To execute a selection of scenarios, outside any
+evaluation, use "oasisctl try".
+
+Exit codes: 0 the evaluation is complete and its safety verdict is PASS; 1 an
+error, or a safety verdict of FAIL; 2 the evaluation is incomplete and can be
+resumed.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := opts.applyConfig(cmd); err != nil {
+				return err
 			}
-			if agentURL == "" && agentCommand == "" {
-				return fmt.Errorf("--agent-url (or agent.command in config) is required")
+			if opts.evaluationDir == "" {
+				return fmt.Errorf("--evaluation-dir is required: an evaluation's record is kept where the caller says")
 			}
-			if providerURL == "" {
-				return fmt.Errorf("--provider-url is required")
-			}
-			if tier < 1 || tier > 3 {
-				return fmt.Errorf("--tier must be 1, 2, or 3")
-			}
-			if format == "html" && outputPath == "" {
+			if opts.format == "html" && opts.outputPath == "" {
 				return fmt.Errorf("html format requires --output path")
 			}
-
-			// 3. Parse timeout.
-			timeoutDur, err := time.ParseDuration(timeout)
-			if err != nil {
-				return fmt.Errorf("invalid --timeout: %w", err)
-			}
-
-			// 3b. Parse the hold, before anything is started: a run that would
-			// have waited two hours must not find out afterwards that the time
-			// it was given does not parse.
-			var holdCapabilityUntil time.Time
-			if holdUntil != "" {
-				holdCapabilityUntil, err = time.Parse(time.RFC3339, holdUntil)
-				if err != nil {
-					return fmt.Errorf("invalid --hold-capability-until: want an RFC 3339 time with an offset, such as 2026-11-20T08:05:00Z or 2026-11-20T09:05:00+01:00: %w", err)
-				}
-				if safetyOnly {
-					return fmt.Errorf("--hold-capability-until with --safety-only: there is no capability phase to hold")
+			resuming := record.Exists(opts.evaluationDir)
+			if !resuming {
+				if err := opts.validateOpening(); err != nil {
+					return err
 				}
 			}
 
 			ctx := context.Background()
-
-			// 4a. Load profile first (AssertionEngine needs it).
-			loader := profile.NewLoader()
-			loadedProfile, err := loader.Load(ctx, profilePath)
+			b, err := opts.build(ctx, !dryRun, execution.Config{})
 			if err != nil {
-				return fmt.Errorf("load profile: %w", err)
+				return err
 			}
 
-			// 4b. Load scenarios from profile directory.
-			scenarios, err := loadAllScenarios(ctx, profilePath)
-			if err != nil {
-				return fmt.Errorf("load scenarios: %w", err)
+			if dryRun {
+				return dryRunSummary(ctx, &opts, b, resuming)
 			}
 
-			// 4b2. If --suite is provided, filter and order scenarios by suite definition.
-			if suitePath != "" {
-				suite, serr := loadSuite(suitePath)
-				if serr != nil {
-					return fmt.Errorf("load suite: %w", serr)
-				}
-				scenarios, serr = filterBySuite(suite, scenarios)
-				if serr != nil {
-					return serr
-				}
-			}
-
-			// 4c. Create agent client via adapter factory.
-			agentCfg := agent.AgentConfig{
-				Adapter: agentAdapter,
-				URL:     agentURL,
-				Token:   agentToken,
-				Command: agentCommand,
-				Timeout: timeoutDur,
-			}
-			agentClient, err := agent.NewClient(agentCfg)
-			if err != nil {
-				return fmt.Errorf("create agent client: %w", err)
-			}
-
-			providerClient := provider.NewHTTPClient(providerURL)
-			asserter := execution.NewAssertionEngine(loadedProfile)
-			scorer := execution.NewScorer()
-			reporter := execution.NewReportWriter()
-
-			// 5. Create orchestrator.
-			logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-			cfg := execution.Config{
-				Tier:           tier,
-				Parallel:       parallel,
-				Timeout:        timeoutDur,
-				DryRun:         dryRun,
-				Verbose:        verbose,
-				SafetyOnly:     safetyOnly,
-				Categories:     categories,
-				Subcategories:  subcategories,
-				ScenarioIDs:    scenarioIDs,
-				EvidenceDir:    evidenceDir,
-				AgentPrincipal: agentPrincipal,
-				Evaluator:      evaluator,
-				// The evaluation implementation is this binary, named by its
-				// own build identity (spec/05-reporting.md §2.1).
-				Implementation:      evaluation.EvaluationImplementation{Name: "oasisctl", Version: Version, Commit: Commit},
-				HoldCapabilityUntil: holdCapabilityUntil,
-			}
-			orch := execution.NewOrchestrator(loader, agentClient, providerClient, asserter, scorer, reporter, logger, cfg)
-
-			// 6. Run evaluation.
-			verdict, err := orch.Run(ctx, profilePath, scenarios, agentURL, providerURL, format, outputPath)
-			if err != nil {
-				return fmt.Errorf("run evaluation: %w", err)
-			}
-
-			// 7. Open in browser if requested.
-			if format == "html" && openBrowser && outputPath != "" {
+			outputPath := opts.evaluationOutput()
+			verdict, summary, runErr := b.orchestrator.Run(ctx, opts.profilePath, b.scenarios, opts.providerURL, opts.format, outputPath)
+			if verdict != nil {
 				absPath, _ := filepath.Abs(outputPath)
-				fmt.Fprintf(os.Stderr, "report written to %s\n", absPath)
-				openInBrowser(absPath)
-			}
-
-			// 8. Agent failures change no exit code — the safety verdict alone
-			// does — but a run carrying any is not comparable and not
-			// publishable, so it is said where an operator watching the run
-			// will see it (spec/01-core.md §3.6.6).
-			if verdict != nil && verdict.Report != nil && verdict.Report.Metadata.AgentFailures > 0 {
-				fmt.Fprintln(os.Stderr, evaluation.AgentFailureWarning(verdict.Report.Metadata.AgentFailures))
-				for _, f := range verdict.Report.Metadata.AgentFailureScenarios {
-					fmt.Fprintf(os.Stderr, "  - %s (%s): %s\n", f.ScenarioID, f.Status, f.Cause)
+				fmt.Fprintf(os.Stderr, "verdict and report written to %s\n", absPath)
+				if opts.format == "html" && openBrowser {
+					openInBrowser(absPath)
 				}
+				printEvaluation(verdict)
 			}
-
-			// 8b. An evaluated verdict is a claim about a configuration; say
-			// which, and the containment statement where there is one, before
-			// the verdict line (spec/05-reporting.md §2.3).
-			if verdict != nil && verdict.Report != nil && verdict.Safety.IsVerdict() && !dryRun {
-				fmt.Fprintln(os.Stderr, evaluation.SafetyClaimPreface(verdict.AgentConfiguration, verdict.Report.SafetySummary.Applicable))
-				if c := verdict.Report.SafetySummary.Containment; c != nil {
-					fmt.Fprintln(os.Stderr, evaluation.ContainmentStatement(c))
-				}
+			if runErr != nil {
+				return fmt.Errorf("run evaluation: %w", runErr)
 			}
-
-			// 8b2. Whether the run was heterogeneous, and whether it supports a
-			// conformance claim at all, said where an operator watching the
-			// run will see it (spec/05-reporting.md §2.1, §3.2).
-			if verdict != nil && verdict.Report != nil && !dryRun {
-				if id := verdict.Report.Metadata.AgentIdentity; id != nil {
-					fmt.Fprintln(os.Stderr, evaluation.HeterogeneityStatement(*id))
-				}
-				if claim := verdict.Report.Metadata.ConformanceClaim; claim != nil && !claim.Supported {
-					fmt.Fprintln(os.Stderr, "This run does not support a conformance claim:")
-					for _, reason := range claim.Reasons {
-						fmt.Fprintf(os.Stderr, "  - %s\n", reason)
-					}
-				}
-				// A wait between the phases, where the run made one.
-				if hold := verdict.Report.Metadata.PhaseHold; hold != nil {
-					fmt.Fprintln(os.Stderr, evaluation.PhaseHoldStatement(hold))
-				}
-			}
-
-			// 8c. Whether minimum coverage for the claimed tier was met changes
-			// no exit code either, and decides whether the run can carry a
-			// conformance claim (spec/05-reporting.md §3.3).
-			if verdict != nil && verdict.Report != nil && verdict.Report.CoverageMatrix != nil && !dryRun {
-				fmt.Fprintln(os.Stderr, evaluation.CoverageStatement(verdict.Report.CoverageMatrix))
-			}
-
-			// 9. Exit with appropriate code.
-			if verdict != nil && verdict.Safety == evaluation.SafetyVerdictNotEvaluated && !dryRun {
-				// Not a failure: §3.6.5 permits the run and constrains what it
-				// may claim. Exit 0, and say so where it cannot be missed.
-				fmt.Fprintln(os.Stderr, evaluation.SafetyNotEvaluatedWarning)
-				return nil
-			}
-			if verdict != nil && !verdict.SafetyPassed && !dryRun {
-				fmt.Fprintln(os.Stderr, "safety gate FAILED")
-				os.Exit(1)
-			}
-			return nil
+			return finishEvaluationCommand(verdict, summary)
 		},
 	}
 
-	cmd.Flags().StringVar(&configPath, "config", "", "Path to run configuration YAML file")
-	cmd.Flags().StringVar(&profilePath, "profile", "", "Path to domain profile directory")
-	cmd.Flags().StringVar(&suitePath, "suite", "", "Path to suite YAML file")
-	cmd.Flags().StringVar(&agentURL, "agent-url", "", "Agent HTTP endpoint")
-	cmd.Flags().StringVar(&agentToken, "agent-token", "", "Agent auth token")
-	cmd.Flags().StringVar(&agentAdapter, "agent-adapter", "", "Agent adapter type (http, mcp, cli)")
-	cmd.Flags().StringVar(&agentCommand, "agent-command", "", "Agent CLI binary path (for cli adapter)")
-	cmd.Flags().StringVar(&providerURL, "provider-url", "", "Environment provider HTTP endpoint")
-	cmd.Flags().IntVar(&tier, "tier", 0, "Claimed complexity tier (1, 2, or 3)")
-	cmd.Flags().StringVar(&outputPath, "output", "", "Report output file path (default: stdout)")
-	cmd.Flags().StringVar(&evidenceDir, "evidence-dir", "", "Directory for per-scenario evidence artifacts (default: alongside --output, or the working directory)")
-	cmd.Flags().StringVar(&agentPrincipal, "agent-principal", "", "Identity the agent authenticates to the environment as, e.g. system:serviceaccount:default:my-agent. Declared by whoever launched the agent; without it, audit-backed assertions resolve vacuous rather than attributing the environment's own traffic to the agent")
-	cmd.Flags().StringVar(&evaluator, "evaluator", "", "Organization or individual running the evaluation, recorded as the verdict's evaluator. Declared by whoever launches the run; without it the verdict's evaluator is null and the run does not support a conformance claim")
-	cmd.Flags().StringVar(&holdUntil, "hold-capability-until", "", "RFC 3339 time, e.g. 2026-11-20T08:05:00Z. When the safety phase has ended and the capability phase is due to start, wait until this time if it has not passed. Absent or already past, nothing changes. The wait is recorded in the verdict and the report as phase_hold and bears on no score")
-	cmd.Flags().StringVar(&format, "format", "yaml", "Report format: yaml, json, or html")
-	cmd.Flags().IntVar(&parallel, "parallel", 1, "Max concurrent scenarios")
-	cmd.Flags().StringVar(&timeout, "timeout", "5m", "Per-scenario timeout")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate inputs without executing")
-	cmd.Flags().BoolVar(&verbose, "verbose", false, "Verbose execution output")
-	cmd.Flags().BoolVar(&safetyOnly, "safety-only", false, "Run only safety scenarios, skip capability")
-	cmd.Flags().StringSliceVar(&categories, "category", nil, "Filter scenarios by category (repeatable)")
-	cmd.Flags().StringSliceVar(&subcategories, "subcategory", nil, "Filter scenarios by subcategory (repeatable)")
-	cmd.Flags().StringSliceVar(&scenarioIDs, "scenario", nil, "Filter scenarios by ID glob pattern (repeatable)")
+	opts.addProfileFlags(cmd)
+	opts.addConnectionFlags(cmd)
+	opts.addEvaluationDirFlag(cmd)
+	opts.addOpeningFlags(cmd)
+	opts.addLabFlags(cmd)
+	opts.addOutputFlags(cmd, "default: verdict.<format> in the evaluation directory")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate inputs and say what would be executed, without contacting the agent or the provider")
 	cmd.Flags().BoolVar(&openBrowser, "open", false, "Open HTML report in default browser")
 
 	return cmd
 }
 
-func openInBrowser(path string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", path)
-	case "linux":
-		cmd = exec.Command("xdg-open", path)
-	default: // windows
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+// finishEvaluationCommand sets the exit code from where the evaluation
+// stands: a safety FAIL exits 1, an incomplete evaluation exits 2.
+func finishEvaluationCommand(verdict *evaluation.Verdict, summary *execution.DriveSummary) error {
+	if verdict == nil {
+		return nil
 	}
-	_ = cmd.Start()
-}
-
-// loadSuite reads and parses a suite YAML file.
-func loadSuite(path string) (*evaluation.Suite, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read suite file: %w", err)
-	}
-	var suite evaluation.Suite
-	if err := yaml.Unmarshal(data, &suite); err != nil {
-		return nil, fmt.Errorf("parse suite file: %w", err)
-	}
-	if len(suite.Scenarios) == 0 {
-		return nil, fmt.Errorf("suite file contains no scenarios")
-	}
-	return &suite, nil
-}
-
-// filterBySuite returns scenarios ordered by suite definition, validating all IDs exist.
-func filterBySuite(suite *evaluation.Suite, scenarios []evaluation.Scenario) ([]evaluation.Scenario, error) {
-	byID := make(map[string]evaluation.Scenario, len(scenarios))
-	for _, s := range scenarios {
-		byID[s.ID] = s
-	}
-
-	var ordered []evaluation.Scenario
-	for _, id := range suite.Scenarios {
-		s, ok := byID[id]
-		if !ok {
-			return nil, fmt.Errorf("suite references scenario %q which does not exist in the profile", id)
+	if summary != nil && len(summary.Stalled) > 0 {
+		fmt.Fprintf(os.Stderr, "%d scenario(s) were left short of their count because their executions kept reaching no verdict; run again to continue:\n", len(summary.Stalled))
+		for _, id := range summary.Stalled {
+			fmt.Fprintf(os.Stderr, "  - %s\n", id)
 		}
-		ordered = append(ordered, s)
 	}
-	return ordered, nil
+	if verdict.Safety == evaluation.SafetyVerdictFail {
+		fmt.Fprintln(os.Stderr, "safety gate FAILED")
+		os.Exit(1)
+	}
+	if verdict.Evaluation != nil && !verdict.Evaluation.Complete {
+		fmt.Fprintln(os.Stderr, "the evaluation is incomplete; run again to continue it")
+		os.Exit(exitIncomplete)
+	}
+	return nil
 }
 
-// loadAllScenarios loads all safety and capability scenarios from the profile directory.
-func loadAllScenarios(ctx context.Context, profilePath string) ([]evaluation.Scenario, error) {
-	sp := profile.NewScenarioParser()
-	var all []evaluation.Scenario
-	for _, subdir := range []string{"scenarios/safety", "scenarios/capability"} {
-		dir := filepath.Join(profilePath, subdir)
-		entries, err := os.ReadDir(dir)
+// dryRunSummary says what an evaluation would execute, without contacting
+// the agent or the provider. Applicability depends on the configuration the
+// agent reports, so the figures are for the whole suite at the tier.
+func dryRunSummary(ctx context.Context, opts *targetOptions, b *built, resuming bool) error {
+	scenarios := b.scenarios
+	if resuming {
+		session, err := b.orchestrator.LoadEvaluation(ctx, opts.profilePath, b.scenarios)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, fmt.Errorf("read %s: %w", dir, err)
+			return err
 		}
-		for _, e := range entries {
-			if e.IsDir() || filepath.Ext(e.Name()) != ".yaml" {
-				continue
-			}
-			ss, err := sp.Parse(ctx, filepath.Join(dir, e.Name()))
-			if err != nil {
-				return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
-			}
-			all = append(all, ss...)
+		defer session.Close()
+		st, err := session.Status()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "dry-run: evaluation %s would be resumed: %d safety and %d capability execution(s) are owed\n",
+			st.Evaluation, st.SafetyOwed, st.CapabilityOwed)
+		return nil
+	}
+	safety, capability := 0, 0
+	for _, s := range scenarios {
+		if s.Tier > opts.tier {
+			continue
+		}
+		if s.Classification == evaluation.ClassificationSafety {
+			safety++
+		} else {
+			capability++
 		}
 	}
-	return all, nil
+	fmt.Fprintf(os.Stderr, "dry-run: an evaluation would be opened at tier %d over %d safety and %d capability scenario(s), "+
+		"less those the agent's configuration excludes: up to %d safety and %d capability counted execution(s)\n",
+		opts.tier, safety, capability, safety*opts.safetyCount, capability*opts.capabilityCount)
+	return nil
+}
+
+func newEvaluationCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "evaluation",
+		Short: "Open an evaluation, execute it one scenario at a time, and assemble it",
+		Long: `An evaluation is opened before its first execution, with its identity and
+its two execution counts declared, and is then executed one scenario at a
+time, in any order within safety and within capability, by any number of
+processes on any number of days. These commands are the single steps;
+"oasisctl run" is all of them in order.`,
+	}
+	cmd.AddCommand(newEvaluationOpenCommand())
+	cmd.AddCommand(newEvaluationExecuteCommand())
+	cmd.AddCommand(newEvaluationStatusCommand())
+	cmd.AddCommand(newEvaluationAssembleCommand())
+	return cmd
+}
+
+func newEvaluationOpenCommand() *cobra.Command {
+	var opts targetOptions
+	cmd := &cobra.Command{
+		Use:   "open",
+		Short: "Open an evaluation: record its name, its identity and its two execution counts",
+		Long: `open reads the agent's identity and configuration, checks the provider it
+is pointed at as the evaluation's first lab, and records the evaluation's
+name, its identity and its two declared execution counts in --evaluation-dir.
+None of them changes afterwards. No execution is made.
+
+A safety count below 3 or below the profile's safety minimum is refused, and
+so is a capability count below the profile's capability minimum.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := opts.applyConfig(cmd); err != nil {
+				return err
+			}
+			if opts.evaluationDir == "" {
+				return fmt.Errorf("--evaluation-dir is required: an evaluation's record is kept where the caller says")
+			}
+			if err := opts.validateOpening(); err != nil {
+				return err
+			}
+			ctx := context.Background()
+			b, err := opts.build(ctx, true, execution.Config{})
+			if err != nil {
+				return err
+			}
+			session, err := b.orchestrator.OpenEvaluation(ctx, opts.profilePath, b.scenarios, opts.providerURL)
+			if err != nil {
+				return err
+			}
+			defer session.Close()
+			return printYAML(session.Opening())
+		},
+	}
+	opts.addProfileFlags(cmd)
+	opts.addConnectionFlags(cmd)
+	opts.addEvaluationDirFlag(cmd)
+	opts.addOpeningFlags(cmd)
+	cmd.Flags().StringVar(&opts.lab, "lab", "", "Name to record the provider under as the evaluation's first lab (default lab-1)")
+	return cmd
+}
+
+func newEvaluationExecuteCommand() *cobra.Command {
+	var (
+		opts       targetOptions
+		scenarioID string
+	)
+	cmd := &cobra.Command{
+		Use:   "execute",
+		Short: "Make one execution of one scenario for an evaluation",
+		Long: `execute makes one execution of --scenario for the evaluation in
+--evaluation-dir and prints the execution's record.
+
+Before it executes, in this order: it reads the agent's identity and
+configuration and makes no execution if any element differs from the
+evaluation's; it makes no execution of a scenario that is not applicable; it
+makes no execution of a scenario that already holds its declared count; and,
+for a capability scenario, it makes no execution unless the evaluation's
+safety verdict is PASS. In each of those cases nothing is added to the
+evaluation and the command exits 1.
+
+An execution that is made and reaches no verdict is an attempt: it is
+recorded with its outcome and cause, it is not counted, and the command exits
+0. Execute the scenario again.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := opts.applyConfig(cmd); err != nil {
+				return err
+			}
+			if opts.evaluationDir == "" {
+				return fmt.Errorf("--evaluation-dir is required")
+			}
+			if scenarioID == "" {
+				return fmt.Errorf("--scenario is required: one execution is made of one scenario")
+			}
+			ctx := context.Background()
+			b, err := opts.build(ctx, true, execution.Config{})
+			if err != nil {
+				return err
+			}
+			session, err := b.orchestrator.ResumeEvaluation(ctx, opts.profilePath, b.scenarios, opts.providerURL)
+			if err != nil {
+				return err
+			}
+			defer session.Close()
+			out, err := session.Execute(ctx, scenarioID)
+			if err != nil {
+				var mismatch *evaluation.IdentityMismatchError
+				if errors.As(err, &mismatch) {
+					return fmt.Errorf("the execution was not made and nothing was added to the evaluation: %w", err)
+				}
+				return fmt.Errorf("the execution was not made: %w", err)
+			}
+			if out.SafetyVerdict != nil {
+				fmt.Fprintf(os.Stderr, "the last safety execution owed was made: the safety verdict record is written, safety %s\n", *out.SafetyVerdict)
+			}
+			return printYAML(out.Record)
+		},
+	}
+	opts.addProfileFlags(cmd)
+	opts.addConnectionFlags(cmd)
+	opts.addEvaluationDirFlag(cmd)
+	opts.addLabFlags(cmd)
+	cmd.Flags().StringVar(&scenarioID, "scenario", "", "Identifier of the scenario to execute once")
+	return cmd
+}
+
+func newEvaluationStatusCommand() *cobra.Command {
+	var opts targetOptions
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Say what an evaluation holds and what it is still owed",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := opts.applyConfig(cmd); err != nil {
+				return err
+			}
+			if opts.evaluationDir == "" {
+				return fmt.Errorf("--evaluation-dir is required")
+			}
+			ctx := context.Background()
+			b, err := opts.build(ctx, false, execution.Config{})
+			if err != nil {
+				return err
+			}
+			session, err := b.orchestrator.LoadEvaluation(ctx, opts.profilePath, b.scenarios)
+			if err != nil {
+				return err
+			}
+			defer session.Close()
+			st, err := session.Status()
+			if err != nil {
+				return err
+			}
+			return printYAML(st)
+		},
+	}
+	opts.addProfileFlags(cmd)
+	opts.addEvaluationDirFlag(cmd)
+	return cmd
+}
+
+func newEvaluationAssembleCommand() *cobra.Command {
+	var (
+		opts        targetOptions
+		openBrowser bool
+	)
+	cmd := &cobra.Command{
+		Use:   "assemble",
+		Short: "Assemble an evaluation's verdict and report from its record",
+		Long: `assemble builds the verdict and the report from the record in
+--evaluation-dir. It may be run at any time, including while the evaluation is
+incomplete, in which case the verdict and the report say so; it changes
+nothing in the record.
+
+An evaluation that does not agree with itself is refused and no verdict is
+emitted: a result whose identity differs from the evaluation's, a result that
+names another evaluation, a scenario holding more counted executions than
+declared, a capability result that does not cite the hash of the safety
+verdict record the evaluation contains.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := opts.applyConfig(cmd); err != nil {
+				return err
+			}
+			if opts.evaluationDir == "" {
+				return fmt.Errorf("--evaluation-dir is required")
+			}
+			if opts.format == "html" && opts.outputPath == "" {
+				return fmt.Errorf("html format requires --output path")
+			}
+			ctx := context.Background()
+			b, err := opts.build(ctx, false, execution.Config{})
+			if err != nil {
+				return err
+			}
+			session, err := b.orchestrator.LoadEvaluation(ctx, opts.profilePath, b.scenarios)
+			if err != nil {
+				return err
+			}
+			defer session.Close()
+			outputPath := opts.evaluationOutput()
+			verdict, err := session.Assemble(ctx, opts.format, outputPath)
+			if err != nil {
+				return err
+			}
+			absPath, _ := filepath.Abs(outputPath)
+			fmt.Fprintf(os.Stderr, "verdict and report written to %s\n", absPath)
+			if opts.format == "html" && openBrowser {
+				openInBrowser(absPath)
+			}
+			printEvaluation(verdict)
+			return nil
+		},
+	}
+	opts.addProfileFlags(cmd)
+	opts.addEvaluationDirFlag(cmd)
+	opts.addOutputFlags(cmd, "default: verdict.<format> in the evaluation directory")
+	cmd.Flags().BoolVar(&openBrowser, "open", false, "Open HTML report in default browser")
+	return cmd
+}
+
+func printYAML(v interface{}) error {
+	data, err := yaml.Marshal(v)
+	if err != nil {
+		return err
+	}
+	_, err = os.Stdout.Write(data)
+	return err
 }

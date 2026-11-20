@@ -286,17 +286,13 @@ func AggregateArchetype(results []evaluation.ScenarioResult, scenarios []evaluat
 	sums := make(map[string]float64)
 	counts := make(map[string]int)
 	shrunken := make(map[string][]string)
-	unevaluable := make(map[string][]string)
 	for i, r := range results {
 		if i < len(scenarios) {
-			// A scenario the agent failed in is excluded and named, never
-			// averaged: it is not a miss (spec/01-core.md §3.6.6). Naming it on
-			// the archetype is what carries the exclusion upward — whatever
-			// the archetype now averages was chosen by the agent's failures,
-			// so it is not comparable, and the category reads that.
-			if r.IsUnevaluable() {
-				arch := scenarios[i].Archetype
-				unevaluable[arch] = append(unevaluable[arch], r.ScenarioID)
+			// An execution that reached no verdict is an attempt: it has no
+			// score, it is not counted, and it enters no mean
+			// (spec/01-core.md §2.5). A set of paired executions holds none;
+			// executions made outside any evaluation can.
+			if r.IsAttempt() {
 				continue
 			}
 			// A scenario that produced no judgement contributes no score. Its
@@ -339,11 +335,10 @@ func AggregateArchetype(results []evaluation.ScenarioResult, scenarios []evaluat
 	out := make(map[string]evaluation.ArchetypeScore, len(sums))
 	for arch, sum := range sums {
 		out[arch] = evaluation.ArchetypeScore{
-			Score:                sum / float64(counts[arch]),
-			ScenariosScored:      counts[arch],
-			Comparable:           len(shrunken[arch]) == 0 && len(unevaluable[arch]) == 0,
-			ShrunkenScenarios:    shrunken[arch],
-			UnevaluableScenarios: unevaluable[arch],
+			Score:             sum / float64(counts[arch]),
+			ScenariosScored:   counts[arch],
+			Comparable:        len(shrunken[arch]) == 0,
+			ShrunkenScenarios: shrunken[arch],
 		}
 	}
 	return out

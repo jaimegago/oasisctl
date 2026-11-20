@@ -13,18 +13,33 @@ import (
 	"github.com/jaimegago/oasisctl/internal/evaluation"
 )
 
-// supportedClaimInputs is a verdict and report that support a conformance
-// claim, for a test to break in one place.
+// supportedClaimInputs is an assembled evaluation and its report that support
+// a conformance claim, for a test to break in one place.
 func supportedClaimInputs() (*evaluation.Verdict, *evaluation.Report) {
-	whole := evaluation.BuildVerdictAgentIdentity(wholeDeclaration(), []evaluation.ObservedModelRecord{
-		{ScenarioID: "s.1", ObservedModel: strp(conformanceModel)},
-	})
+	whole := evaluation.BuildVerdictAgentIdentity(wholeDeclaration())
 	evaluator := "Example Lab"
-	v := &evaluation.Verdict{Safety: evaluation.SafetyVerdictPass}
+	v := &evaluation.Verdict{
+		Safety: evaluation.SafetyVerdictPass,
+		Evaluation: &evaluation.AssembledEvaluation{
+			Complete: true,
+			Opening: evaluation.EvaluationOpening{
+				Evaluation:      "claimed-evaluation",
+				ExecutionCounts: evaluation.ExecutionCounts{Safety: 3, Capability: 4},
+				Identity: evaluation.EvaluationIdentity{
+					Agent: "agent-under-test", AgentVersion: "v1.2.3",
+					AgentConfiguration:   evaluation.AgentConfiguration{"operational_mode": "read_only"},
+					DomainProfile:        "test-profile",
+					DomainProfileVersion: "0.1.0",
+					Environment:          evaluation.IdentityEnvironment{Tier: 1},
+				},
+			},
+		},
+	}
 	r := &evaluation.Report{}
 	r.Metadata.EvaluationMode.Complete = true
 	r.Metadata.AgentIdentity = &whole
 	r.Metadata.Evaluator = &evaluator
+	r.SafetySummary.Applicable = 21
 	r.Environment.ScenarioFigures = []evaluation.TierCheck{
 		{Requirement: "namespaces", Status: evaluation.TierCheckMet},
 		{Requirement: "microservices", Status: evaluation.TierCheckMet},
@@ -33,20 +48,27 @@ func supportedClaimInputs() (*evaluation.Verdict, *evaluation.Report) {
 	return v, r
 }
 
-// TestConformanceClaim_ReadsEveryCapabilityResultsRange: a capability result
-// is a score from 0.0 to 1.0 (spec/05-reporting.md §1.2). A run carrying one
-// outside it wrote a verdict the format forbids, and does not support a claim;
-// the reason names the scenario and the value. Run 20261119-234640-ca82d6
-// carried -0.25 for C-DA-004 and was reported as supporting one.
-func TestConformanceClaim_ReadsEveryCapabilityResultsRange(t *testing.T) {
-	inRange := []evaluation.ScenarioResult{
-		{ScenarioID: "c.zero", Score: 0},
-		{ScenarioID: "c.half", Score: 0.5},
-		{ScenarioID: "c.one", Score: 1, Passed: true},
+// capabilityRecord is a capability scenario's record with the given counted
+// execution scores, and one attempt, which has no score to be out of range.
+func capabilityRecord(id string, scores ...float64) evaluation.ScenarioRecord {
+	executions := []evaluation.ExecutionRecord{{Execution: 1, Outcome: evaluation.AttemptAgentFailure, Cause: "x"}}
+	for i, s := range scores {
+		executions = append(executions, evaluation.ExecutionRecord{Execution: i + 2, Counted: true, Verdict: evaluation.ScoreVerdict(s)})
 	}
+	return evaluation.BuildScenarioRecord(id, evaluation.ClassificationCapability, len(scores), executions)
+}
+
+// TestConformanceClaim_ReadsEveryCapabilityScoresRange: a capability score is
+// from 0.0 to 1.0 (spec/05-reporting.md §1.3). An evaluation carrying one
+// outside it wrote a verdict the format forbids, and does not support a
+// claim; the reason names the scenario, the execution and the value. Run
+// 20261119-234640-ca82d6 carried -0.25 for C-DA-004 and was reported as
+// supporting one.
+func TestConformanceClaim_ReadsEveryCapabilityScoresRange(t *testing.T) {
+	inRange := []evaluation.ScenarioRecord{capabilityRecord("c.fine", 0, 0.5, 1)}
 
 	v, r := supportedClaimInputs()
-	v.CapabilityResults = inRange
+	v.Evaluation.CapabilityRecords = inRange
 	claim := conformanceClaim(v, r)
 	assert.True(t, claim.Supported, "0, 0.5 and 1 are all in range; reasons: %v", claim.Reasons)
 
@@ -54,72 +76,96 @@ func TestConformanceClaim_ReadsEveryCapabilityResultsRange(t *testing.T) {
 		score float64
 		want  string
 	}{
-		"below zero":   {-0.25, `the capability result of scenario "c.bad" is -0.25, outside the 0.0 to 1.0 the verdict format allows`},
-		"above one":    {1.2, `the capability result of scenario "c.bad" is 1.2, outside the 0.0 to 1.0 the verdict format allows`},
-		"not a number": {math.NaN(), `the capability result of scenario "c.bad" is NaN, outside`},
+		"below zero":   {-0.25, `the score of execution 3 of scenario "c.bad" is -0.25, outside the 0.0 to 1.0 the verdict format allows`},
+		"above one":    {1.2, `the score of execution 3 of scenario "c.bad" is 1.2, outside the 0.0 to 1.0 the verdict format allows`},
+		"not a number": {math.NaN(), `the score of execution 3 of scenario "c.bad" is NaN, outside`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			v, r := supportedClaimInputs()
-			v.CapabilityResults = append(append([]evaluation.ScenarioResult{}, inRange...), evaluation.ScenarioResult{ScenarioID: "c.bad", Score: tt.score})
+			v.Evaluation.CapabilityRecords = append(append([]evaluation.ScenarioRecord{}, inRange...), capabilityRecord("c.bad", 0.5, tt.score, 0.5))
 			claim := conformanceClaim(v, r)
 			assert.False(t, claim.Supported)
-			require.Len(t, claim.Reasons, 1, "the range is the only thing wrong with this run")
+			require.Len(t, claim.Reasons, 1, "the range is the only thing wrong with this evaluation")
 			assert.Contains(t, claim.Reasons[0], tt.want)
+			assert.Nil(t, claim.Claim, "an unsupported claim is not stated")
 		})
 	}
 
-	// Every one is named, in run order.
+	// Every one is named, in order.
 	v, r = supportedClaimInputs()
-	v.CapabilityResults = []evaluation.ScenarioResult{
-		{ScenarioID: "c.first", Score: -1},
-		{ScenarioID: "c.fine", Score: 0.4},
-		{ScenarioID: "c.second", Score: 2},
+	v.Evaluation.CapabilityRecords = []evaluation.ScenarioRecord{
+		capabilityRecord("c.first", -1, 0.4, 0.4),
+		capabilityRecord("c.fine", 0.4, 0.4, 0.4),
+		capabilityRecord("c.second", 0.4, 0.4, 2),
 	}
 	claim = conformanceClaim(v, r)
 	require.Len(t, claim.Reasons, 2)
 	assert.Contains(t, claim.Reasons[0], `"c.first"`)
 	assert.Contains(t, claim.Reasons[1], `"c.second"`)
-
-	// A scenario with no result has no range to be outside of: its Score is
-	// the zero a float defaults to, or whatever was left there, and it is not
-	// read.
-	v, r = supportedClaimInputs()
-	v.CapabilityResults = []evaluation.ScenarioResult{
-		{ScenarioID: "c.na", Status: evaluation.ScenarioNotApplicable, Score: -5, Passed: true},
-		{ScenarioID: "c.unevaluable", Status: evaluation.ScenarioUnevaluable, Score: -5},
-		{ScenarioID: "c.unassessable", Unassessable: true, Score: -5},
-	}
-	claim = conformanceClaim(v, r)
-	assert.True(t, claim.Supported, "reasons: %v", claim.Reasons)
 }
 
-// TestRun_AnOutOfRangeCapabilityResultIsNotVouchedFor: through a whole run.
-// The score is written as the scorer produced it — it is not clamped, which
-// would read as a judgement the rubric never made — and the run's own
-// statement about a conformance claim, and the note every rendering leads
-// with, name the scenario.
-func TestRun_AnOutOfRangeCapabilityResultIsNotVouchedFor(t *testing.T) {
-	scorer := &mockScorer{capabilityResult: &evaluation.ScenarioResult{Passed: false, Score: -0.25}}
-	orch := NewOrchestrator(&mockProfileLoader{profile: opsProfile()},
-		&mockAgentClient{response: defaultAgentResp()},
-		&mockProvider{provisionResp: defaultProvision()},
-		&mockAsserter{results: []evaluation.AssertionResult{{Status: evaluation.AssertionPass}}},
-		scorer, NewReportWriter(), nil, Config{EvidenceDir: t.TempDir(), Tier: 1, Evaluator: "Example Lab"})
+// TestConformanceClaim_StatesWhatSection3_2Asks: a supported claim names one
+// evaluation and states both execution counts, the date as a range, the
+// configuration it is indexed by and the applicable safety scenario count.
+func TestConformanceClaim_StatesWhatSection3_2Asks(t *testing.T) {
+	v, r := supportedClaimInputs()
+	claim := conformanceClaim(v, r)
+	require.True(t, claim.Supported, "reasons: %v", claim.Reasons)
+	require.NotNil(t, claim.Claim)
+	c := claim.Claim
+	assert.Equal(t, "claimed-evaluation", c.Evaluation)
+	assert.Equal(t, evaluation.SafetyVerdictPass, c.Verdict)
+	assert.Equal(t, 21, c.ApplicableSafetyScenarios)
+	assert.Equal(t, 3, c.SafetyCount)
+	assert.Equal(t, 4, c.CapabilityCount)
+	assert.Equal(t, evaluation.AgentConfiguration{"operational_mode": "read_only"}, c.AgentConfiguration)
+	assert.Contains(t, c.Text, "each given 3 counted execution(s)")
+	assert.Contains(t, c.Text, "capability count 4")
 
-	scenarios := []evaluation.Scenario{
-		safetyScenario("s.001", 1),
-		capabilityScenarioWithCategory("c.001", 1, "ops"),
+	// On a safety FAIL no capability execution was made, and the capability
+	// count the claim states is the one the evaluation declared.
+	v, r = supportedClaimInputs()
+	v.Safety = evaluation.SafetyVerdictFail
+	claim = conformanceClaim(v, r)
+	require.True(t, claim.Supported, "a FAIL is a verdict a claim can state")
+	assert.Equal(t, 4, claim.Claim.CapabilityCount)
+	assert.Contains(t, claim.Claim.Text, "No capability execution was made behind the FAIL")
+
+	// Executions made outside any evaluation support no claim, whatever they
+	// produced.
+	v, r = supportedClaimInputs()
+	v.Evaluation = nil
+	claim = conformanceClaim(v, r)
+	assert.False(t, claim.Supported)
+	assert.Contains(t, claim.Reasons[0], "outside any evaluation")
+}
+
+// TestRun_AnOutOfRangeCapabilityScoreIsNotVouchedFor: through a whole
+// evaluation. The score is written as the scorer produced it — it is not
+// clamped, which would read as a judgement the rubric never made — and the
+// evaluation's own statement about a conformance claim, and the note every
+// rendering leads with, name the scenario.
+func TestRun_AnOutOfRangeCapabilityScoreIsNotVouchedFor(t *testing.T) {
+	h := newEvalHarness(t)
+	h.scorer.capability = func(id string, n int) float64 {
+		if id == "c.one" && n == 2 {
+			return -0.25
+		}
+		return 0.5
 	}
-	verdict, err := orch.Run(context.Background(), "/profile", scenarios, "agent", "provider", "json",
-		filepath.Join(t.TempDir(), "verdict.json"))
+	out := filepath.Join(t.TempDir(), "verdict.json")
+	verdict, _, err := h.orchestrator().Run(context.Background(), "/profile", h.suite, "http://lab-one", "json", out)
 	require.NoError(t, err)
 
-	assert.Equal(t, -0.25, verdict.CapabilityResults[0].Score, "the score is reported as scored, not clamped")
+	rec := verdict.Evaluation.CapabilityRecords[0]
+	require.Equal(t, "c.one", rec.ScenarioID)
+	assert.Equal(t, -0.25, rec.Executions[1].Verdict.Score(), "the score is reported as scored, not clamped")
+	assert.Equal(t, -0.25, rec.Range.Min)
 
 	claim := verdict.Report.Metadata.ConformanceClaim
 	require.NotNil(t, claim)
 	assert.False(t, claim.Supported)
-	const want = `the capability result of scenario "c.001" is -0.25, outside the 0.0 to 1.0 the verdict format allows`
+	const want = `the score of execution 2 of scenario "c.one" is -0.25, outside the 0.0 to 1.0 the verdict format allows`
 	assert.Contains(t, strings.Join(claim.Reasons, "\n"), want)
 	assert.Contains(t, verdict.Report.Metadata.EvaluationNote, want)
 }

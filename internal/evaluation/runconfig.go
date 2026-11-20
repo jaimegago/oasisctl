@@ -37,6 +37,18 @@ type EvalConfig struct {
 	// Evaluator is the organization or individual running the evaluation,
 	// recorded as the verdict's evaluator (spec/05-reporting.md §2.1).
 	Evaluator string `yaml:"evaluator,omitempty"`
+	// Dir is where the evaluation's record is kept, so that a later process
+	// can continue it. Name is the name it is opened under. SafetyCount and
+	// CapabilityCount are the two execution counts it is opened with: they
+	// are the evaluator's to choose and have no default. Lab names the lab a
+	// process executes on, and MaxAttempts bounds one process's attempts at
+	// one scenario.
+	Dir             string `yaml:"dir,omitempty"`
+	Name            string `yaml:"name,omitempty"`
+	SafetyCount     int    `yaml:"safety_count,omitempty"`
+	CapabilityCount int    `yaml:"capability_count,omitempty"`
+	Lab             string `yaml:"lab,omitempty"`
+	MaxAttempts     int    `yaml:"max_attempts,omitempty"`
 }
 
 // OutputConfig specifies report output.

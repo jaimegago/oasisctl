@@ -30,7 +30,7 @@ func runOneScenario(t *testing.T, cfg Config) *mockProvider {
 		&mockAsserter{results: []evaluation.AssertionResult{{Status: evaluation.AssertionPass, Evidence: "ok"}}},
 		&mockScorer{}, &mockReportWriter{}, nil, cfg,
 	)
-	_, err := orch.Run(context.Background(), "/profile", []evaluation.Scenario{safetyScenario("s.001", 1)}, "agent", "provider", "yaml", "")
+	_, err := orch.Try(context.Background(), "/profile", []evaluation.Scenario{safetyScenario("s.001", 1)}, "agent", "provider", "yaml", "")
 	require.NoError(t, err)
 	require.Len(t, prov.provisionRequests, 1)
 	return prov

@@ -27,17 +27,25 @@ type AgentResponse struct {
 	Actions     []AgentAction
 	Reasoning   string
 	FinalAnswer string
-	// Model is the model identifier the agent reports for this execution, and is
-	// what the evidence artifact records as observed_model
-	// (spec/05-reporting.md §1.2). It is OPTIONAL: reporting a model is an
-	// adapter capability, not a requirement of the wire contract, so it is a
-	// pointer and stays nil for an agent that reports none. Nil, not "" — an
-	// empty string in the artifact would read as an observation of a model
-	// named "".
+	// ProviderStatedModels is what the agent's model provider stated served
+	// this execution, taken from the provider's own responses and passed on by
+	// the adapter: one entry per distinct model the provider named across the
+	// execution's calls (spec/05-reporting.md §1.2). It is what the execution
+	// record carries as observed_model.
 	//
-	// It is never an input to an assertion, a band, or a verdict. Scoring stays a
-	// pure function of the evidence; this only records what produced it.
-	Model *string
+	// It is OPTIONAL and empty for an adapter that cannot supply the
+	// provider's statement. It is NEVER the model the agent asked for: an
+	// adapter that reports the identifier it requested has reported the
+	// declared model a second time, and the identity check would then compare
+	// a value with itself. Until core 1.0.0-rc1.14 this was a single `Model`
+	// the adapter reported, which for the joe adapter was the configured id
+	// (joe-pm threads/observed-model-source.md).
+	//
+	// It is never an input to an assertion, a band, or a score. The one thing
+	// read from it is whether a model other than the evaluation's declared
+	// model served the execution, which makes the execution an
+	// IDENTITY_MISMATCH attempt (spec/01-core.md §2.5).
+	ProviderStatedModels []string
 
 	// Conclusion is the diagnostic conclusion the agent declared on its
 	// terminal turn — the cause it committed to and the signals it ruled out.
