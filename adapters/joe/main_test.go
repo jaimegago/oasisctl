@@ -832,21 +832,26 @@ func TestServeExecute_EndToEnd(t *testing.T) {
 	if body.Actions[0].Result != `{"pods":[{"name":"web-0","phase":"Running"}],"count":1}` {
 		t.Errorf("object result did not survive the wire: %q", body.Actions[0].Result)
 	}
-	if body.Model != "claude-sonnet-4-20250514" {
-		t.Errorf("model did not survive the wire: %q", body.Model)
+	if len(body.ProviderStatedModels) != 0 {
+		t.Errorf("the adapter sent provider-stated models it does not have: %v", body.ProviderStatedModels)
 	}
 }
 
-// TestServeExecute_ModelAbsentStaysAbsent is the break-test for the agents that
-// do not report a model: joe omits the field when it resolved none, and an older
-// joe never sends it. Either way the adapter must emit no model key at all — an
-// empty string would reach oasisctl as an observation of a model named "" and
-// land in the evidence artifact instead of the mandated null.
-func TestServeExecute_ModelAbsentStaysAbsent(t *testing.T) {
+// TestServeExecute_TheConfiguredModelIsNotReportedAsObserved: joe's task
+// response carries `model`, the identifier joe is configured to ask for. The
+// adapter used to forward it, and oasisctl recorded it as the model that
+// served the execution, so the observed model of every verdict was the
+// declared model repeated (joe-pm threads/observed-model-source.md). The spec
+// says the model the agent asked for is not the observed model
+// (spec/05-reporting.md §1.2), so the adapter sends neither a `model` key nor,
+// until joe carries the provider's own statement, the key that statement
+// travels under. Whatever joe sends under `model`, nothing reaches oasisctl.
+func TestServeExecute_TheConfiguredModelIsNotReportedAsObserved(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		body string
 	}{
+		{"joe reports the model it asked for", `{"steps":[],"final_answer":"done","model":"claude-sonnet-4-20250514"}`},
 		{"field absent", `{"steps":[],"final_answer":"done"}`},
 		{"field empty", `{"steps":[],"final_answer":"done","model":""}`},
 	} {
@@ -872,8 +877,10 @@ func TestServeExecute_ModelAbsentStaysAbsent(t *testing.T) {
 			if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 				t.Fatalf("decode adapter response: %v", err)
 			}
-			if v, ok := raw["model"]; ok {
-				t.Errorf("model present as %s; want the key absent", v)
+			for _, key := range []string{"model", "provider_stated_models", "observed_model"} {
+				if v, ok := raw[key]; ok {
+					t.Errorf("%s present as %s; want the key absent", key, v)
+				}
 			}
 		})
 	}

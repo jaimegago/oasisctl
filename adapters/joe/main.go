@@ -46,12 +46,29 @@ type AgentResponse struct {
 	// session to name, which here is the adapter failing to reach joe or to
 	// read its reply.
 	SessionID string `json:"session_id,omitempty"`
-	// Model is the provider model identifier that served the execution, forwarded
-	// from joe's task response (joe D-0153). It is omitempty in both directions:
-	// joe omits it when nothing resolved, and the adapter omits it in turn, so an
-	// agent that reports no model produces an absent field rather than an empty
-	// string that would read downstream as a real observation.
-	Model string `json:"model,omitempty"`
+	// ProviderStatedModels is the place for what joe's model provider stated
+	// served the execution: one entry per distinct model the provider named
+	// in its own responses (oasis-spec spec/05-reporting.md §1.2). oasisctl
+	// records it as the execution's observed model.
+	//
+	// THE ADAPTER DOES NOT POPULATE IT YET, and the key is absent from every
+	// response it sends. joe's task response carries `model`, which is the
+	// identifier joe is configured to ask for, read from its configuration at
+	// task preparation; nothing in joe reads the model a provider's response
+	// names (joe-pm threads/observed-model-source.md). Until core
+	// 1.0.0-rc1.14 this adapter forwarded that `model` as the observed model,
+	// so every verdict's "observed" model was the declared model repeated,
+	// and the check between them compared a value with itself. The spec now
+	// says the model the agent asked for is not the observed model, so the
+	// adapter no longer sends it: oasisctl states the observed model as not
+	// available.
+	//
+	// It is filled in once joe carries the provider's statement on its task
+	// response (joe-pm threads/provider-stated-model.md) and the form of that
+	// statement has been measured against the declared model: oasisctl
+	// compares the two by string equality, and a provider that states a model
+	// in another form would make every execution an IDENTITY_MISMATCH attempt.
+	ProviderStatedModels []string `json:"provider_stated_models,omitempty"`
 	// RootCause, Discarded and ConclusionDeclared carry the diagnostic
 	// conclusion the agent declared on its terminal turn, forwarded from joe's
 	// task response (joe D-0159). They exist because an evaluator deciding
@@ -188,9 +205,9 @@ type AgentIdentityResponse struct {
 	//     was built from.
 	//   - ConfigHash, SystemPromptHash, DeclaredModel and DeclaredProvider are
 	//     from GET /api/v1/agent-identity (joe D-0172). The model is the
-	//     provider's identifier, resolved the way a task response's `model` is
-	//     (joe D-0153), so the declared model and each scenario's observed
-	//     model are comparable.
+	//     identifier joe is configured to ask for, resolved the way a task
+	//     response's `model` is (joe D-0153). It is the declared model. It is
+	//     not what a provider stated served any call.
 	BinaryVersion    string `json:"binary_version,omitempty"`
 	BinarySHA        string `json:"binary_sha,omitempty"`
 	ConfigHash       string `json:"config_hash,omitempty"`
@@ -227,15 +244,14 @@ type JoeResponse struct {
 	// in. Every act joe's loop took in that turn is recorded against it, and
 	// joe's audit-trail read is keyed by it.
 	SessionID string `json:"session_id"`
-	// Model is joe's provider model identifier for the turn — "claude-sonnet-4-20250514",
-	// not the catalogue key that names it in joe's own config (joe D-0153). It
-	// attests the model resolved at TASK PREPARATION, which is what the evidence
-	// artifact's observed_model records. joe omits the field when it resolved no
-	// model, and an older joe does not send it at all; both decode to "" here and
-	// travel onward as an absent field, never an empty one.
+	// Model is the model identifier joe was configured to ask for on the turn
+	// — "claude-sonnet-4-20250514", not the catalogue key that names it in
+	// joe's own config (joe D-0153). It is read from joe's configuration at
+	// TASK PREPARATION; it is not what the provider said served the turn.
 	//
-	// joe also reports a sibling `provider` (the adapter family). It is
-	// deliberately not carried this slice — see the slice ledger.
+	// It is decoded and NOT forwarded. It is the declared model a second
+	// time, and reporting it as observed is what oasis-spec
+	// spec/05-reporting.md §1.2 forbids. See AgentResponse.ProviderStatedModels.
 	Model string `json:"model"`
 	// RootCause / Discarded / ConclusionDeclared mirror joe's declared
 	// diagnostic conclusion (joe D-0159, taskTurn.root_cause / .discarded /
@@ -435,7 +451,9 @@ func translateResponse(jr *JoeResponse) *AgentResponse {
 		Actions:     []AgentAction{},
 		FinalAnswer: jr.FinalAnswer,
 		SessionID:   jr.SessionID,
-		Model:       jr.Model,
+		// jr.Model is deliberately not carried: it is the identifier joe asked
+		// for, not the provider's statement. ProviderStatedModels stays nil
+		// until joe carries that statement.
 		// Built non-nil unconditionally: the field must reach oasisctl as `[]`
 		// and never as null, or the absent-list ambiguity the declaration
 		// exists to remove comes back silently at the far end of the pipe.
