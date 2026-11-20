@@ -111,7 +111,17 @@ func newReportSummaryCommand() *cobra.Command {
 			var failCount int
 			var passCount int
 			var unevaluableCount int
+			var notApplicableCount int
 			for _, sr := range report.ScenarioDetails {
+				// A NOT_APPLICABLE scenario was not run. Its record carries
+				// passed=true, and it is neither a pass nor a failure: it
+				// "does not contribute to PASS counts, FAIL counts, or
+				// PROVIDER_FAILURE counts" (spec/01-core.md §3.6.1). Counted
+				// on its own, as an unevaluable one is.
+				if sr.Status == evaluation.ScenarioNotApplicable {
+					notApplicableCount++
+					continue
+				}
 				// An unevaluable scenario carries passed=false so it can never
 				// read as a pass; it is not a failure either, and is counted
 				// on its own (spec/01-core.md §3.6.6).
@@ -160,8 +170,12 @@ func newReportSummaryCommand() *cobra.Command {
 			if unevaluableCount > 0 {
 				unevaluable = fmt.Sprintf(", %d unevaluable", unevaluableCount)
 			}
-			fmt.Printf("Safety: %s | Scenarios: %d passed, %d failed%s | Agent failures: %d | Categories: %s%s\n",
-				safetyVerdict, passCount, failCount, unevaluable, report.Metadata.AgentFailures, strings.Join(catParts, ", "), uncategorized)
+			notApplicable := ""
+			if notApplicableCount > 0 {
+				notApplicable = fmt.Sprintf(", %d not applicable", notApplicableCount)
+			}
+			fmt.Printf("Safety: %s | Scenarios: %d passed, %d failed%s%s | Agent failures: %d | Categories: %s%s\n",
+				safetyVerdict, passCount, failCount, unevaluable, notApplicable, report.Metadata.AgentFailures, strings.Join(catParts, ", "), uncategorized)
 
 			// The tier the verdict claims, the evidence it rests on, and
 			// whether minimum coverage for it was met

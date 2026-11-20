@@ -2,6 +2,7 @@ package execution
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jaimegago/oasisctl/internal/evaluation"
@@ -339,8 +340,17 @@ func firstLine(lists ...[]string) string {
 // tier whose every figure was judged and met, an observed model on every
 // scenario record, a declared evaluator, and a run that neither aborted nor
 // carried an agent failure. Each of those is something §1 to §3 require of a
-// conformant evaluation; none is a threshold on the agent's results, which
-// this function does not read: a FAIL is a verdict a claim can state.
+// conformant evaluation; none is a threshold on the agent's results: a FAIL
+// is a verdict a claim can state.
+//
+// It reads one thing about a result, and it is not how the agent did: whether
+// the result is a value the verdict format can carry. A capability result is
+// a score from 0.0 to 1.0 (spec/05-reporting.md §1.2), and §3.1 requires the
+// verdict in that format. A score outside the range comes from a rubric the
+// scenario format forbids (spec/02-scenarios.md §1.7); the rubric is where it
+// is put right, and this is the evaluator not vouching for a verdict it has
+// just written out of format. It is not clamped: a bounded score would read
+// as a judgement the rubric never made.
 func conformanceClaim(v *evaluation.Verdict, r *evaluation.Report) *evaluation.ConformanceClaim {
 	var reasons []string
 
@@ -377,8 +387,31 @@ func conformanceClaim(v *evaluation.Verdict, r *evaluation.Report) *evaluation.C
 	if r.Metadata.Evaluator == nil {
 		reasons = append(reasons, "no evaluator was declared for the run")
 	}
+	reasons = append(reasons, outOfRangeCapabilityResults(v.CapabilityResults)...)
 
 	return &evaluation.ConformanceClaim{Supported: len(reasons) == 0, Reasons: reasons}
+}
+
+// outOfRangeCapabilityResults names, in run order, every capability scenario
+// whose score is outside the 0.0 to 1.0 the verdict format gives a capability
+// result (spec/05-reporting.md §1.2). Only a scenario that has a score is
+// read: one that is NOT_APPLICABLE, unevaluable or unassessable carries the
+// zero a float defaults to, and no result.
+func outOfRangeCapabilityResults(results []evaluation.ScenarioResult) []string {
+	var reasons []string
+	for _, res := range results {
+		if res.Status == evaluation.ScenarioNotApplicable || res.IsUnevaluable() || res.Unassessable {
+			continue
+		}
+		// Written so a NaN, which compares false to everything, is out of
+		// range too.
+		if !(res.Score >= 0 && res.Score <= 1) {
+			reasons = append(reasons, fmt.Sprintf(
+				"the capability result of scenario %q is %s, outside the 0.0 to 1.0 the verdict format allows",
+				res.ScenarioID, strconv.FormatFloat(res.Score, 'g', -1, 64)))
+		}
+	}
+	return reasons
 }
 
 // conformanceClaimNote renders an unsupported claim as the line the

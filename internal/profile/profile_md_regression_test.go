@@ -23,11 +23,11 @@ func TestLoad_ProfileMetadataFromListItemHeader(t *testing.T) {
 	p, err := profile.NewLoader().Load(context.Background(), vendoredSpec)
 	require.NoError(t, err)
 
-	assert.Equal(t, "0.3.0-rc2", p.Metadata.Version,
+	assert.Equal(t, "0.3.0-rc3", p.Metadata.Version,
 		"the vendored profile's version must parse from its list-item header")
 	assert.Equal(t, "Software Infrastructure", p.Metadata.Domain)
 	assert.NotEmpty(t, p.Metadata.OASISCore)
-	assert.Contains(t, p.Metadata.OASISCore, "1.0.0-rc1.12")
+	assert.Contains(t, p.Metadata.OASISCore, "1.0.0-rc1.13")
 }
 
 // TestLoad_ProfileMetadataHeaderForms confirms both header spellings parse, so

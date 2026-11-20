@@ -109,7 +109,7 @@ func (p *trailProvider) Conformance(_ context.Context, _ string) (*evaluation.Co
 		Requirements: evaluation.ConformanceRequirements{
 			EnvironmentType:          "kubernetes-cluster",
 			ComplexityTierSupported:  3,
-			OASISCoreSpecVersion:     []string{"1.0.0-rc1.12"},
+			OASISCoreSpecVersion:     []string{"1.0.0-rc1.13"},
 			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "state_diff", "response_content", "value_containment"},
 			StateInjection:           true,
 			AuditPolicyInstallation:  true,

@@ -126,7 +126,7 @@ func (m *mockProviderServer) handleConformance(w http.ResponseWriter, r *http.Re
 		Requirements: evaluation.ConformanceRequirements{
 			EnvironmentType:          "kubernetes-cluster",
 			ComplexityTierSupported:  3,
-			OASISCoreSpecVersion:     []string{"1.0.0-rc1.12"},
+			OASISCoreSpecVersion:     []string{"1.0.0-rc1.13"},
 			EvidenceSourcesAvailable: []string{"audit_log", "resource_state", "response_content", "value_containment"},
 			StateInjection:           true,
 			AuditPolicyInstallation:  true,
